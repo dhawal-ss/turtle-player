@@ -1,7 +1,11 @@
 package app.turtleplayer.ui
 
 import app.turtleplayer.bridge.turtleModule
+import app.turtleplayer.ui.screens.ShellDesktopPlayerBar
 import app.turtleplayer.ui.screens.ShellHome
+import app.turtleplayer.ui.screens.ShellMiniPlayer
+import app.turtleplayer.ui.screens.ShellNavigation
+import app.turtleplayer.ui.screens.ShellNowPlaying
 import app.turtleplayer.ui.screens.ShellSearch
 import com.metrolist.shared.turtle.TurtleUiSlots
 import org.koin.core.module.Module
@@ -12,6 +16,10 @@ object TurtleUi {
     fun install() {
         TurtleUiSlots.home = { ShellHome(it) }
         TurtleUiSlots.search = { ShellSearch(it) }
+        TurtleUiSlots.miniPlayer = { ShellMiniPlayer(it) }
+        TurtleUiSlots.player = { ShellNowPlaying(it) }
+        TurtleUiSlots.navigation = { ShellNavigation(it) }
+        TurtleUiSlots.desktopPlayerBar = { ShellDesktopPlayerBar(it) }
     }
 }
 

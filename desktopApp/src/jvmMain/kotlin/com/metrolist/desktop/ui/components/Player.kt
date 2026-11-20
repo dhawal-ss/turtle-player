@@ -549,6 +549,7 @@ fun StandardBottomPlayer(
     colorScheme: ColorScheme,
     toggleWindowFullscreen: () -> Unit,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.desktopPlayerBar?.let { return it(com.metrolist.shared.turtle.DesktopPlayerBarSlot({ PlayerState.toggleExpandedMode() }, { UiState.showPersistentPlayerDrawer = !UiState.showPersistentPlayerDrawer }, { UiState.showLyricsDrawer = !UiState.showLyricsDrawer }, { UiState.showDeviceConnectPanel = !UiState.showDeviceConnectPanel }, toggleWindowFullscreen, PlayerState.volume, PlayerState::setVolumeLevel, PlayerState.currentTrack)) } // Turtle: HOOKS.md #28
     val castState by PlayerState.castManager.state.collectAsState()
     val deviceConnectState by DesktopDeviceConnect.manager.remote.state
         .collectAsState()

@@ -6,7 +6,8 @@ that edits an upstream path without also updating this file.
 
 Budget: **under 40 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
 20 Nov 2026 when we chose to replace upstream's UI with Shell; every further screen takeover goes
-through `shared/.../turtle/TurtleUiSlots.kt` at one line plus imports.)
+through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
+needs no import lines.)
 Current total: **35** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
@@ -28,9 +29,13 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 11 | `desktop/state/playback/DesktopQueueRadio.kt` | 2 | Same on the desktop `recommendationHistory.select(...)` result, plus import | Same, for desktop | Recommendations engineer |
 | 20 | `shared/api/YouTubeRepository.kt` | 3 | `searchSummaryOverride` (comment + declaration) and its use where `getSearchSummary` returns the online page | Search: our engine re-ranks YouTube's page together with the library (typo-tolerant, deduplicated, personal, intent-aware top result) inside upstream's section shape, so the UI and its strings are unchanged. Videos, playlists and podcasts pass through. Fails open to upstream's page | Search engineer |
 | 21 | `shared/ui/screens/HomeShelfBuilder.kt` | 3 | `homeShelvesOverride` (comment + declaration) and its use where `HomeShelfCache.build` returns | Home: our shelves (artist mixes or Daily Mixes, More like X, On repeat, Weekly discovery, Fresh for you, Rediscover) go after Speed Dial. They live in Compose state, so Home recomposes when they refresh | Recommendations engineer |
-| 22 | `shared/ui/screens/HomeContent.kt` | 3 | First line of `HomeContent`: `TurtleUiSlots.home?.let { return it(HomeSlot(...)) }`, plus 2 imports | Shell's Home replaces upstream's on Android, desktop and iOS, keeping upstream's callbacks (navigation, menus, loading) | Product designer |
-| 23 | `shared/ui/screens/SearchScreen.kt` | 3 | First line of `SearchScreen`: `TurtleUiSlots.search?.let { return it(SearchSlot(...)) }`, plus 2 imports | Shell's Search replaces upstream's on all platforms; desktop keeps its title-bar field (`showSearchBar = false`) | Product designer |
+| 22 | `shared/ui/screens/HomeContent.kt` | 1 | First line of `HomeContent`: `TurtleUiSlots.home?.let { return it(HomeSlot(...)) }`, fully qualified, no imports | Shell's Home replaces upstream's on Android, desktop and iOS, keeping upstream's callbacks (navigation, menus, loading) | Product designer |
+| 23 | `shared/ui/screens/SearchScreen.kt` | 1 | First line of `SearchScreen`: `TurtleUiSlots.search?.let { return it(SearchSlot(...)) }`, fully qualified, no imports | Shell's Search replaces upstream's on all platforms; desktop keeps its title-bar field (`showSearchBar = false`) | Product designer |
 | 24 | `settings.gradle.kts` | 2 | `include(":turtle-ui")` and its `projectDir` | Registers Shell, our Compose design system and screens | Product designer |
+| 25 | `android/ui/components/MiniPlayer.kt` | 1 | Before `val playerConnection = ...`: `TurtleUiSlots.miniPlayer?.let { return it(MiniPlayerSlot(modifier, onExpand)) }` | Shell's mini player (artwork tint, swipe to skip, progress line) on Android | Product designer |
+| 26 | `shared/ui/player/PlayerScreen.kt` | 1 | `TurtleUiSlots.player?.takeUnless { showUpstreamPlayer && !collapsed }?.let { return it(PlayerSlot(...)) }` | Shell's Now Playing. Lyrics, queue, devices and the More menu hand over to upstream's player (`showUpstreamPlayer`), which shows until the sheet collapses | Product designer |
+| 27 | `shared/ui/navigation/AdaptiveNavigationScaffold.kt` | 1 | `TurtleUiSlots.navigation?.takeUnless { isEditing }?.let { ... return slot(NavigationSlot(...)) }` | Shell's bottom tabs (phones) and rail (desktop, tablets). Keeps upstream's header, footer, floating-bar height reporting and tab-reorder edit mode | Product designer |
+| 28 | `desktop/ui/components/Player.kt` | 1 | First line of `StandardBottomPlayer`: `TurtleUiSlots.desktopPlayerBar?.let { return it(DesktopPlayerBarSlot(...)) }` | Shell's Spotify-layout desktop player bar; queue, lyrics, devices and fullscreen toggle upstream's desktop state | Product designer |
 
 ## Behavior patches
 

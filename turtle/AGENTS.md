@@ -10,7 +10,11 @@ The product and engineering plan is the source of truth for what we build and wh
 
 - Build features in our modules under `turtle/`. Never edit upstream files to add behavior.
 - When an upstream file must change, keep it to a one-line call into our code and add a row to
-  `turtle/HOOKS.md` in the same PR. CI fails the PR otherwise. Budget: under 30 hook lines.
+  `turtle/HOOKS.md` in the same PR. CI fails the PR otherwise. Budget: under 40 hook lines.
+- Write hook lines with fully qualified names (`com.metrolist.shared.turtle.TurtleUiSlots...`)
+  instead of adding imports: one line per hook keeps the budget and merge conflicts small.
+- UI takeovers go through `shared/.../turtle/TurtleUiSlots.kt` (a file we own): add a nullable
+  slot there, call it from upstream in one line, and set it from `:turtle-ui`.
 - Engines (`turtle/engines/*`) are pure Kotlin `commonMain`: no `java.*`, no Android, no upstream
   imports. Only `:turtle-bridge` may depend on upstream (`:shared`).
 - Engines expose seams as interfaces (`OnlineSearchProvider`, `RecommendationSource`,

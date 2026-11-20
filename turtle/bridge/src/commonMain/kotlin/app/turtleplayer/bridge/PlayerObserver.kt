@@ -1,6 +1,7 @@
 package app.turtleplayer.bridge
 
 import app.turtleplayer.events.EndReason
+import app.turtleplayer.events.FeedbackKind
 import app.turtleplayer.events.ListeningSessionTracker
 import app.turtleplayer.events.PlaybackSignal
 import app.turtleplayer.events.StartReason
@@ -71,6 +72,9 @@ class PlayerObserver(private val tracker: ListeningSessionTracker) {
             }
         }
     }
+
+    /** Explicit feedback on the song playing now (like, less like this), recorded on its play event. */
+    suspend fun feedback(kind: FeedbackKind) = mutex.withLock { if (currentId != null) tracker.onSignal(PlaybackSignal.Feedback(kind)) }
 
     /** The song playing now, if any. */
     suspend fun currentSong(): SongItem? = mutex.withLock { current }

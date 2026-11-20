@@ -5,16 +5,21 @@ import app.turtleplayer.search.LexicalQuery
 import app.turtleplayer.search.LocalItem
 import app.turtleplayer.search.LocalLibrary
 import app.turtleplayer.search.LocalSource
+import app.turtleplayer.events.FeedbackKind
+import app.turtleplayer.taste.DiscoveryDial
+import app.turtleplayer.taste.LessLikeThis
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.api.searchSummaryOverride
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SearchSummaryPage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.ui.screens.homeShelvesOverride
 import com.metrolist.shared.state.GlobalYouTubeRepository
 import com.metrolist.shared.viewmodels.libraryContentSearchOverride
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.atomics.AtomicBoolean
@@ -52,6 +57,7 @@ class TurtleRuntime(
             home.start(scope)
         }
         if (warmStreamResolverOnStart) scope.launch { warmStreamResolver() }
+        scope.launch { watchLikes() }
         TurtleLog.info("runtime started")
     }
 
@@ -110,6 +116,29 @@ class TurtleRuntime(
             TurtleLog.error("search: re-ranking failed, kept upstream results", e)
             null
         }
+
+    /** A like made anywhere in the app becomes a taste signal for the song playing now. */
+    private suspend fun watchLikes() {
+        var previous: Set<String>? = null
+        snapshotFlow { SongLikeState.likedSongIds }.collect { liked ->
+            val before = previous
+            previous = liked
+            if (before == null) return@collect
+            val current = observer.currentSong()?.id ?: return@collect
+            if (current in liked && current !in before) observer.feedback(FeedbackKind.LIKED)
+            if (current !in liked && current in before) observer.feedback(FeedbackKind.UNLIKED)
+        }
+    }
+
+    /** "Less like this" on a song: recorded on its play event and applied to the taste engine at once. */
+    suspend fun lessLikeThis(song: SongItem) {
+        val meta = song.toTrackMeta()
+        taste.lessLikeThis(LessLikeThis.Track(meta.key, meta.artistKey))
+        if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
+    }
+
+    /** Discovery dial position: 0 familiar, 0.5 balanced, 1 adventurous. */
+    suspend fun setDiscoveryDial(position: Double) = taste.setDiscoveryDial(DiscoveryDial.fromPosition(position))
 
     /**
      * The Infinity Mix's opening queue: the taste engine's Up Next as playable songs. Upstream's

@@ -49,6 +49,10 @@ object Glyphs {
     val Queue = vector("queue", "M4 6h12M4 12h12M4 18h8M18 15v6M15 18h6", filled = false)
     val Devices = vector("devices", "M6 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM18 8v8M21 6v12", filled = false)
     val Close = vector("close", "M6 6l12 12M18 6L6 18", filled = false, stroke = 2.4f)
+    val Repeat = vector("repeat", "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3", filled = false, stroke = 2f)
+    val Lyrics = vector("lyrics", "M4 5h16v11H8l-4 4zM8 9h8M8 12h5", filled = false)
+    val Fullscreen = vector("fullscreen", "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5", filled = false, stroke = 2f)
+    val Volume = vector("volume", "M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11", filled = false)
 }
 
 @Composable

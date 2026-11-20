@@ -156,6 +156,12 @@ object TurtleBridge {
     /** The Infinity Mix's opening queue (empty when our runtime is not available). */
     suspend fun infinityMix(): List<SongItem> = runtime?.infinityMix().orEmpty()
 
+    /** "Less like this" on a song (no-op when our runtime is unavailable). */
+    suspend fun lessLikeThis(song: SongItem) { runtime?.lessLikeThis(song) }
+
+    /** Discovery dial: 0 familiar, 0.5 balanced, 1 adventurous. */
+    suspend fun setDiscoveryDial(position: Double) { runtime?.setDiscoveryDial(position) }
+
     /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
     val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()
 

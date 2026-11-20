@@ -4,6 +4,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import com.metrolist.shared.model.AlbumItem
@@ -13,6 +18,7 @@ import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.ui.screens.HomeContentText
 import com.metrolist.shared.ui.screens.HomeShelfCache
 import com.metrolist.shared.viewmodels.HomeViewModel.HomeUiState
+import com.metrolist.shared.viewmodels.PlayerViewModel
 import com.metrolist.shared.viewmodels.SearchViewModel.SearchUiState
 
 /**
@@ -23,6 +29,13 @@ import com.metrolist.shared.viewmodels.SearchViewModel.SearchUiState
 object TurtleUiSlots {
     var home: (@Composable (HomeSlot) -> Unit)? = null
     var search: (@Composable (SearchSlot) -> Unit)? = null
+    var miniPlayer: (@Composable (MiniPlayerSlot) -> Unit)? = null
+    var player: (@Composable (PlayerSlot) -> Unit)? = null
+    var navigation: (@Composable (NavigationSlot) -> Unit)? = null
+    var desktopPlayerBar: (@Composable (DesktopPlayerBarSlot) -> Unit)? = null
+
+    /** While true, upstream's full player shows instead of ours (Shell hands over for lyrics, queue, more). */
+    var showUpstreamPlayer by mutableStateOf(false)
 }
 
 /** Everything upstream's HomeContent receives that our Home needs; callbacks keep upstream's wiring. */
@@ -65,4 +78,53 @@ class SearchSlot(
     val focusRequester: FocusRequester,
     val modifier: Modifier,
     val contentPadding: PaddingValues,
+)
+
+/** Android's collapsed player. */
+class MiniPlayerSlot(
+    val modifier: Modifier,
+    val onExpand: () -> Unit,
+)
+
+/** The full player (Android and iOS). [collapsed] is true while the sheet is collapsed. */
+class PlayerSlot(
+    val viewModel: PlayerViewModel,
+    val onClose: () -> Unit,
+    val onNavigateToAlbum: (String) -> Unit,
+    val onNavigateToArtist: (String) -> Unit,
+    val collapsed: Boolean,
+)
+
+class NavigationSlotItem(val key: String, val label: String, val icon: ImageVector)
+
+/**
+ * The app's top-level navigation (Android tabs, desktop sidebar). [floating] mirrors upstream's
+ * floating bar: content fills the screen and the bar reports the height it occupies, which upstream
+ * uses to place the mini player.
+ */
+class NavigationSlot(
+    val items: List<NavigationSlotItem>,
+    val selectedIndex: Int,
+    val onSelect: (Int) -> Unit,
+    val navigationVisible: Boolean,
+    val bottomBar: Boolean,
+    val floating: Boolean,
+    val onOccupiedHeightChanged: (Dp) -> Unit,
+    val header: @Composable () -> Unit,
+    val footer: (@Composable () -> Unit)?,
+    val modifier: Modifier,
+    val content: @Composable () -> Unit,
+)
+
+/** Desktop's bottom player bar, with the actions that live in desktop-only state. */
+class DesktopPlayerBarSlot(
+    val onExpand: () -> Unit,
+    val onToggleQueue: () -> Unit,
+    val onToggleLyrics: () -> Unit,
+    val onToggleDevices: () -> Unit,
+    val onToggleFullscreen: () -> Unit,
+    val volume: Float,
+    val onVolumeChange: (Float) -> Unit,
+    /** The restored track before playback starts (desktop loads it into the player only on play). */
+    val restoredSong: SongItem?,
 )

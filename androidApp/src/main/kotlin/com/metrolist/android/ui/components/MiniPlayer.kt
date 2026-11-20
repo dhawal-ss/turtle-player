@@ -189,6 +189,7 @@ fun MiniPlayer(
     bottomSheetState: BottomSheetState? = null,
     cardFocusRequester: FocusRequester? = null,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.miniPlayer?.let { return it(com.metrolist.shared.turtle.MiniPlayerSlot(modifier, onExpand)) } // Turtle: HOOKS.md #25
     val playerConnection = LocalPlayerConnection.current ?: return
 
     val currentSong by playerConnection.currentSong.collectAsState(initial = null)

@@ -471,6 +471,7 @@ fun PlayerScreen(
     onLyricsVisibleChange: (Boolean) -> Unit = {},
     isScreenVisible: Boolean = true,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.player?.takeUnless { com.metrolist.shared.turtle.TurtleUiSlots.showUpstreamPlayer && !bottomSheetState.isCollapsed }?.let { return it(com.metrolist.shared.turtle.PlayerSlot(viewModel, onClose, onNavigateToAlbum, onNavigateToArtist, bottomSheetState.isCollapsed)) } // Turtle: HOOKS.md #26
     val isPlayerContentVisible by remember(bottomSheetState) {
         derivedStateOf { bottomSheetState.value > bottomSheetState.collapsedBound && !bottomSheetState.isCollapsed }
     }
