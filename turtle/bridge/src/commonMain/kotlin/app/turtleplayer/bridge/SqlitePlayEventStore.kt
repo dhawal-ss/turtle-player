@@ -94,6 +94,7 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
 
     override suspend fun append(event: PlayEvent): Long {
         val id = db { insert(event) }
+        TurtleLog.info("play recorded: ${event.endReason} after ${event.msPlayed / 1000}s (${event.surface})")
         stream.emit(event.copy(id = id))
         return id
     }

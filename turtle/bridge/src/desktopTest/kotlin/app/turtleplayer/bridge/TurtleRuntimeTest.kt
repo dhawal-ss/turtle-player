@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.LocalDateTime
+import org.koin.core.context.loadKoinModules
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
 import org.koin.dsl.module
@@ -54,14 +55,17 @@ class TurtleRuntimeTest {
         TurtleBridge.observePlayer(scope, current, MutableStateFlow(true), MutableSharedFlow<Long>())
 
         val dbFile = File.createTempFile("metrolist", ".db").apply { delete(); deleteOnExit() }
-        val koin = startKoin {
-            modules(
-                module { single<MusicDatabase> { getDatabaseBuilder(dbFile).build() } },
+        // startKoin publishes the global context before its modules finish loading: Koin "exists"
+        // while our definitions are still missing. Reproduce that window explicitly.
+        val koin = startKoin { modules(module { single<MusicDatabase> { getDatabaseBuilder(dbFile).build() } }) }.koin
+        delay(500)
+        loadKoinModules(
+            listOf(
                 turtleModule,
                 // Keep the test off the user's real Turtle database.
                 module { single<PlayEventStore> { InMemoryPlayEventStore() } },
-            )
-        }.koin
+            ),
+        )
         val dao = koin.get<MusicDatabase>().dao()
         val added = LocalDateTime(2026, 11, 1, 12, 0)
         dao.insert(SongEntity(id = "v1", title = "Bohemian Rhapsody", customArtist = "Queen", duration = 354, inLibrary = added))

@@ -36,6 +36,7 @@ class TurtleRuntime(
         scope.launch { runCatching { taste.refresh() } }
         taste.observe(scope)
         libraryContentSearchOverride = ::searchLibrary
+        TurtleLog.info("runtime started")
     }
 
     /**

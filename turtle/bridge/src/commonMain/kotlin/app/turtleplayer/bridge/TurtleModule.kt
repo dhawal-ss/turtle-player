@@ -16,6 +16,7 @@ import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,10 +24,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
 import org.koin.core.context.GlobalContext
+import org.koin.core.error.NoDefinitionFoundException
 import org.koin.core.module.Module
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
@@ -46,7 +49,11 @@ internal val deviceTime = LocalTimeResolver { epochMs ->
 }
 
 /** App-lifetime work (index sync, taste updates), independent of any screen or service. */
-class TurtleScope(val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default))
+class TurtleScope(
+    val scope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, t -> TurtleLog.error("background task failed", t) },
+    ),
+)
 
 /**
  * Koin bindings for Turtle Player. The app loads this after upstream's modules, so any binding here
@@ -82,18 +89,57 @@ val turtleModule: Module = module {
  * open: if our code throws or Koin is not ready, upstream's own behavior is kept.
  */
 object TurtleBridge {
+    private class NotReady : Exception()
+
+    /**
+     * Our runtime, or null when Koin or our module is not loaded yet. `startKoin` publishes the
+     * global context before it finishes loading modules, so "Koin exists" is not "we exist".
+     */
+    private fun runtimeOrThrow(): TurtleRuntime {
+        val koin = GlobalContext.getOrNull() ?: throw NotReady()
+        return try {
+            koin.get<TurtleRuntime>().also { it.start() }
+        } catch (_: NoDefinitionFoundException) {
+            throw NotReady()
+        }
+    }
+
     private val runtime: TurtleRuntime?
-        get() = GlobalContext.getOrNull()?.getOrNull<TurtleRuntime>()?.also { it.start() }
+        get() = try {
+            runtimeOrThrow()
+        } catch (_: NotReady) {
+            null
+        } catch (e: Exception) {
+            TurtleLog.error("runtime unavailable; upstream behavior kept", e)
+            null
+        }
 
     /**
      * Hook: attach the listening-event log to a player. Both platforms' players expose these flows.
-     * Desktop builds its player before `startKoin` runs, so this waits for Koin instead of giving up;
-     * the current song is a StateFlow, so nothing playing at attach time is missed.
+     * Desktop builds its player before Koin is up, so this retries until our module is loaded; the
+     * current song is a StateFlow, so nothing playing at attach time is missed.
      */
     fun observePlayer(scope: CoroutineScope, currentSong: StateFlow<SongItem?>, isPlaying: StateFlow<Boolean>, onEndOfTrack: Flow<*>) {
-        scope.launch {
-            while (GlobalContext.getOrNull() == null) delay(KOIN_POLL_MS)
-            runtime?.observer?.attach(scope, currentSong, isPlaying, onEndOfTrack)
+        val ours = isolatedChild(scope, "player observer")
+        ours.launch {
+            val r = withTimeoutOrNull(STARTUP_WAIT_MS) {
+                var found: TurtleRuntime? = null
+                while (found == null) {
+                    found = try {
+                        runtimeOrThrow()
+                    } catch (_: NotReady) {
+                        delay(KOIN_POLL_MS)
+                        null
+                    }
+                }
+                found
+            }
+            if (r == null) {
+                TurtleLog.error("turtleModule not loaded after ${STARTUP_WAIT_MS / 1000}s; listening events are not recorded")
+                return@launch
+            }
+            r.observer.attach(ours, currentSong, isPlaying, onEndOfTrack)
+            TurtleLog.info("player observer attached")
         }
     }
 
@@ -101,4 +147,5 @@ object TurtleBridge {
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
 
     private const val KOIN_POLL_MS = 100L
+    private const val STARTUP_WAIT_MS = 60_000L
 }
