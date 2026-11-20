@@ -10,3 +10,5 @@ internal actual fun Scope.turtleDatabaseSpec(): TurtleDatabaseSpec {
     file.parentFile.mkdirs()
     return TurtleDatabaseSpec(JdbcSQLiteDriver(), file.absolutePath)
 }
+
+internal actual val warmStreamResolverOnStart: Boolean = true

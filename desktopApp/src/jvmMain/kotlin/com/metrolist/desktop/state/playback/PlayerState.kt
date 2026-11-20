@@ -2003,7 +2003,8 @@ object PlayerState {
                 preCacheJob?.cancel()
                 preCacheJob = null
                 val next = queue.peekNext()?.takeIf { it.id == selection.nextSongId }
-                if (!selection.reached || !selection.enabled || next == null ||
+                // Turtle: resolve the next track even with caching off, so a skip reuses the warm stream (HOOKS.md #12).
+                if (!selection.reached || next == null ||
                     next.id == selection.currentSongId || repeatMode == RepeatMode.ONE
                 ) {
                     return@collectLatest

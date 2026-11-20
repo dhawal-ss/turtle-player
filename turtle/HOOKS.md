@@ -5,7 +5,7 @@ else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-h
 that edits an upstream path without also updating this file.
 
 Budget: **under 30 hook lines in total**, counting the import lines a hook needs.
-Current total: **21**.
+Current total: **21** hook lines, plus 7 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -24,6 +24,22 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 9 | `desktop/state/playback/PlayerState.kt` | 2 | Same call before the `player.onEOFPlaybackInstance` collector, plus import | Same, for desktop | Recommendations engineer |
 | 10 | `android/playback/AndroidQueueCoordinator.kt` | 2 | `?.let { TurtleBridge.rankRadio(it) }` on the result of `recommendationHistory.select(...)` in `freshRadioPage`, plus import | Autoplay: the taste engine orders YouTube's already-filtered radio candidates; upstream's filters (blocked, queued, songs-only) stay authoritative | Recommendations engineer |
 | 11 | `desktop/state/playback/DesktopQueueRadio.kt` | 2 | Same on the desktop `recommendationHistory.select(...)` result, plus import | Same, for desktop | Recommendations engineer |
+
+## Behavior patches
+
+Deliberate improvements to upstream code itself, not integration points. We improve our fork
+directly rather than waiting on upstream; each patch stays as small as possible and carries a
+`Turtle:` comment pointing here, so merge conflicts are easy to spot and re-apply. Patches do not
+count toward the hook budget but should stay rare.
+
+| # | File | Lines | What | Why | Owner |
+| --- | --- | --- | --- | --- | --- |
+| 12 | `desktop/state/playback/PlayerState.kt` | 2 | Drop `!selection.enabled` from the next-track pre-cache gate, plus comment | Resolve the next track 5 s into the current one even with song caching off (desktop default), so a manual skip reuses a warm stream instead of a full resolution. Byte prefetch still follows the cache setting. From Echo Music's `preloadUpcomingItems` | Windows and performance engineer |
+| 13 | `shared/src/jvmSharedMain/.../playback/PlaybackPreCache.kt` | 4 | Clamp the pre-cache chunk to `resource.rangeChunkSizeBytes` | The fixed 1 MB chunk ignored per-client limits; some clients (ANDROID_VR, TVHTML5_SIMPLY) refuse ranges over 512 KB. Matches what the main player stream already does | Windows and performance engineer |
+| 14 | `android/playback/ExoPlaybackPlayer.kt` | 1 | `createPlayer` default `bufferForPlaybackMs` 2000 to 750 | Audio starts sooner; switches already use 500 ms. Echo Music uses 150 ms. **Not compiled or tested yet (no Android SDK here)** | KMP lead |
+
+The desktop stream-resolver warm-up at startup lives in `:turtle-bridge` (`TurtleRuntime`), so it
+needs no upstream edit.
 
 Every hook fails open: if Koin has no Turtle runtime, our code throws, or ranking misses its
 1.5-second budget, upstream's own behavior runs unchanged.

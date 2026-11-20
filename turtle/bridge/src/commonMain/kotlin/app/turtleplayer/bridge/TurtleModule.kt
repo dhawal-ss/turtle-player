@@ -149,3 +149,9 @@ object TurtleBridge {
     private const val KOIN_POLL_MS = 100L
     private const val STARTUP_WAIT_MS = 60_000L
 }
+
+/**
+ * Whether our runtime should warm the stream resolver at startup. Android and iOS upstream already
+ * do this from their UI; desktop never does, so its first play pays the full extractor warm-up.
+ */
+internal expect val warmStreamResolverOnStart: Boolean

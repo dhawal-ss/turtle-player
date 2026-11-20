@@ -417,7 +417,7 @@ class ExoPlaybackPlayer(
     private val a2dpMonitor = BluetoothA2dpMonitor(this.context) { maybeRecoverAudioOutput(a2dpStateChanged = true) }
 
     private fun createPlayer(
-        bufferForPlaybackMs: Int = 2_000,
+        bufferForPlaybackMs: Int = 750, // Turtle: start sooner (was 2_000; HOOKS.md #14)
         role: AndroidPlaybackPlayerRole = AndroidPlaybackPlayerRole.PRIMARY,
         audioSessionId: Int = sharedAudioSessionId,
     ): ExoPlayer {

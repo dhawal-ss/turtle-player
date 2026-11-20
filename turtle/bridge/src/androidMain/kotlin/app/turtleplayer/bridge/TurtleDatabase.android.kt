@@ -6,3 +6,5 @@ import org.koin.core.scope.Scope
 
 internal actual fun Scope.turtleDatabaseSpec(): TurtleDatabaseSpec =
     TurtleDatabaseSpec(AndroidSQLiteDriver(), get<Context>().getDatabasePath("turtle.db").absolutePath)
+
+internal actual val warmStreamResolverOnStart: Boolean = false

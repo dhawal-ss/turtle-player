@@ -19,6 +19,8 @@ object PlaybackPreCache {
     ) {
         if (!resource.isDirectFile || !resource.url.startsWith("https://")) return
         val mediaSize = resource.contentLengthBytes?.takeIf { it > 0L } ?: return
+        // Turtle: never exceed the client's range limit; some clients refuse ranges over 512 KB (HOOKS.md #13).
+        val chunk = minOf(PLAYBACK_PRE_CACHE_BYTES, resource.rangeChunkSizeBytes.takeIf { it > 0L } ?: PLAYBACK_PRE_CACHE_BYTES).toInt()
         val capture = DirectPlaybackCache.begin(resource, directory, budgetBytes, prefetch = true) ?: return
         val stream =
             try {
@@ -26,8 +28,8 @@ object PlaybackPreCache {
                     url = resource.url,
                     requestHeaders = resource.headers,
                     mediaSize = mediaSize,
-                    chunkSize = PLAYBACK_PRE_CACHE_BYTES.toInt(),
-                    initialChunkSize = PLAYBACK_PRE_CACHE_BYTES.toInt(),
+                    chunkSize = chunk,
+                    initialChunkSize = chunk,
                     cacheCapture = capture,
                     cacheCapturePrefetch = true,
                 )

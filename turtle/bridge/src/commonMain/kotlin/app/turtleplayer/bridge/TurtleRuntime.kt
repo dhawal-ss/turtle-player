@@ -8,12 +8,15 @@ import app.turtleplayer.search.LocalSource
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.state.GlobalYouTubeRepository
 import com.metrolist.shared.viewmodels.libraryContentSearchOverride
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.time.TimeSource
 
 /** Wires our engines into the running app once, and serves the upstream hook calls. */
 @OptIn(ExperimentalAtomicApi::class)
@@ -36,7 +39,24 @@ class TurtleRuntime(
         scope.launch { runCatching { taste.refresh() } }
         taste.observe(scope)
         libraryContentSearchOverride = ::searchLibrary
+        if (warmStreamResolverOnStart) scope.launch { warmStreamResolver() }
         TurtleLog.info("runtime started")
+    }
+
+    /** Echo Music-style warm-up: pays the extractor and token setup before the first play, not on it. */
+    private suspend fun warmStreamResolver() {
+        val resolver = withTimeoutOrNull(RESOLVER_WAIT_MS) {
+            var r = GlobalYouTubeRepository.streamResolver
+            while (r == null) {
+                delay(200)
+                r = GlobalYouTubeRepository.streamResolver
+            }
+            r
+        } ?: return
+        val startedAt = TimeSource.Monotonic.markNow()
+        runCatching { resolver.prewarm() }
+            .onSuccess { TurtleLog.info("stream resolver warmed in ${startedAt.elapsedNow().inWholeMilliseconds}ms") }
+            .onFailure { if (it is CancellationException) throw it else TurtleLog.error("stream resolver warm-up failed", it) }
     }
 
     /**
@@ -97,5 +117,6 @@ class TurtleRuntime(
     private companion object {
         const val RANK_TIMEOUT_MS = 1_500L
         const val PAGE_SIZE = 200
+        const val RESOLVER_WAIT_MS = 30_000L
     }
 }
