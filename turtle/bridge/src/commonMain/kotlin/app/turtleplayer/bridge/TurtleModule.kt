@@ -19,8 +19,10 @@ import com.metrolist.shared.model.SongItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
@@ -80,15 +82,23 @@ val turtleModule: Module = module {
  * open: if our code throws or Koin is not ready, upstream's own behavior is kept.
  */
 object TurtleBridge {
-    private val runtime: TurtleRuntime? get() = GlobalContext.getOrNull()?.getOrNull()
+    private val runtime: TurtleRuntime?
+        get() = GlobalContext.getOrNull()?.getOrNull<TurtleRuntime>()?.also { it.start() }
 
-    /** Hook: attach the listening-event log to a player. Both platforms' players expose these flows. */
+    /**
+     * Hook: attach the listening-event log to a player. Both platforms' players expose these flows.
+     * Desktop builds its player before `startKoin` runs, so this waits for Koin instead of giving up;
+     * the current song is a StateFlow, so nothing playing at attach time is missed.
+     */
     fun observePlayer(scope: CoroutineScope, currentSong: StateFlow<SongItem?>, isPlaying: StateFlow<Boolean>, onEndOfTrack: Flow<*>) {
-        val r = runtime ?: return
-        r.start()
-        r.observer.attach(scope, currentSong, isPlaying, onEndOfTrack)
+        scope.launch {
+            while (GlobalContext.getOrNull() == null) delay(KOIN_POLL_MS)
+            runtime?.observer?.attach(scope, currentSong, isPlaying, onEndOfTrack)
+        }
     }
 
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
+
+    private const val KOIN_POLL_MS = 100L
 }

@@ -49,6 +49,10 @@ class TurtleRuntimeTest {
 
     @Test
     fun runtimeWiresLibrarySearchAndRadioRanking() = runBlocking {
+        // Desktop builds its player before startKoin runs; the hook must still attach.
+        val current = MutableStateFlow<SongItem?>(null)
+        TurtleBridge.observePlayer(scope, current, MutableStateFlow(true), MutableSharedFlow<Long>())
+
         val dbFile = File.createTempFile("metrolist", ".db").apply { delete(); deleteOnExit() }
         val koin = startKoin {
             modules(
@@ -64,13 +68,12 @@ class TurtleRuntimeTest {
         dao.insert(SongEntity(id = "v2", title = "Under Pressure", customArtist = "Queen", duration = 248, inLibrary = added))
         dao.insert(SongEntity(id = "v3", title = "Bohemian Like You", customArtist = "The Dandy Warhols", duration = 211))
 
-        val current = MutableStateFlow<SongItem?>(null)
-        TurtleBridge.observePlayer(scope, current, MutableStateFlow(true), MutableSharedFlow<Long>())
         current.value = song("v1", "Bohemian Rhapsody", "Queen")
 
         // Library search: typo-tolerant, library songs only (v3 was only played, never added).
-        val search = assertNotNull(libraryContentSearchOverride, "runtime did not install the library search hook")
         val results = withTimeout(30_000) {
+            while (libraryContentSearchOverride == null) delay(50)
+            val search = assertNotNull(libraryContentSearchOverride)
             var r: List<SongItem>? = null
             while (r == null) {
                 r = search("bohemain", 0)
@@ -79,6 +82,12 @@ class TurtleRuntimeTest {
             r
         }
         assertEquals(listOf("v1"), results.map { it.id })
+
+        // The player hook attached once Koin came up: a played song lands in the event log.
+        val store = koin.get<PlayEventStore>()
+        current.value = song("v2", "Under Pressure", "Queen")
+        withTimeout(10_000) { while (store.count() == 0L) delay(50) }
+        assertEquals("yt:v1", store.since(0).first().trackKey.value)
 
         // Radio: same songs back, reordered at most, none invented or lost.
         val page = RadioQueuePage(
