@@ -83,7 +83,7 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import app.turtleplayer.bridge.turtleModule
+import app.turtleplayer.ui.turtleAppModule
 import coil3.compose.setSingletonImageLoaderFactory
 import com.materialkolor.ktx.isLight
 import com.materialkolor.utils.ColorUtils
@@ -984,7 +984,7 @@ private fun runDesktopApp(args: Array<String>) {
                     coreModule,
                     sharedModule,
                     composeStateModule,
-                    turtleModule,
+                    turtleAppModule,
                 )
             }
             val database =

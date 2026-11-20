@@ -14,6 +14,7 @@ turtle/
     search/         :turtle-search  Fuzzy, lyrics and merged search with intent detection
     taste/          :turtle-taste   Candidate generation, ranking, exploration, surfaces
   bridge/           :turtle-bridge  Our seams on upstream APIs: SQLite event store, player observer, Koin module
+  ui/               :turtle-ui      Shell: the Turtle design system (tokens, fonts, components) and screens
   scripts/          CI helpers (hook-ledger guard)
   HOOKS.md          Every line changed in an upstream file
   AGENTS.md         Rules for humans and agents working on our code

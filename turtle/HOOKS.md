@@ -4,8 +4,10 @@ Every line we change in an upstream (Metrolist) file is listed here, with the re
 else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-hooks.sh`) fails a PR
 that edits an upstream path without also updating this file.
 
-Budget: **under 30 hook lines in total**, counting the import lines a hook needs.
-Current total: **27** hook lines, plus about 55 lines of behavior patches below.
+Budget: **under 40 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
+20 Nov 2026 when we chose to replace upstream's UI with Shell; every further screen takeover goes
+through `shared/.../turtle/TurtleUiSlots.kt` at one line plus imports.)
+Current total: **35** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -17,8 +19,8 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 2 | `AGENTS.md` | 1 | Pointer to `turtle/AGENTS.md` at the top | Upstream's agent rules (test policy, rejected features) do not apply to our modules; agents must read ours first | KMP lead |
 | 3 | `settings.gradle.kts` | 2 | `include(":turtle-bridge")` and its `projectDir` | Registers the bridge, the only Turtle module that depends on upstream `:shared` | KMP lead |
 | 4 | `shared/viewmodels/LibraryViewModel.kt` | 3 | `libraryContentSearchOverride` (comment + declaration) and one call at the top of `contentMatchedSongs` | Replaces the SQL `LIKE` library search with our ranked, typo-tolerant index. Shared cannot depend on the bridge, so the bridge sets this function at startup; when unset or not ready, upstream's query runs | Search engineer |
-| 5 | `androidApp/build.gradle.kts`, `desktopApp/build.gradle.kts` | 2 | `implementation(project(":turtle-bridge"))` | The apps load our Koin module and call the hooks | KMP lead |
-| 6 | `android/App.kt` | 2 | `turtleModule` appended to `startKoin { modules(...) }`, plus import | Our bindings load after upstream's, so they override where they overlap | KMP lead |
+| 5 | `androidApp/build.gradle.kts`, `desktopApp/build.gradle.kts` | 2 | `implementation(project(":turtle-ui"))` (which exposes the bridge) | The apps load our Koin module and call the hooks | KMP lead |
+| 6 | `android/App.kt` | 2 | `turtleAppModule` (bridge plus Shell) appended to `startKoin { modules(...) }`, plus import | Our bindings load after upstream's, so they override where they overlap | KMP lead |
 | 7 | `desktop/Main.kt` | 2 | Same for desktop `startKoin` | Same | KMP lead |
 | 8 | `android/playback/MusicService.kt` | 2 | `TurtleBridge.observePlayer(serviceScope, player.currentSong, player.isPlaying, player.onEOFPlaybackInstance)` after `AndroidListeningHistory(...)`, plus import | Feeds the listening-event log; also starts our runtime (index sync, taste updates) | Recommendations engineer |
 | 9 | `desktop/state/playback/PlayerState.kt` | 2 | Same call before the `player.onEOFPlaybackInstance` collector, plus import | Same, for desktop | Recommendations engineer |
@@ -26,6 +28,9 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 11 | `desktop/state/playback/DesktopQueueRadio.kt` | 2 | Same on the desktop `recommendationHistory.select(...)` result, plus import | Same, for desktop | Recommendations engineer |
 | 20 | `shared/api/YouTubeRepository.kt` | 3 | `searchSummaryOverride` (comment + declaration) and its use where `getSearchSummary` returns the online page | Search: our engine re-ranks YouTube's page together with the library (typo-tolerant, deduplicated, personal, intent-aware top result) inside upstream's section shape, so the UI and its strings are unchanged. Videos, playlists and podcasts pass through. Fails open to upstream's page | Search engineer |
 | 21 | `shared/ui/screens/HomeShelfBuilder.kt` | 3 | `homeShelvesOverride` (comment + declaration) and its use where `HomeShelfCache.build` returns | Home: our shelves (artist mixes or Daily Mixes, More like X, On repeat, Weekly discovery, Fresh for you, Rediscover) go after Speed Dial. They live in Compose state, so Home recomposes when they refresh | Recommendations engineer |
+| 22 | `shared/ui/screens/HomeContent.kt` | 3 | First line of `HomeContent`: `TurtleUiSlots.home?.let { return it(HomeSlot(...)) }`, plus 2 imports | Shell's Home replaces upstream's on Android, desktop and iOS, keeping upstream's callbacks (navigation, menus, loading) | Product designer |
+| 23 | `shared/ui/screens/SearchScreen.kt` | 3 | First line of `SearchScreen`: `TurtleUiSlots.search?.let { return it(SearchSlot(...)) }`, plus 2 imports | Shell's Search replaces upstream's on all platforms; desktop keeps its title-bar field (`showSearchBar = false`) | Product designer |
+| 24 | `settings.gradle.kts` | 2 | `include(":turtle-ui")` and its `projectDir` | Registers Shell, our Compose design system and screens | Product designer |
 
 ## Behavior patches
 
@@ -47,6 +52,8 @@ count toward the hook budget but should stay rare.
 
 The desktop stream-resolver warm-up at startup lives in `:turtle-bridge` (`TurtleRuntime`), so it
 needs no upstream edit.
+
+**Upstream-tree files we own** (new files, so they never conflict on merge): `shared/src/commonMain/kotlin/com/metrolist/shared/turtle/TurtleUiSlots.kt`, the single home for UI override points.
 
 Every hook fails open: if Koin has no Turtle runtime, our code throws, or ranking misses its
 1.5-second budget, upstream's own behavior runs unchanged.

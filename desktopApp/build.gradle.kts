@@ -287,7 +287,7 @@ kotlin {
                 implementation(project(":shared")) {
                     exclude(group = "org.xerial", module = "sqlite-jdbc")
                 }
-                implementation(project(":turtle-bridge"))
+                implementation(project(":turtle-ui"))
                 implementation(libs.compose.desktop)
                 implementation("io.coil-kt.coil3:coil-compose:${libs.versions.coil.get()}") {
                     exclude(group = "org.jetbrains.skiko", module = "skiko")

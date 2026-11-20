@@ -19,7 +19,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
-import app.turtleplayer.bridge.turtleModule
+import app.turtleplayer.ui.turtleAppModule
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import com.metrolist.android.backup.BackupRestoreManager
@@ -246,7 +246,7 @@ class App :
         val koinStart = SystemClock.elapsedRealtime()
         startKoin {
             androidContext(this@App)
-            modules(coreModule, sharedModule, appModule, turtleModule)
+            modules(coreModule, sharedModule, appModule, turtleAppModule)
         }
         Timber.tag(TAG).d("Koin init complete elapsed=%dms", SystemClock.elapsedRealtime() - koinStart)
 

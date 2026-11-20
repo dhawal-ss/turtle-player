@@ -100,6 +100,8 @@ import com.metrolist.shared.model.isVideoShelf
 import com.metrolist.shared.settings.LibraryFilterType
 import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.settings.displayName
+import com.metrolist.shared.turtle.HomeSlot
+import com.metrolist.shared.turtle.TurtleUiSlots
 import com.metrolist.shared.ui.LocalIsTv
 import com.metrolist.shared.ui.components.ContainedLoadingIndicator
 import com.metrolist.shared.ui.components.DesktopHorizontalScrollControls
@@ -214,6 +216,7 @@ fun HomeContent(
     shelfCache: HomeShelfCache? = null,
     onPlaySongs: ((List<SongItem>) -> Unit)? = null,
 ) {
+    TurtleUiSlots.home?.let { return it(HomeSlot(uiState, text, onItemClick, onItemLongClick, onPlaySongs, onShuffleSongs, onArtistClick, onAlbumClick, onPlayAlbum, onLoadMore, currentSongId, isPlaying, modifier, listState, contentPadding, shelfCache)) } // Turtle: HOOKS.md #22
     val activeSongId =
         remember(currentSongId) {
             derivedStateOf { currentSongId.value.takeUnless { Settings.shared.uiEnhancements } }

@@ -16,6 +16,7 @@ import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.ui.screens.HomeShelf
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -151,6 +152,12 @@ object TurtleBridge {
     internal fun startInBackground() {
         runtime
     }
+
+    /** The Infinity Mix's opening queue (empty when our runtime is not available). */
+    suspend fun infinityMix(): List<SongItem> = runtime?.infinityMix().orEmpty()
+
+    /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
+    val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()
 
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page

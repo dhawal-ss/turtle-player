@@ -80,6 +80,8 @@ import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.SearchFilter
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
+import com.metrolist.shared.turtle.SearchSlot
+import com.metrolist.shared.turtle.TurtleUiSlots
 import com.metrolist.shared.ui.LocalIsTv
 import com.metrolist.shared.ui.icons.MetrolistIcons
 import com.metrolist.shared.ui.tv.tvFocusHighlight
@@ -130,6 +132,7 @@ fun SearchScreen(
     searchBarEndPadding: Dp = 0.dp,
     onAlbumPlay: ((AlbumItem) -> Unit)? = null,
 ) {
+    TurtleUiSlots.search?.let { return it(SearchSlot(uiState, onQueryChange, onSearch, onBack, onItemClick, onItemLongClick, onHistoryItemClick, onRemoveHistoryItem, onFilterSelected, onLoadMore, onArtistClick, onAlbumClick, currentSongId, isPlaying, showSearchBar, focusRequester, modifier, contentPadding)) } // Turtle: HOOKS.md #23
     val query = uiState.query
     val isQuerySubmitted = uiState.isQuerySubmitted
     val focusManager = LocalFocusManager.current

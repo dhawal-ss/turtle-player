@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell UI (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_filter_all">All</string>
+    <string name="shell_filter_music">Music</string>
+    <string name="shell_filter_mixes">Mixes</string>
+    <string name="shell_infinity_title">Infinity Mix</string>
+    <string name="shell_infinity_label">INFINITY MIX · ∞</string>
+    <string name="shell_infinity_tagline">Never stops.</string>
+    <string name="shell_infinity_subtitle">Shuffled. Learns from every like and skip.</string>
+    <string name="shell_play_infinity">Play Infinity Mix</string>
+    <string name="shell_pause_infinity">Pause Infinity Mix</string>
+    <string name="shell_made_for_you">Made for you</string>
+    <string name="shell_and_more">%1$s and more</string>
+    <string name="shell_search_title">Search</string>
+    <string name="shell_search_hint">What do you want to listen to?</string>
+    <string name="shell_clear_search">Clear search</string>
+    <string name="shell_vibes_title">Start a mix from a vibe</string>
+    <string name="shell_browse_all">Browse all</string>
+    <string name="shell_recent_searches">Recent searches</string>
+    <string name="shell_top_result">Top result</string>
+    <string name="shell_filter_top">Top</string>
+    <string name="shell_songs">Songs</string>
+    <string name="shell_artists">Artists</string>
+    <string name="shell_albums">Albums</string>
+    <string name="shell_playlists">Playlists</string>
+    <string name="shell_videos">Videos</string>
+    <string name="shell_kind_artist">Artist</string>
+    <string name="shell_kind_album">Album</string>
+    <string name="shell_kind_playlist">Playlist</string>
+    <string name="shell_kind_song">Song</string>
+    <string name="shell_vibe_1">rainy night indie</string>
+    <string name="shell_vibe_2">gym hype</string>
+    <string name="shell_vibe_3">sunday slow</string>
+    <string name="shell_vibe_4">focus, no lyrics</string>
+    <string name="shell_genre_1">Hip-hop</string>
+    <string name="shell_genre_2">Indie</string>
+    <string name="shell_genre_3">Pop</string>
+    <string name="shell_genre_4">R&amp;B</string>
+    <string name="shell_genre_5">Country</string>
+    <string name="shell_genre_6">Rock</string>
+    <string name="shell_genre_7">Late night</string>
+    <string name="shell_genre_8">Workout</string>
+</resources>

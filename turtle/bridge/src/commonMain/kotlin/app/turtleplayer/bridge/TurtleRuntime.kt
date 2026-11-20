@@ -112,6 +112,21 @@ class TurtleRuntime(
         }
 
     /**
+     * The Infinity Mix's opening queue: the taste engine's Up Next as playable songs. Upstream's
+     * autoplay keeps it going forever, and our radio ranking keeps it tailored as you like and skip.
+     * Empty when the engine has nothing yet (no history); callers then fall back to quick picks.
+     */
+    suspend fun infinityMix(): List<SongItem> =
+        try {
+            taste.startAutoplay().mapNotNull { item -> item.track.youtubeId?.let { cache.get(it) }?.also { observer.tag(it.id, item.surfaceDetail) } }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("infinity: could not build a queue", e)
+            emptyList()
+        }
+
+    /**
      * Typo-tolerant, relevance-ranked library search replacing upstream's SQL `LIKE`. Returns null
      * (keep upstream's query) until our index has finished its first sync.
      */
