@@ -44,6 +44,10 @@ private const val DEFAULT_ESTIMATED_MEDIA_SIZE = 100_000_000L
 private const val MAX_CONCURRENT_CHUNK_REQUESTS = 3
 private const val MAX_CACHED_CHUNKS = 4
 
+// Turtle (HOOKS.md #15): audio-sized streams are fetched whole in the background and kept in memory,
+// so seeks, replays and skips back are served locally. Larger (video) streams keep the bounded window.
+private const val TURTLE_WHOLE_TRACK_MAX_BYTES = 32L * 1024 * 1024
+
 internal val directMediaHttpClient =
     sharedOkHttpClient
         .newBuilder()
@@ -361,11 +365,66 @@ class HttpRangeInputStream(
         return requestedPosition to bytes
     }
 
+    private val retainsWholeTrack: Boolean
+        get() = mediaSize in 1L..TURTLE_WHOLE_TRACK_MAX_BYTES
+
+    /** Uncached (start, size) ranges in [from, to), split at [chunkSize] and at cached chunk edges. */
+    private fun missingRanges(
+        from: Long,
+        to: Long,
+    ): List<Pair<Long, Int>> {
+        val cached = synchronized(chunkCache) { chunkCache.entries.map { it.key to it.key + it.value.size } }.sortedBy { it.first }
+        val missing = mutableListOf<Pair<Long, Int>>()
+        var p = from
+        while (p < to) {
+            val covering = cached.firstOrNull { p >= it.first && p < it.second }
+            if (covering != null) {
+                p = covering.second
+                continue
+            }
+            val end = minOf(p + chunkSize, cached.firstOrNull { it.first > p }?.first ?: to, to)
+            missing += p to (end - p).toInt()
+            p = end
+        }
+        return missing
+    }
+
+    /** Turtle: download the rest of the track, then the gaps before it, a few requests at a time. */
+    private fun triggerWholeTrackPrefetch(resumeAt: Long) {
+        val ranges = missingRanges(resumeAt, mediaSize) + missingRanges(0L, minOf(resumeAt, mediaSize))
+        if (ranges.isEmpty()) return
+        prefetchJob =
+            prefetchScope.launch {
+                for (batch in ranges.chunked(MAX_CONCURRENT_CHUNK_REQUESTS)) {
+                    if (closed) break
+                    val ok =
+                        batch
+                            .map { (start, size) ->
+                                async {
+                                    try {
+                                        getOrDownloadChunk(start, size)
+                                        true
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        false
+                                    }
+                                }
+                            }.map { it.await() }
+                    // A refused range (expired URL, preview-only client) means the rest would fail too.
+                    if (!ok.all { it }) break
+                }
+            }
+    }
+
     private fun triggerPrefetchLoop(
         currentStart: Long,
         currentChunkLen: Long,
     ) {
+        // Turtle: playback crosses chunk edges constantly; let a running whole-track fetch continue.
+        if (retainsWholeTrack && prefetchJob?.isActive == true) return
         prefetchJob?.cancel()
+        if (retainsWholeTrack) return triggerWholeTrackPrefetch(currentStart + currentChunkLen)
         val prefetchStarts = mutableListOf<Long>()
         var nextStart = currentStart + currentChunkLen
         for (i in 0 until 3) {
@@ -400,7 +459,7 @@ class HttpRangeInputStream(
         synchronized(chunkCache) {
             if (closed) return
             chunkCache[start] = bytes
-            while (chunkCache.size > MAX_CACHED_CHUNKS) {
+            while (chunkCache.size > MAX_CACHED_CHUNKS && !retainsWholeTrack) {
                 val iterator = chunkCache.entries.iterator()
                 iterator.next()
                 iterator.remove()

@@ -5,7 +5,7 @@ else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-h
 that edits an upstream path without also updating this file.
 
 Budget: **under 30 hook lines in total**, counting the import lines a hook needs.
-Current total: **21** hook lines, plus 7 lines of behavior patches below.
+Current total: **21** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -37,6 +37,8 @@ count toward the hook budget but should stay rare.
 | 12 | `desktop/state/playback/PlayerState.kt` | 2 | Drop `!selection.enabled` from the next-track pre-cache gate, plus comment | Resolve the next track 5 s into the current one even with song caching off (desktop default), so a manual skip reuses a warm stream instead of a full resolution. Byte prefetch still follows the cache setting. From Echo Music's `preloadUpcomingItems` | Windows and performance engineer |
 | 13 | `shared/src/jvmSharedMain/.../playback/PlaybackPreCache.kt` | 4 | Clamp the pre-cache chunk to `resource.rangeChunkSizeBytes` | The fixed 1 MB chunk ignored per-client limits; some clients (ANDROID_VR, TVHTML5_SIMPLY) refuse ranges over 512 KB. Matches what the main player stream already does | Windows and performance engineer |
 | 14 | `android/playback/ExoPlaybackPlayer.kt` | 1 | `createPlayer` default `bufferForPlaybackMs` 2000 to 750 | Audio starts sooner; switches already use 500 ms. Echo Music uses 150 ms. **Not compiled or tested yet (no Android SDK here)** | KMP lead |
+| 15 | `shared/src/jvmSharedMain/.../playback/ffmpeg/HttpRangeInputStream.kt` | ~45 | For streams up to 32 MB (audio): fetch the whole file in the background (3 requests at a time, stopping at the first refusal), fill gaps before the play position, keep every chunk instead of the last 4; a running fetch is not restarted at each chunk edge | Seeks, replays and skip-backs are served from memory instead of a new request to YouTube. Upstream kept about 512 KB and read 3 chunks ahead. Covered by `WholeTrackStreamTest` in `:turtle-bridge` | Windows and performance engineer |
+| 16 | `desktop/state/playback/PlayerState.kt` | 3 | Pre-open the next track once the current one passes 1.5 s, not only in its last 30 s (`TURTLE_EARLY_PRELOAD_POSITION_MS`) | Manual skips swap to an already-open, buffering player (`transitions.promoteNext`) instead of resolving and opening cold. Crossfade still waits for the real end | Windows and performance engineer |
 
 The desktop stream-resolver warm-up at startup lives in `:turtle-bridge` (`TurtleRuntime`), so it
 needs no upstream edit.

@@ -456,6 +456,7 @@ object PlayerState {
     private val attestationRecovery = DesktopAttestationRecoveryTracker()
     private const val REPORTING_TAG = "DeviceConnectReporting"
     private const val TRANSITION_PREPARATION_LEAD_MS = 30_000L
+    private const val TURTLE_EARLY_PRELOAD_POSITION_MS = 1_500L
 
     private data class PlaybackFetchResult(
         val resource: PlaybackResource? = null,
@@ -2122,7 +2123,8 @@ object PlayerState {
                             0L
                         }
                     player.setTransitionSampling(player.currentPlaybackInstanceId, threshold, threshold + TRANSITION_PREPARATION_LEAD_MS)
-                    if (remaining in 1L..(threshold + TRANSITION_PREPARATION_LEAD_MS) &&
+                    // Turtle: pre-open the next track early, not just near the end, so manual skips are instant (HOOKS.md #16).
+                    if ((remaining in 1L..(threshold + TRANSITION_PREPARATION_LEAD_MS) || pos >= TURTLE_EARLY_PRELOAD_POSITION_MS) &&
                         pos > DESKTOP_PRELOAD_MIN_POSITION_MS && repeatMode != RepeatMode.ONE
                     ) {
                         transitions.nearEnd(next, gapless, threshold)
