@@ -46,8 +46,9 @@ class TurtleRuntime(
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage {
         if (page.songs.size < 2) return page
         return try {
-            val seed = observer.currentSong() ?: return page
-            withTimeoutOrNull(RANK_TIMEOUT_MS) {
+            // Radio pages often load as playback starts, before the observer has seen a song.
+            val seed = observer.currentSong() ?: page.songs.first()
+            val result = withTimeoutOrNull(RANK_TIMEOUT_MS) {
                 cache.putAll(page.songs)
                 val byId = page.songs.associateBy { it.id }
                 val ranked = taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() })
@@ -55,10 +56,14 @@ class TurtleRuntime(
                     item.track.youtubeId?.let(byId::get)?.also { observer.tag(it.id, item.surfaceDetail) }
                 }
                 page.copy(songs = ordered)
-            } ?: page
+            }
+            if (result == null) TurtleLog.info("radio: kept upstream order (ranking exceeded ${RANK_TIMEOUT_MS}ms)")
+            else TurtleLog.info("radio: ranked ${result.songs.size} of ${page.songs.size} candidates")
+            result ?: page
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            TurtleLog.error("radio: ranking failed, kept upstream order", e)
             page
         }
     }
@@ -70,7 +75,10 @@ class TurtleRuntime(
     suspend fun searchLibrary(query: String, offset: Int): List<SongItem>? {
         val term = query.trim()
         if (term.length < 2) return emptyList()
-        if (!librarySync.isReady()) return null
+        if (!librarySync.isReady()) {
+            TurtleLog.info("library search: index not ready, upstream query used")
+            return null
+        }
         val hits = library.read { lexical, _ ->
             // History-only songs share the index, so over-fetch before keeping library songs.
             lexical.search(LexicalQuery.of(term, asYouType = false), limit = (offset + PAGE_SIZE) * 2, types = setOf(DocType.TRACK))
@@ -83,6 +91,7 @@ class TurtleRuntime(
             .mapNotNull { it.meta.youtubeId }
             .toList()
             .mapNotNull { cache.get(it) }
+            .also { TurtleLog.info("library search: ${it.size} results from Turtle index") }
     }
 
     private companion object {
