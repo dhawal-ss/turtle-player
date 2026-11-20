@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Turtle Player home shelves. Base English only; translations go in values-XX/. -->
+    <string name="turtle_shelf_artist_mix">%1$s Mix</string>
+    <string name="turtle_shelf_daily_mix">Daily Mix %1$d</string>
+    <string name="turtle_shelf_because_replayed">Because you replayed %1$s</string>
+    <string name="turtle_shelf_because_liked">Because you liked %1$s</string>
+    <string name="turtle_shelf_because_listened">Because you listened to %1$s</string>
+    <string name="turtle_shelf_on_repeat">On repeat</string>
+    <string name="turtle_shelf_weekly_discovery">Weekly discovery</string>
+    <string name="turtle_shelf_fresh_for_you">Fresh for you</string>
+    <string name="turtle_shelf_rediscover">Rediscover</string>
+    <string name="turtle_shelf_label">Made for you by Turtle</string>
+</resources>

@@ -8,6 +8,7 @@ import com.metrolist.shared.db.getDatabaseBuilder
 import com.metrolist.shared.model.ArtistTiny
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.api.searchSummaryOverride
 import com.metrolist.shared.viewmodels.libraryContentSearchOverride
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ class TurtleRuntimeTest {
     fun tearDown() {
         scope.cancel()
         libraryContentSearchOverride = null
+        searchSummaryOverride = null
         stopKoin()
     }
 

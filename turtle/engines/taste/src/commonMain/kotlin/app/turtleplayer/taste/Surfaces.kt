@@ -4,11 +4,20 @@ package app.turtleplayer.taste
 enum class ShelfKind {
     /** Autoplay / Up Next: session model, re-ranked on every play event. */
     UP_NEXT,
-    /** One per taste cluster, about 70% familiar. Refresh daily. */
+    /**
+     * One per taste cluster, about 70% familiar. Without vectors (no clusters): up to three artist
+     * mixes ([Reason.DailyMix.seedArtist] set), about 60% familiar. Refresh daily.
+     */
     DAILY_MIX,
-    /** "Because you replayed X": tracks like one they keep coming back to. Refresh daily. */
+    /**
+     * "Because you replayed / liked / listened to X": tracks like one they keep coming back to.
+     * Without a vector for X it is built from X's upstream radio plus their own tracks. Refresh daily.
+     */
     MORE_LIKE,
-    /** Never-heard tracks only, collaborative filtering plus sound. Refresh Mondays. */
+    /**
+     * Never-heard tracks only, collaborative filtering plus sound; without vectors, from the upstream
+     * radios of their top tracks, never-heard artists first. Refresh Mondays.
+     */
     WEEKLY_DISCOVERY,
     /** New releases from affinity artists. Refresh Fridays. */
     FRESH_FOR_YOU,
@@ -16,6 +25,8 @@ enum class ShelfKind {
     REDISCOVER,
     /** Radio from any seed track or artist. On demand. */
     RADIO,
+    /** Their most-finished tracks of the last 30 days, all familiar ([Reason.OnRepeat]). Needs no vectors. Refresh daily. */
+    ON_REPEAT,
 }
 
 /**

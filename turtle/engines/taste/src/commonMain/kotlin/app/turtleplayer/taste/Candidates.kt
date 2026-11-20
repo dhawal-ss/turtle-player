@@ -13,6 +13,8 @@ enum class CandidateSource(val tag: String) {
     REDISCOVERY("rediscover"),
     UPSTREAM_RADIO("upstream"),
     ONBOARDING("onboarding"),
+    /** The listener's own history and library (On repeat; their tracks around a seed without vectors). */
+    LIBRARY("library"),
     ;
 
     companion object {
@@ -114,9 +116,19 @@ sealed interface Reason {
         override val key get() = "picked:$artist"
     }
 
-    /** Shelf-level: a Daily Mix for one taste cluster. */
-    data class DailyMix(val clusterId: Int, val topArtists: List<ArtistKey>) : Reason {
+    /**
+     * Shelf-level: a Daily Mix for one taste cluster or, while there are no co-listening vectors
+     * (hence no clusters), an artist mix. An artist mix has [seedArtist] set (also the single entry
+     * of [topArtists]) and [clusterId] is its rank 0..2; the UI titles it "<artist> Mix" using
+     * [TasteEngine.displayName]. A cluster mix has [seedArtist] null and is titled "Daily Mix <n>".
+     */
+    data class DailyMix(val clusterId: Int, val topArtists: List<ArtistKey>, val seedArtist: ArtistKey? = null) : Reason {
         override val key get() = "mix:${topArtists.firstOrNull() ?: clusterId}"
+    }
+
+    /** Shelf-level: the tracks they have been finishing most over the last month. */
+    data object OnRepeat : Reason {
+        override val key get() = "on_repeat"
     }
 
     /** Shelf-level: never-heard tracks picked for this listener. */

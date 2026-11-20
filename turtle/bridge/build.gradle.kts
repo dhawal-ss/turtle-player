@@ -5,6 +5,12 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kotlin.multiplatform.library)
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.compose.compiler)
+}
+
+compose.resources {
+    packageOfResClass = "app.turtleplayer.bridge.generated.resources"
 }
 
 kotlin {
@@ -14,6 +20,7 @@ kotlin {
             version = release(37) { minorApiLevel = 1 }
         }
         minSdk = 24
+        androidResources.enable = true
         compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
     }
 
@@ -30,6 +37,8 @@ kotlin {
             implementation(libs.okhttp)
         }
         commonMain.dependencies {
+            implementation(libs.components.resources)
+            implementation(libs.runtime)
             implementation(project(":shared"))
             api("app.turtleplayer:turtle-events")
             api("app.turtleplayer:turtle-search")

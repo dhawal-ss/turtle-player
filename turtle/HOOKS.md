@@ -5,7 +5,7 @@ else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-h
 that edits an upstream path without also updating this file.
 
 Budget: **under 30 hook lines in total**, counting the import lines a hook needs.
-Current total: **21** hook lines, plus about 55 lines of behavior patches below.
+Current total: **27** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -24,6 +24,8 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 9 | `desktop/state/playback/PlayerState.kt` | 2 | Same call before the `player.onEOFPlaybackInstance` collector, plus import | Same, for desktop | Recommendations engineer |
 | 10 | `android/playback/AndroidQueueCoordinator.kt` | 2 | `?.let { TurtleBridge.rankRadio(it) }` on the result of `recommendationHistory.select(...)` in `freshRadioPage`, plus import | Autoplay: the taste engine orders YouTube's already-filtered radio candidates; upstream's filters (blocked, queued, songs-only) stay authoritative | Recommendations engineer |
 | 11 | `desktop/state/playback/DesktopQueueRadio.kt` | 2 | Same on the desktop `recommendationHistory.select(...)` result, plus import | Same, for desktop | Recommendations engineer |
+| 20 | `shared/api/YouTubeRepository.kt` | 3 | `searchSummaryOverride` (comment + declaration) and its use where `getSearchSummary` returns the online page | Search: our engine re-ranks YouTube's page together with the library (typo-tolerant, deduplicated, personal, intent-aware top result) inside upstream's section shape, so the UI and its strings are unchanged. Videos, playlists and podcasts pass through. Fails open to upstream's page | Search engineer |
+| 21 | `shared/ui/screens/HomeShelfBuilder.kt` | 3 | `homeShelvesOverride` (comment + declaration) and its use where `HomeShelfCache.build` returns | Home: our shelves (artist mixes or Daily Mixes, More like X, On repeat, Weekly discovery, Fresh for you, Rediscover) go after Speed Dial. They live in Compose state, so Home recomposes when they refresh | Recommendations engineer |
 
 ## Behavior patches
 
@@ -53,11 +55,9 @@ Every hook fails open: if Koin has no Turtle runtime, our code throws, or rankin
 
 | Seam | Upstream location | Planned hook |
 | --- | --- | --- |
-| Home shelves | `shared/viewmodels/HomeViewModel.kt:200` constructs `HomeShelfCache()` directly | `HomeShelfBuilder` is an `object`, not in Koin; needs a 1-line delegation to our shelf provider, plus our own string resources for shelf titles and reasons |
-| Search screen | `shared/viewmodels/SearchViewModel.kt` (constructed directly by the Android wrapper and desktop) | Swap in `SearchEngine` results; needs a design for the intent-aware top result first |
 | App identity | `androidApp/build.gradle.kts:255` `applicationId`, `desktopApp/build.gradle.kts:738` `packageName` | Read from `turtle/branding.properties` (2 lines) |
 | Update channel | `android/update/AppUpdateManager.kt:122`, `desktop/update/DesktopUpdateManager.kt:42` | Point at our releases (2 lines) |
 
-The planned hooks need about 8 more lines, which leaves little room under the budget. Prefer
+The remaining planned hooks need about 4 more lines, which reaches the budget. Prefer
 consolidating (for example one shared override point that several hooks reuse) over adding new
 call sites.

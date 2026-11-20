@@ -62,6 +62,9 @@ class TurtleScope(
  */
 val turtleModule: Module = module {
     single { TurtleScope() }
+    // Start our runtime when the app starts (in the background), not on first playback: Home needs
+    // our shelves and search needs the library index before anything plays.
+    single(createdAtStart = true) { TurtleAutoStart(get()) }
     single<PlayEventStore> {
         val spec = turtleDatabaseSpec()
         SqlitePlayEventStore(spec.driver, spec.path)
@@ -80,7 +83,9 @@ val turtleModule: Module = module {
     // Co-listening packs are not trained yet; until then the engine ranks on listening history alone.
     single<EmbeddingStore> { InMemoryEmbeddingStore() }
     single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get())) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get()) }
+    single { TurtleSearch(get(), get(), get()) }
+    single { TurtleHomeShelves(get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -143,6 +148,10 @@ object TurtleBridge {
         }
     }
 
+    internal fun startInBackground() {
+        runtime
+    }
+
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
 
@@ -155,3 +164,17 @@ object TurtleBridge {
  * do this from their UI; desktop never does, so its first play pays the full extractor warm-up.
  */
 internal expect val warmStreamResolverOnStart: Boolean
+
+/** Created eagerly by Koin; starts the runtime off the startup path once Koin has finished loading. */
+class TurtleAutoStart(turtleScope: TurtleScope) {
+    init {
+        turtleScope.scope.launch {
+            delay(AUTO_START_DELAY_MS)
+            TurtleBridge.startInBackground()
+        }
+    }
+
+    private companion object {
+        const val AUTO_START_DELAY_MS = 1_000L
+    }
+}

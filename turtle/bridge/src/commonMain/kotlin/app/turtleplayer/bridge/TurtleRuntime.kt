@@ -6,8 +6,11 @@ import app.turtleplayer.search.LocalItem
 import app.turtleplayer.search.LocalLibrary
 import app.turtleplayer.search.LocalSource
 import app.turtleplayer.taste.TasteEngine
+import com.metrolist.shared.api.searchSummaryOverride
 import com.metrolist.shared.model.RadioQueuePage
+import com.metrolist.shared.model.SearchSummaryPage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.ui.screens.homeShelvesOverride
 import com.metrolist.shared.state.GlobalYouTubeRepository
 import com.metrolist.shared.viewmodels.libraryContentSearchOverride
 import kotlinx.coroutines.CancellationException
@@ -27,6 +30,8 @@ class TurtleRuntime(
     private val library: LocalLibrary,
     private val taste: TasteEngine,
     private val cache: SongCache,
+    private val search: TurtleSearch,
+    private val home: TurtleHomeShelves,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -39,6 +44,13 @@ class TurtleRuntime(
         scope.launch { runCatching { taste.refresh() } }
         taste.observe(scope)
         libraryContentSearchOverride = ::searchLibrary
+        searchSummaryOverride = ::rerankSearch
+        homeShelvesOverride = home::mergeInto
+        scope.launch {
+            // Shelf items resolve through the library mirror, so build shelves after its first sync.
+            while (!librarySync.isReady()) delay(500)
+            home.start(scope)
+        }
         if (warmStreamResolverOnStart) scope.launch { warmStreamResolver() }
         TurtleLog.info("runtime started")
     }
@@ -87,6 +99,17 @@ class TurtleRuntime(
             page
         }
     }
+
+    /** Re-ranks upstream's online search page; null keeps upstream's page. */
+    private suspend fun rerankSearch(query: String, page: SearchSummaryPage): SearchSummaryPage? =
+        try {
+            search.rerank(query, page)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("search: re-ranking failed, kept upstream results", e)
+            null
+        }
 
     /**
      * Typo-tolerant, relevance-ranked library search replacing upstream's SQL `LIKE`. Returns null

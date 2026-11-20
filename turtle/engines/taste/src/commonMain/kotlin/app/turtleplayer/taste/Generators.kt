@@ -300,6 +300,7 @@ data class GeneratorBudget(val shares: Map<CandidateSource, Double> = DEFAULT) {
             CandidateSource.REDISCOVERY to 30.0,
             CandidateSource.UPSTREAM_RADIO to 60.0,
             CandidateSource.ONBOARDING to 80.0,
+            CandidateSource.LIBRARY to 100.0,
         )
     }
 }

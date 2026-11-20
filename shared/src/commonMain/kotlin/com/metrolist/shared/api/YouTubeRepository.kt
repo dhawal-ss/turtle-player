@@ -296,6 +296,9 @@ internal fun JsonObject.searchContinuationShelf(): SearchContinuationShelf? {
     )
 }
 
+// Turtle Player hook (turtle/HOOKS.md #20): re-ranks the online search summary with our engine when set.
+var searchSummaryOverride: (suspend (query: String, page: SearchSummaryPage) -> SearchSummaryPage?)? = null
+
 class YouTubeRepository(
     private val innerTube: InnerTube,
     private val streamResolverProvider: () -> StreamResolver? = { null },
@@ -1566,7 +1569,7 @@ class YouTubeRepository(
             } else {
                 null
             }
-        if (remote != null) return remote
+        if (remote != null) return searchSummaryOverride?.invoke(query, remote) ?: remote // Turtle: HOOKS.md #20
         val local = searchOffline(query)
         return SearchSummaryPage(
             listOf(

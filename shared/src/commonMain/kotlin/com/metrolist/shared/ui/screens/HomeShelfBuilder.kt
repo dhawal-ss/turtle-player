@@ -449,6 +449,9 @@ internal fun List<HomeShelf>.filterRenderable(pageWidth: Dp): List<HomeShelf> =
         shelf.items.isNotEmpty()
     }
 
+// Turtle Player hook (turtle/HOOKS.md #21): adds our personalized shelves to Home when set.
+var homeShelvesOverride: ((List<HomeShelf>) -> List<HomeShelf>)? = null
+
 class HomeShelfCache {
     private var state: HomeUiState? = null
     private var text: HomeContentText? = null
@@ -478,7 +481,7 @@ class HomeShelfCache {
             this.text = text
             this.visibility = visibility
         }
-        return shelves
+        return homeShelvesOverride?.invoke(shelves) ?: shelves // Turtle: HOOKS.md #21
     }
 
     fun clear() {

@@ -26,6 +26,8 @@ data class AffinityWeights(
     val quickSkip: Double = -1.0,
     val lessLikeThis: Double = -4.0,
     val halfLifeDays: Double = 90.0,
+    /** Half-life of [TrackStats.recentFinishes], which ranks "On repeat". */
+    val recentHalfLifeDays: Double = 14.0,
 ) {
     fun signal(e: PlayEvent): Double {
         var s = when {
@@ -43,7 +45,12 @@ data class AffinityWeights(
     }
 
     /** Multiplier for a signal [ageMs] old. */
-    fun decay(ageMs: Long): Double = exp(-ln(2.0) * ageMs.coerceAtLeast(0) / (halfLifeDays * DAY_MS))
+    fun decay(ageMs: Long): Double = decay(ageMs, halfLifeDays)
+
+    /** Multiplier for a finished play [ageMs] old in [TrackStats.recentFinishes]. */
+    fun recentDecay(ageMs: Long): Double = decay(ageMs, recentHalfLifeDays)
+
+    private fun decay(ageMs: Long, halfLife: Double) = exp(-ln(2.0) * ageMs.coerceAtLeast(0) / (halfLife * DAY_MS))
 }
 
 /** Plays and quick skips, with a smoothed rate so three plays do not make a 100% skip rate. */
@@ -65,6 +72,11 @@ data class TrackStats(
     val lessLikeThis: Boolean,
     val firstPlayedMs: Long,
     val lastPlayedMs: Long,
+    /**
+     * Finished plays decayed with [AffinityWeights.recentHalfLifeDays] (14 days by default), i.e.
+     * "finished plays lately": one finish today is 1.0, one finish 28 days ago is 0.25.
+     */
+    val recentFinishes: Double = 0.0,
 ) {
     val key: TrackKey get() = meta.key
     val skips: SkipStats get() = SkipStats(plays, quickSkips)
@@ -158,27 +170,31 @@ data class ClusteringConfig(
  * whichever time is later.
  */
 class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
-    private class Decayed {
+    /** [recent] decays with [AffinityWeights.recentHalfLifeDays] instead of [AffinityWeights.halfLifeDays]. */
+    private class Decayed(private val recent: Boolean = false) {
         var value = 0.0
         var refMs = Long.MIN_VALUE
+
+        private fun decay(ageMs: Long, w: AffinityWeights) = if (recent) w.recentDecay(ageMs) else w.decay(ageMs)
 
         fun add(s: Double, atMs: Long, w: AffinityWeights) {
             if (refMs == Long.MIN_VALUE) {
                 value = s
                 refMs = atMs
             } else if (atMs >= refMs) {
-                value = value * w.decay(atMs - refMs) + s
+                value = value * decay(atMs - refMs, w) + s
                 refMs = atMs
             } else {
-                value += s * w.decay(refMs - atMs)
+                value += s * decay(refMs - atMs, w)
             }
         }
 
-        fun at(nowMs: Long, w: AffinityWeights) = if (refMs == Long.MIN_VALUE) 0.0 else value * w.decay(nowMs - refMs)
+        fun at(nowMs: Long, w: AffinityWeights) = if (refMs == Long.MIN_VALUE) 0.0 else value * decay(nowMs - refMs, w)
     }
 
     private class TrackAcc(var meta: TrackMeta) {
         val affinity = Decayed()
+        val recentFinishes = Decayed(recent = true)
         var plays = 0
         var finishes = 0
         var quickSkips = 0
@@ -214,7 +230,10 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         if (e.startedAtMs >= t.last) t.meta = e.track // keep the freshest metadata
         t.affinity.add(s, e.startedAtMs, weights)
         t.plays++
-        if (e.isFinished) t.finishes++
+        if (e.isFinished) {
+            t.finishes++
+            t.recentFinishes.add(1.0, e.startedAtMs, weights)
+        }
         if (e.isQuickSkip) t.quickSkips++
         if (e.liked) t.likes++
         if (e.replayed) t.replays++
@@ -259,7 +278,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
             trackStats[k] = TrackStats(
                 meta = t.meta, affinity = t.affinity.at(nowMs, weights), plays = t.plays, finishes = t.finishes,
                 quickSkips = t.quickSkips, likes = t.likes, replays = t.replays, lessLikeThis = t.lessLikeThis,
-                firstPlayedMs = t.first, lastPlayedMs = t.last,
+                firstPlayedMs = t.first, lastPlayedMs = t.last, recentFinishes = t.recentFinishes.at(nowMs, weights),
             )
         }
         val artistStats = LinkedHashMap<ArtistKey, ArtistStats>(artists.size * 2)

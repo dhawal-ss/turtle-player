@@ -5,6 +5,7 @@ import app.turtleplayer.core.Clock
 import app.turtleplayer.core.DAY_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
+import app.turtleplayer.core.cleanArtistName
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
@@ -13,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.tanh
 import kotlin.random.Random
 
 data class TasteConfig(
@@ -35,6 +37,18 @@ data class TasteConfig(
     /** Finished plays after which onboarding artists stop carrying recommendations. */
     val coldStartPlays: Int = 50,
     val dailyMixFamiliarShare: Double = 0.7,
+    /** On repeat: tracks finished within this window, at most [onRepeatSize]. */
+    val onRepeatDays: Int = 30,
+    val onRepeatSize: Int = 20,
+    /** Artist mixes (Daily Mix fallback without clusters). */
+    val artistMixes: Int = 3,
+    val artistMixFamiliarShare: Double = 0.6,
+    /** Artist mixes and Weekly Discovery from upstream radio are dropped below this size. */
+    val minFallbackShelfSize: Int = 5,
+    val weeklyDiscoveryFallbackSize: Int = 25,
+    /** Upstream radio (network) calls per shelf refresh, and tracks asked per call. */
+    val shelfUpstreamSeeds: Int = 5,
+    val shelfUpstreamPerSeed: Int = 50,
 )
 
 /**
@@ -45,6 +59,7 @@ data class TasteConfig(
  *   packs, the [TrackCatalog] and the optional seams;
  * - call [observe] (or [onPlayEvent] for each recorded event) and [nowPlaying] on track changes;
  * - [startAutoplay] / [startRadio] when playback starts, [upNext] for the queue, [homeShelves] for home;
+ * - title shelves from their typed [Reason]s, resolving keys with [displayName];
  * - persist [controls], [explorationState] and [recentlyRecommended] between runs.
  *
  * All public functions are serialized by one mutex; generators run concurrently inside a refresh.
@@ -54,7 +69,7 @@ class TasteEngine(
     private val store: EmbeddingStore,
     private val catalog: TrackCatalog,
     freshReleases: FreshReleaseSource? = null,
-    upstream: RecommendationSource? = null,
+    private val upstream: RecommendationSource? = null,
     private val representation: TrackRepresentation = TrackRepresentation(store),
     private val ranker: Ranker = HandTunedRanker(),
     private val config: TasteConfig = TasteConfig(),
@@ -272,26 +287,78 @@ class TasteEngine(
 
     // ---- Shelves -------------------------------------------------------------------------------
 
-    /** Home: Daily Mixes, Because you replayed, Weekly Discovery, Fresh for You, Rediscover. Empty shelves are omitted. */
+    /**
+     * Home, in order: Daily Mixes (artist mixes without vectors), More like X, On repeat, Weekly
+     * Discovery, Fresh for You, Rediscover. Empty and dismissed shelves are omitted.
+     *
+     * Without co-listening vectors the mixes, More like X and Weekly Discovery are built from
+     * history plus the upstream radio. Upstream is called at most [TasteConfig.shelfUpstreamSeeds]
+     * times per call, concurrently, failures tolerated, and never without listening history.
+     */
     suspend fun homeShelves(): List<Shelf> = mutex.withLock {
         ensureLoaded()
+        val radios = radioCacheLocked()
+        val mixPlan = artistMixPlanLocked()
+        val pick = moreLikePickLocked()
+        val weeklyRanked = vectorWeeklyRankedLocked()
+        radios.prefetch(
+            buildList {
+                mixPlan.forEach { add(it.meta) }
+                if (pick != null && pick.vector == null) add(pick.stats.meta)
+                if (weeklyRanked.isEmpty()) discoverySeedsLocked().forEach { add(it.meta) }
+            },
+        )
         buildList {
-            addAll(dailyMixesLocked())
-            moreLikeLocked()?.let(::add)
-            add(weeklyDiscoveryLocked())
+            addAll(dailyMixesLocked(mixPlan, radios))
+            pick?.let { moreLikeLocked(it, radios) }?.let(::add)
+            add(onRepeatLocked())
+            add(weeklyDiscoveryLocked(weeklyRanked, radios))
             freshForYouLocked()?.let(::add)
             add(rediscoverLocked())
         }.filter { it.items.isNotEmpty() && it.reason.key !in controls.suppressedReasons }
     }
 
+    /** Daily Mixes: one per taste cluster, or up to three artist mixes while there are no clusters. */
     suspend fun dailyMixes(): List<Shelf> = mutex.withLock {
         ensureLoaded()
-        dailyMixesLocked()
+        val plan = artistMixPlanLocked()
+        val radios = radioCacheLocked().also { it.prefetch(plan.map(TrackStats::meta)) }
+        dailyMixesLocked(plan, radios)
     }
 
     suspend fun weeklyDiscovery(): Shelf = mutex.withLock {
         ensureLoaded()
-        weeklyDiscoveryLocked()
+        val ranked = vectorWeeklyRankedLocked()
+        val radios = radioCacheLocked()
+        if (ranked.isEmpty()) radios.prefetch(discoverySeedsLocked().map(TrackStats::meta))
+        weeklyDiscoveryLocked(ranked, radios)
+    }
+
+    /** On repeat: their most-finished tracks of the last [TasteConfig.onRepeatDays] days. */
+    suspend fun onRepeat(): Shelf = mutex.withLock {
+        ensureLoaded()
+        onRepeatLocked()
+    }
+
+    /**
+     * The title of a track the listener played (or the catalog knows), for shelf titles such as
+     * "Because you replayed X". Names are data, not UI text; null when unknown.
+     */
+    suspend fun displayName(track: TrackKey): String? = mutex.withLock {
+        ensureLoaded()
+        profile.track(track)?.meta?.title ?: catalog.meta(track)?.title
+    }
+
+    /**
+     * The artist's name as written in their most-played track (channel suffixes such as " - Topic"
+     * removed), for titles such as "<artist> Mix". Null when the artist is unknown.
+     */
+    suspend fun displayName(artist: ArtistKey): String? = mutex.withLock {
+        ensureLoaded()
+        val meta = profile.tracks.values.filter { it.meta.artistKey == artist }
+            .maxWithOrNull(compareBy<TrackStats> { it.plays }.thenByDescending { it.key.value })?.meta
+            ?: catalog.tracksByArtist(artist, 1).firstOrNull()
+        meta?.let { cleanArtistName(it.primaryArtist) }
     }
 
     suspend fun freshForYou(): Shelf? = mutex.withLock {
@@ -433,18 +500,113 @@ class TasteEngine(
         }.sortedWith(compareByDescending<ScoredCandidate> { it.score }.thenBy { it.candidate.key.value })
     }
 
-    /** Lays out a shelf with the queue rules (spacing, album cap) and a familiar share. */
-    /** [artistSpacing] 3 for mixes that play as a queue; 1 (no back-to-back) for browsable shelves. */
-    private fun compose(ranked: List<ScoredCandidate>, familiarShare: Double, maxPerArtist: Int, nowMs: Long, artistSpacing: Int = 1): List<QueueItem> {
+    /**
+     * Lays out a shelf with the queue rules (spacing, album cap) and a familiar share.
+     * [artistSpacing] 3 for mixes that play as a queue; 1 (no back-to-back) for browsable shelves.
+     * [head] items are kept as they are and the shelf is filled up to [size] after them.
+     */
+    private fun compose(
+        ranked: List<ScoredCandidate>,
+        familiarShare: Double,
+        maxPerArtist: Int,
+        nowMs: Long,
+        artistSpacing: Int = 1,
+        size: Int = config.shelfSize,
+        head: List<QueueItem> = emptyList(),
+    ): List<QueueItem> {
         val rules = config.queueRules.copy(maxPerArtist = maxPerArtist, minRepeatGapMs = 0, artistSpacing = artistSpacing)
         return QueueAssembler(rules).assemble(
-            emptyList(), ranked, policy.planSlots(config.shelfSize, 1.0 - familiarShare), emptyList(), null, RecentlyRecommended(1), nowMs,
+            head, ranked, policy.planSlots((size - head.size).coerceAtLeast(0), 1.0 - familiarShare), emptyList(), null, RecentlyRecommended(1), nowMs,
         )
     }
 
     private fun shelfId(kind: ShelfKind, suffix: String) = "${kind.name.lowercase()}:$suffix"
 
-    private suspend fun dailyMixesLocked(): List<Shelf> {
+    /** A fresh per-refresh upstream budget. */
+    private fun radioCacheLocked() =
+        RadioCache(upstream.takeIf { profile.tracks.isNotEmpty() }, config.shelfUpstreamSeeds, config.shelfUpstreamPerSeed, config.generatorTimeoutMs)
+
+    /** A track they still like: positive affinity, not marked "less like this", artist not muted. */
+    private fun usable(s: TrackStats) =
+        s.affinity > 0 && !s.lessLikeThis && s.key !in controls.lessLikeThisTracks && s.meta.artistKey !in controls.mutedArtists
+
+    /**
+     * Heard and net disliked (mostly skipped). Without vectors the ranker cannot tell such tracks
+     * from favourites in familiar slots, so history-based shelves drop them.
+     */
+    private fun disliked(c: ScoredCandidate) = (profile.track(c.candidate.key)?.affinity ?: 0.0) < 0
+
+    /** Value of [TrackStats.recentFinishes] for one finished play at the edge of the On repeat window. */
+    private fun recentFinishFloor() = config.affinity.recentDecay(config.onRepeatDays * DAY_MS) * 0.999
+
+    /**
+     * The most-played track of each top-affinity artist (distinct, not muted, no "less like this"
+     * marks), best artist first: seeds for artist mixes and fallback discovery.
+     */
+    private fun topArtistSeedsLocked(limit: Int): List<TrackStats> {
+        if (limit <= 0) return emptyList()
+        val byArtist = profile.tracks.values.filter(::usable).groupBy { it.meta.artistKey }
+        return profile.topArtists(Int.MAX_VALUE).asSequence()
+            .map { it.artist }
+            .filter { it !in controls.mutedArtists && (controls.lessLikeThisArtists[it] ?: 0) == 0 }
+            .mapNotNull { a ->
+                byArtist[a]?.maxWithOrNull(
+                    compareBy<TrackStats> { it.finishes }.thenBy { it.plays }.thenBy { it.affinity }.thenByDescending { it.key.value },
+                )
+            }
+            .take(limit)
+            .toList()
+    }
+
+    /** Artist mix seeds, only while there are no taste clusters (no vectors). */
+    private fun artistMixPlanLocked(): List<TrackStats> =
+        if (profile.clusters.isNotEmpty()) emptyList() else topArtistSeedsLocked(config.artistMixes)
+
+    private fun discoverySeedsLocked(): List<TrackStats> = topArtistSeedsLocked(config.shelfUpstreamSeeds)
+
+    private suspend fun dailyMixesLocked(plan: List<TrackStats>, radios: RadioCache): List<Shelf> =
+        if (profile.clusters.isEmpty()) artistMixesLocked(plan, radios) else clusterMixesLocked()
+
+    /**
+     * Without clusters: one mix per top artist, seeded from their most-played track. Candidates are
+     * the seed's upstream radio, their tracks by that artist and related favourites. The artist's
+     * own tracks lead; tracks already placed in an earlier mix, and tracks by the other mixes'
+     * artists, go last, so the mixes stay mostly distinct and each stays centred on its artist.
+     */
+    private suspend fun artistMixesLocked(plan: List<TrackStats>, radios: RadioCache): List<Shelf> {
+        val now = clock.nowMs()
+        val used = HashSet<TrackKey>()
+        val mixArtists = plan.mapTo(HashSet()) { it.meta.artistKey }
+        return plan.mapIndexedNotNull { i, seed ->
+            val artist = seed.meta.artistKey
+            val reason = Reason.DailyMix(i, listOf(artist), seedArtist = artist)
+            val request = GenerationRequest(profile, controls, now, sessionVector = null, nowPlaying = seed.meta, anchorTrack = seed.key)
+            val generators = listOf(
+                LibraryGenerator(catalog, radios, Reason.FromYourTaste(i, listOf(artist))),
+                UpstreamRadioGenerator(radios),
+            )
+            val ranked = rankLocked(collector(generators), request).filterNot(::disliked)
+            // The artist's own tracks lead (spacing and the cap of 6 interleave them), then the rest.
+            val (own, others) = ranked.partition { it.track.artistKey == artist }
+            val (fresh, reused) = others.partition { it.candidate.key !in used }
+            val (preferred, otherMixArtists) = fresh.partition { it.track.artistKey !in mixArtists }
+            val rest = otherMixArtists + reused
+            val spacing = config.queueRules.artistSpacing
+            val distinct = compose(own + preferred, config.artistMixFamiliarShare, 6, now, artistSpacing = spacing)
+            // Distinct mixes beat long ones: other mixes' tracks only top a short mix up to two thirds of a shelf.
+            val minSize = config.shelfSize * 2 / 3
+            val items = if (distinct.size >= minSize) {
+                distinct
+            } else {
+                compose(rest, config.artistMixFamiliarShare, 6, now, artistSpacing = spacing, size = minSize, head = distinct)
+            }
+            if (items.size < config.minFallbackShelfSize) return@mapIndexedNotNull null
+            items.forEach { used += it.key }
+            Shelf(shelfId(ShelfKind.DAILY_MIX, "artist:${artist.value}"), ShelfKind.DAILY_MIX, reason, items)
+        }
+    }
+
+    private suspend fun clusterMixesLocked(): List<Shelf> {
         val now = clock.nowMs()
         val visible = profile.clusters.filterNot { controls.isInMutedCluster(it.centroid) }
             .sortedByDescending { if (controls.isInBoostedCluster(it.centroid)) 1 else 0 }
@@ -462,16 +624,41 @@ class TasteEngine(
         }
     }
 
-    /** "Because you replayed X": tracks like the one they most recently kept coming back to. */
-    private suspend fun moreLikeLocked(): Shelf? {
-        val now = clock.nowMs()
-        val recentCutoff = now - 30 * DAY_MS
-        val pick = profile.tracks.values.filter { it.lastPlayedMs >= recentCutoff && it.affinity > 0 && !it.lessLikeThis }
-            .filter { it.replays > 0 || it.likes > 0 }
+    private class MoreLikePick(val stats: TrackStats, val reason: Reason, val vector: FloatArray?)
+
+    /**
+     * The track they most recently kept coming back to (replayed, else liked, in the last 30 days);
+     * failing that, their most-finished recent track ("Because you listened to X").
+     */
+    private fun moreLikePickLocked(): MoreLikePick? {
+        val recentCutoff = clock.nowMs() - 30 * DAY_MS
+        val eligible = profile.tracks.values.filter { it.lastPlayedMs >= recentCutoff && usable(it) }
+        val loved = eligible.filter { it.replays > 0 || it.likes > 0 }
             .maxWithOrNull(compareBy<TrackStats> { if (it.replays > 0) 1 else 0 }.thenBy { it.affinity }.thenByDescending { it.key.value })
+        val pick = loved ?: eligible.filter { it.recentFinishes >= recentFinishFloor() }
+            .maxWithOrNull(compareBy<TrackStats> { it.recentFinishes }.thenBy { it.affinity }.thenByDescending { it.key.value })
             ?: return null
-        val v = representation.vectorFor(pick.meta) ?: return null
-        val reason = if (pick.replays > 0) Reason.BecauseYouReplayed(pick.key) else Reason.BecauseYouLiked(pick.key)
+        val reason = when {
+            loved == null -> Reason.BecauseYouListened(pick.key)
+            pick.replays > 0 -> Reason.BecauseYouReplayed(pick.key)
+            else -> Reason.BecauseYouLiked(pick.key)
+        }
+        return MoreLikePick(pick, reason, representation.vectorFor(pick.meta))
+    }
+
+    /** "Because you replayed X": tracks like [p]. Without a vector: X's upstream radio plus their own tracks. */
+    private suspend fun moreLikeLocked(p: MoreLikePick, radios: RadioCache): Shelf {
+        val now = clock.nowMs()
+        val pick = p.stats
+        val reason = p.reason
+        val v = p.vector
+        if (v == null) {
+            val request = GenerationRequest(
+                profile, controls, now, sessionVector = null, nowPlaying = pick.meta, anchorTrack = pick.key, exclude = setOf(pick.key),
+            )
+            val ranked = rankLocked(collector(listOf(LibraryGenerator(catalog, radios, reason), UpstreamRadioGenerator(radios))), request).filterNot(::disliked)
+            return Shelf(shelfId(ShelfKind.MORE_LIKE, pick.key.value), ShelfKind.MORE_LIKE, reason, compose(ranked, 0.3, 2, now))
+        }
         val request = GenerationRequest(
             profile, controls, now, sessionVector = v, nowPlaying = pick.meta, nowPlayingVector = v,
             anchorTrack = pick.key, exclude = setOf(pick.key),
@@ -484,11 +671,55 @@ class TasteEngine(
         return Shelf(shelfId(ShelfKind.MORE_LIKE, pick.key.value), ShelfKind.MORE_LIKE, reason, compose(ranked, 0.3, 2, now))
     }
 
-    private suspend fun weeklyDiscoveryLocked(): Shelf {
+    /** Never-heard candidates from the vector generators (empty without vectors or onboarding). */
+    private suspend fun vectorWeeklyRankedLocked(): List<ScoredCandidate> {
+        val request = GenerationRequest(profile, controls, clock.nowMs(), sessionVector = profile.longTermVector)
+        return rankLocked(discoveryCollector, request).filter { !profile.hasHeard(it.candidate.key) }
+    }
+
+    /**
+     * [vectorRanked] when the vector generators found anything; otherwise never-heard tracks from
+     * the prefetched upstream radios of their top tracks, never-heard artists first.
+     */
+    private suspend fun weeklyDiscoveryLocked(vectorRanked: List<ScoredCandidate>, radios: RadioCache): Shelf {
         val now = clock.nowMs()
+        val id = shelfId(ShelfKind.WEEKLY_DISCOVERY, "weekly")
+        if (vectorRanked.isNotEmpty()) {
+            return Shelf(id, ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, compose(vectorRanked, 0.0, 2, now))
+        }
         val request = GenerationRequest(profile, controls, now, sessionVector = profile.longTermVector)
-        val ranked = rankLocked(discoveryCollector, request).filter { !profile.hasHeard(it.candidate.key) }
-        return Shelf(shelfId(ShelfKind.WEEKLY_DISCOVERY, "weekly"), ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, compose(ranked, 0.0, 2, now))
+        val ranked = rankLocked(collector(listOf(CachedRadiosGenerator(radios))), request).filter { !profile.hasHeard(it.candidate.key) }
+        val (newArtists, knownArtists) = ranked.partition { !profile.hasHeardArtist(it.track.artistKey) }
+        val items = compose(newArtists + knownArtists, 0.0, 2, now, size = config.weeklyDiscoveryFallbackSize)
+            .takeIf { it.size >= config.minFallbackShelfSize }.orEmpty()
+        return Shelf(id, ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, items)
+    }
+
+    /**
+     * Their most-finished tracks lately: finished within [TasteConfig.onRepeatDays], ranked by
+     * recent finishes plus affinity. Browsable, so spacing is relaxed to "no artist back to back
+     * when another artist is left".
+     */
+    private fun onRepeatLocked(): Shelf {
+        val now = clock.nowMs()
+        val cutoff = now - config.onRepeatDays * DAY_MS
+        val floor = recentFinishFloor()
+        val picks = profile.tracks.values
+            .filter { it.lastPlayedMs >= cutoff && it.finishes > 0 && it.recentFinishes >= floor && usable(it) }
+            .sortedWith(compareByDescending<TrackStats> { it.recentFinishes + 0.3 * it.affinity }.thenBy { it.key.value })
+            .toMutableList()
+        val ordered = ArrayList<TrackStats>()
+        while (ordered.size < config.onRepeatSize && picks.isNotEmpty()) {
+            val last = ordered.lastOrNull()?.meta?.artistKey
+            val idx = picks.indexOfFirst { it.meta.artistKey != last }.coerceAtLeast(0)
+            ordered += picks.removeAt(idx)
+        }
+        val extractor = FeatureExtractor(profile, controls, profile.longTermVector, now, context)
+        val items = ordered.map { s ->
+            val c = Candidate(s.meta, CandidateSource.LIBRARY, Reason.OnRepeat, tanh(s.affinity / 3).toFloat())
+            QueueItem(s.meta, c.source, c.reason, SlotKind.FAMILIAR, ranker.score(extractor.extract(c, representation.vectorFor(s.meta))))
+        }
+        return Shelf(shelfId(ShelfKind.ON_REPEAT, "on_repeat"), ShelfKind.ON_REPEAT, Reason.OnRepeat, items)
     }
 
     private suspend fun freshForYouLocked(): Shelf? {
