@@ -134,7 +134,8 @@ import com.metrolist.shared.generated.resources.Res as SharedRes
 import com.metrolist.shared.generated.resources.shuffle as sharedShuffle
 import com.metrolist.shared.generated.resources.start_radio as sharedStartRadio
 
-internal const val NEXT_TRACK_PRELOAD_DELAY_MS = 5_000L
+// Turtle: pre-open the next track 1.5 s in (was 5 s) so manual skips land on a ready track (HOOKS.md #17).
+internal const val NEXT_TRACK_PRELOAD_DELAY_MS = 1_500L
 internal const val NEXT_TRACK_PRELOAD_SETTLE_DELAY_MS = 500L
 internal const val CROSSFADE_UPDATE_INTERVAL_MS = 16L
 

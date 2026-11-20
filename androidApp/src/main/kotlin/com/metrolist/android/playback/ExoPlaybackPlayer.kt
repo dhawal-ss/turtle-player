@@ -457,6 +457,8 @@ class ExoPlaybackPlayer(
             .apply {
                 createdPlayer = this
                 setAudioSessionId(audioSessionId)
+                // Turtle: load the queued next item ahead of time so a skip starts from buffered audio (HOOKS.md #19).
+                preloadConfiguration = ExoPlayer.PreloadConfiguration(5_000_000L)
                 setHandleAudioBecomingNoisy(true)
                 normalizationProcessors[this] = normalization
                 silenceSupport[this] = silence
@@ -3979,6 +3981,8 @@ private fun buildDirectDataSourceFactory(
                 mediaSize = size,
                 chunkSize = directMediaChunkSize(resource, video),
                 targetRequestDurationMs = if (video) null else 2_000L,
+                // Turtle: fetch audio whole in the background so forward seeks are local too (HOOKS.md #18).
+                prefetchAhead = !video,
                 cacheCapture =
                     if (!video && Settings.shared.maxSongCacheSize != 0) {
                         DirectPlaybackCache.begin(
