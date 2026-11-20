@@ -64,3 +64,8 @@ include(":listenTogetherProto")
 include(":opusDecoder")
 include(":androidApp")
 include(":desktopApp")
+
+// Turtle Player fork hook (turtle/HOOKS.md #1): our engine build.
+includeBuild("turtle/engines")
+include(":turtle-bridge")
+project(":turtle-bridge").projectDir = file("turtle/bridge")

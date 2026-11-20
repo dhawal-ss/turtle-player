@@ -1,3 +1,5 @@
+> **Turtle Player fork:** code under `turtle/` follows [turtle/AGENTS.md](turtle/AGENTS.md), which overrides this file for that code. Read it first.
+
 # Agent guide
 
 Metrolist is a YouTube Music client for Android, desktop and iOS.

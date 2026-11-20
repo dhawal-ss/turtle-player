@@ -1,0 +1,38 @@
+name: Turtle engines
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  hook-ledger:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Upstream edits must be logged in turtle/HOOKS.md
+        run: bash turtle/scripts/check-hooks.sh "origin/${{ github.base_ref }}"
+
+  engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Engine tests, search golden set and recommendation offline replay
+        run: ./gradlew -p turtle/engines check --console=plain
+      - name: Test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-engine-test-reports
+          path: turtle/engines/*/build/reports/tests/
