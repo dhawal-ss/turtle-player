@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import app.turtleplayer.bridge.TurtleBridge
 import com.metrolist.desktop.deviceconnect.DesktopDeviceConnect
 import com.metrolist.desktop.history.HistoryEntry
 import com.metrolist.desktop.history.HistoryRepository
@@ -2045,6 +2046,7 @@ object PlayerState {
             }
         }
 
+        TurtleBridge.observePlayer(scope, player.currentSong, player.isPlaying, player.onEOFPlaybackInstance)
         scope.launch {
             player.onEOFPlaybackInstance.collect { completedPlaybackInstanceId ->
                 if (!transitions.acceptsEof(completedPlaybackInstanceId)) return@collect

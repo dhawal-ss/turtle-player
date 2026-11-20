@@ -171,6 +171,47 @@ class TasteEngine(
         Shelf(shelfId(ShelfKind.RADIO, Reason.RadioFrom(seed).key), ShelfKind.RADIO, Reason.RadioFrom(seed), queue)
     }
 
+    /**
+     * Orders a candidate list someone else produced, such as YouTube radio that the app has already
+     * filtered for blocked and queued songs. Uses our ranker, exploration share and queue rules but
+     * mixes in nothing else, so the caller's filters stay authoritative. Muted artists are dropped;
+     * tracks that break spacing rules go to the end rather than being lost.
+     */
+    suspend fun rankExternal(
+        seed: TrackMeta,
+        tracks: List<TrackMeta>,
+        source: CandidateSource = CandidateSource.UPSTREAM_RADIO,
+    ): List<QueueItem> = mutex.withLock {
+        ensureLoaded()
+        val unique = tracks.distinctBy { it.key }.filter { it.artistKey !in controls.mutedArtists }
+        if (unique.isEmpty()) return@withLock emptyList()
+        val now = clock.nowMs()
+        val seedVector = representation.vectorFor(seed)
+        val extractor = FeatureExtractor(profile, controls, session.vector(), now, context, seedVector)
+        val reason = Reason.UpstreamRadio(seed.key)
+        val ranked = unique.mapIndexedNotNull { i, t ->
+            val v = representation.vectorFor(t)
+            if (controls.isInMutedCluster(v)) return@mapIndexedNotNull null
+            val c = Candidate(t, source, reason, 1f - 0.5f * i / unique.size)
+            val f = extractor.extract(c, v)
+            ScoredCandidate(c, v, f, ranker.score(f))
+        }.sortedWith(compareByDescending<ScoredCandidate> { it.score }.thenBy { it.candidate.key.value })
+        val share = policy.sampleShare(explorationState, controls.discoveryDial)
+        val slots = policy.planSlots(ranked.size, share)
+        val keys = ranked.mapTo(HashSet()) { it.candidate.key }
+        val laidOut = assembler.assemble(emptyList(), ranked, slots, profile.recentPlays, seed, recent, now, allowAgain = keys)
+        val placed = laidOut.mapTo(HashSet()) { it.key }
+        val leftovers = ranked.filter { it.candidate.key !in placed }.map { QueueItem.of(it) }
+        val result = laidOut + leftovers
+        for (item in result) {
+            recent.add(item.key)
+            queuedSlots.remove(item.key)
+            queuedSlots[item.key] = item.slot
+        }
+        while (queuedSlots.size > 4 * config.upNextSize) queuedSlots.remove(queuedSlots.keys.first())
+        result
+    }
+
     /** Current Up Next (starts autoplay from long-term taste if nothing is active). */
     suspend fun upNext(): List<QueueItem> = mutex.withLock {
         ensureLoaded()

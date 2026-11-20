@@ -26,7 +26,10 @@ import kotlinx.coroutines.sync.withLock
  */
 class PlayerObserver(private val tracker: ListeningSessionTracker) {
     private val mutex = Mutex()
-    private var currentId: String? = null
+    private var current: SongItem? = null
+    private val currentId: String? get() = current?.id
+    // Why our engines queued a song (QueueItem.surfaceDetail), so its play is attributed to the right generator.
+    private val pendingTags = LinkedHashMap<String, String>()
     private var endedByEof = false
     private var repeatCheck: Job? = null
 
@@ -69,11 +72,21 @@ class PlayerObserver(private val tracker: ListeningSessionTracker) {
         }
     }
 
+    /** The song playing now, if any. */
+    suspend fun currentSong(): SongItem? = mutex.withLock { current }
+
+    /** Remembers why [songId] was queued until it starts playing. */
+    suspend fun tag(songId: String, surfaceDetail: String) = mutex.withLock {
+        pendingTags.remove(songId)
+        pendingTags[songId] = surfaceDetail
+        while (pendingTags.size > MAX_TAGS) pendingTags.remove(pendingTags.keys.first())
+    }
+
     private suspend fun onSongChanged(song: SongItem?) {
         repeatCheck?.cancel()
         if (song == null) {
             if (currentId != null && !endedByEof) tracker.onSignal(PlaybackSignal.TrackEnded(EndReason.STOPPED))
-            currentId = null
+            current = null
             endedByEof = false
             return
         }
@@ -81,20 +94,22 @@ class PlayerObserver(private val tracker: ListeningSessionTracker) {
     }
 
     private suspend fun start(song: SongItem, reason: StartReason) {
-        currentId = song.id
+        current = song
         endedByEof = false
+        val tag = pendingTags.remove(song.id)
         tracker.onSignal(
             PlaybackSignal.TrackStarted(
                 track = song.toTrackMeta(),
                 reason = reason,
                 // Upstream does not tell us where a queue came from yet; the queue hook will.
                 surface = if (reason == StartReason.AUTOPLAY) Surface.AUTOPLAY else Surface.QUEUE,
-                surfaceDetail = song.queueSourceTitle,
+                surfaceDetail = tag ?: song.queueSourceTitle,
             ),
         )
     }
 
     private companion object {
         const val REPEAT_DETECT_MS = 1_500L
+        const val MAX_TAGS = 500
     }
 }

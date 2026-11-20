@@ -990,6 +990,9 @@ internal suspend fun hydrateSongLibraryTimestamps(
     }
 }
 
+// Turtle Player hook (turtle/HOOKS.md #4): ranked, typo-tolerant library search when set.
+var libraryContentSearchOverride: (suspend (query: String, offset: Int) -> List<SongItem>?)? = null
+
 internal suspend fun contentMatchedSongs(
     database: MusicDatabase,
     query: String,
@@ -999,5 +1002,6 @@ internal suspend fun contentMatchedSongs(
     withContext(Dispatchers.Default) {
         val term = query.trim()
         if (term.length < 2) return@withContext emptyList()
+        libraryContentSearchOverride?.invoke(term, offset)?.let { return@withContext it }
         database.dao().contentMatchedSongs(term, LIBRARY_SEARCH_PAGE_SIZE, offset, descending).map { it.toSongItem() }
     }

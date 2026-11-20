@@ -1,5 +1,6 @@
 package com.metrolist.desktop.state.playback
 
+import app.turtleplayer.bridge.TurtleBridge
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.RadioRecommendationHistory
 import com.metrolist.shared.model.SongItem
@@ -99,7 +100,7 @@ internal class DesktopQueueRadio(
                         },
                         isCurrent = ::canLoad,
                         loadMore = continueRadio,
-                    ) ?: return@withLock null
+                    )?.let { TurtleBridge.rankRadio(it) } ?: return@withLock null
                 continuation = page.continuation
                 val candidates = page.songs.take(limit)
                 var changed = false

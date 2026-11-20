@@ -436,6 +436,7 @@ configurations
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":turtle-bridge"))
 
     implementation(libs.activity)
     implementation(libs.lifecycle.process)

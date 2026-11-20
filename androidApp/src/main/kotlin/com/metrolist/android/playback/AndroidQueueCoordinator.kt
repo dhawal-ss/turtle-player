@@ -2,6 +2,7 @@ package com.metrolist.android.playback
 
 import android.content.Context
 import androidx.media3.common.Player
+import app.turtleplayer.bridge.TurtleBridge
 import com.metrolist.android.R
 import com.metrolist.android.deviceconnect.AndroidDeviceConnect
 import com.metrolist.android.listentogether.AndroidListenTogetherManager
@@ -562,7 +563,7 @@ internal class AndroidQueueCoordinator(
                     withContext(Dispatchers.IO) { GlobalYouTubeRepository.instance.continueRadioQueue(token) }
                 }
             },
-        )
+        )?.let { TurtleBridge.rankRadio(it) }
 
     private fun canBootstrapRecommendations(): Boolean =
         shouldBootstrapQueueRecommendations(isFiniteQueue, Settings.shared.autoLoadMore, playlistPage?.hasMore == true)

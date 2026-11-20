@@ -293,4 +293,26 @@ class TasteEngineTest {
         assertEquals(DiscoveryDial.ADVENTUROUS, restored.controls.discoveryDial)
         assertTrue(engine.recentlyRecommended().size >= 20)
     }
+
+    @Test
+    fun rankExternalOrdersOnlyTheGivenTracksByTaste() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val disliked = (0 until world.genres).first { it !in user.likedGenres }
+        // Distinct artists, so the artist-spacing rule does not interleave them by necessity.
+        val inTaste = user.likedGenres.flatMap { world.tracksOfGenre(it) }.filter { it.artistKey != seed.artistKey }.distinctBy { it.artistKey }.take(10)
+        val outOfTaste = world.tracksOfGenre(disliked).distinctBy { it.artistKey }.take(8)
+        // Upstream order deliberately puts the out-of-taste tracks first.
+        val upstream = outOfTaste + inTaste
+
+        val ranked = engine.rankExternal(seed, upstream)
+
+        assertEquals(upstream.map { it.key }.toSet(), ranked.map { it.key }.toSet(), "nothing added or lost")
+        val firstHalf = ranked.take(inTaste.size).count { genreOf(it.track) in user.likedGenres }
+        assertTrue(firstHalf >= inTaste.size - 2, "in-taste tracks first: $firstHalf/${inTaste.size}")
+        assertTrue(ranked.all { it.source == CandidateSource.UPSTREAM_RADIO })
+
+        val muted = engineWithHistory(controls = UserControls(mutedArtists = setOf(inTaste[0].artistKey)))
+        assertTrue(muted.rankExternal(seed, upstream).none { it.track.artistKey == inTaste[0].artistKey })
+    }
 }
