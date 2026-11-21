@@ -5,4 +5,70 @@
     <string name="shell_set_hide">Hide</string>
     <string name="shell_set_selected">Selected</string>
     <string name="shell_set_explicit_badge">E</string>
+
+    <!-- Settings home: sections -->
+    <string name="shell_set_group_turtle">Turtle</string>
+    <string name="shell_set_group_listening">Listening</string>
+    <string name="shell_set_group_library">Library &amp; storage</string>
+    <string name="shell_set_group_privacy">Privacy &amp; connections</string>
+    <string name="shell_set_group_app">App</string>
+
+    <!-- Theme -->
+    <string name="shell_set_theme_sub">Palettes and display size</string>
+    <string name="shell_set_palette">Palette</string>
+    <string name="shell_set_display">Display</string>
+
+    <!-- Infinity Mix -->
+    <string name="shell_set_infinity_sub">Genres, moods and how adventurous it gets</string>
+    <string name="shell_set_tuning_none">Every like and skip in the mix tunes it. Nothing to forget yet.</string>
+
+    <!-- Recommendations -->
+    <string name="shell_set_recs">Recommendations</string>
+    <string name="shell_set_recs_sub">What new finds are, and how many you hear</string>
+    <string name="shell_set_recs_how">How it works</string>
+    <string name="shell_set_recs_familiar_title">Favourites</string>
+    <string name="shell_set_recs_familiar_body">Songs you like and play most. They keep the mix feeling like yours.</string>
+    <string name="shell_set_recs_new_title">New finds</string>
+    <string name="shell_set_recs_new_body">Songs you have not heard in Turtle yet: from the genres and moods you picked, picks for you, and artists like the ones you love.</string>
+    <string name="shell_set_recs_tuning_title">Your reactions</string>
+    <string name="shell_set_recs_tuning_body">Thumbs up pulls more like it in. Thumbs down skips the song and steers away. All of it stays on this device.</string>
+    <string name="shell_set_recs_dial">Discovery dial</string>
+    <string name="shell_set_recs_dial_body">Sets the blend of favourites and new finds in the Infinity Mix. Changes are heard within a song.</string>
+    <string name="shell_set_recs_tune">Tune the Infinity Mix</string>
+
+    <!-- Turtle DJ -->
+    <string name="shell_set_dj_sub">Your live mixing booth</string>
+    <string name="shell_set_dj_body">Turtle DJ keeps its decks, effects and set options in the booth.</string>
+    <string name="shell_set_dj_open">Open Turtle DJ</string>
+    <string name="shell_set_dj_open_body">Leaves settings and opens the booth</string>
+
+    <!-- Spoken word -->
+    <string name="shell_set_spoken">Spoken word</string>
+    <string name="shell_set_spoken_sub">Podcasts and audiobooks</string>
+    <string name="shell_set_spoken_speed_body">Podcasts and audiobooks play at this speed. Music always plays at normal speed.</string>
+
+    <!-- Upstream pages, renamed -->
+    <string name="shell_set_playback">Playback &amp; audio</string>
+    <string name="shell_set_playback_sub">Quality, sound, crossfade and queue</string>
+    <string name="shell_set_content">Content &amp; language</string>
+    <string name="shell_set_integrations_sub">Discord, Last.fm, ListenBrainz and devices</string>
+
+    <!-- Advanced -->
+    <string name="shell_set_advanced">Advanced</string>
+    <string name="shell_set_advanced_sub">Navigation, window and developer tools</string>
+    <string name="shell_set_navigation">Navigation &amp; gestures</string>
+    <string name="shell_set_window">Window</string>
+    <string name="shell_set_more">More</string>
+
+    <!-- About Turtle -->
+    <string name="shell_set_about">About Turtle</string>
+    <string name="shell_set_about_sub">Version, license and credits</string>
+    <string name="shell_set_app_name">Turtle</string>
+    <string name="shell_set_version">Version %1$s</string>
+    <string name="shell_set_devtools_on">Developer tools are on</string>
+    <string name="shell_set_gpl">Turtle is free software, licensed under the GNU General Public License v3.0 (GPL-3.0). You may use, study, share and change it under that license.</string>
+    <string name="shell_set_gpl_link">Read the license</string>
+    <string name="shell_set_built_on">Built on Metrolist</string>
+    <string name="shell_set_built_on_body">Turtle is a fork of Metrolist. Thank you to the Metrolist team and its contributors.</string>
+    <string name="shell_set_metrolist_source">Metrolist source code</string>
 </resources>

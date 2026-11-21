@@ -74,7 +74,7 @@ internal fun ShellThemeSheet() = ShellTheme {
 
 /** A palette preview: its ground and surfaces, an ink line and its accent. */
 @Composable
-private fun Swatch(p: ShellPalette, selected: Boolean, onClick: () -> Unit) {
+internal fun Swatch(p: ShellPalette, selected: Boolean, onClick: () -> Unit) {
     val c = Shell.colors
     val k = p.colors
     val ring by animateDpAsState(if (selected) 2.dp else 1.dp, ShellMotion.emphasized())

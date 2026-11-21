@@ -176,6 +176,13 @@ internal object ShellSpoken {
         speedApplied = value != 1f
     }
 
+    /** Settings' default speed: saved for spoken word, applied now only if spoken word is playing (music stays 1×). */
+    fun setDefaultSpeed(controller: PlaybackController, value: Float) {
+        if (isSpokenWord(controller.state.value.currentSong)) return setSpeed(controller, value)
+        speed = value
+        TurtleBridge.spoken.setSpeed(value)
+    }
+
     /** Plays [book] from where the listener stopped (loading its chapters first for playlists). */
     fun playBook(controller: PlaybackController, book: SpokenBook, onFailed: () -> Unit = {}) {
         if (opening != null) return

@@ -60,6 +60,8 @@ object Glyphs {
     val ThumbDown = vector("thumb_down", "M7 14V3H4v11zM7 14l4 8a2.5 2.5 0 0 0 2.5-2.5V15h5.5a2 2 0 0 0 2-2.3l-1.4-8A2 2 0 0 0 17.6 3H7", filled = false)
     val PlaylistAdd = vector("playlist_add", "M4 6h11M4 12h11M4 18h7M18 13v8M14 17h8", filled = false, stroke = 2f)
     val Palette = vector("palette", "M12 3a9 9 0 0 0 0 18c1.1 0 1.7-.8 1.7-1.6 0-.5-.2-.8-.4-1.1-.2-.3-.4-.6-.4-1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.1-4-7.7-9-7.7zM7.5 12.5a1.2 1.2 0 1 0 0-.1zM9.5 8a1.2 1.2 0 1 0 0-.1zM14.5 8a1.2 1.2 0 1 0 0-.1zM17 11.5a1.2 1.2 0 1 0 0-.1z", filled = false)
+    val Info = vector("info", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5.5M12 7.6v.2", filled = false, stroke = 2f)
+    val Lock = vector("lock", "M7.5 11V8a4.5 4.5 0 0 1 9 0v3M5.5 11h13a.5.5 0 0 1 .5.5v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a.5.5 0 0 1 .5-.5z", filled = false)
     val Turntable = vector("turntable", "M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM10.5 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM10.5 11.2a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6zM18 6.5v7.5l-2.5 2.5", filled = false)
     val FilterSweep = vector("filter_sweep", "M3 8h8c3 0 4 2.5 5 5.5s2.5 4.5 5 4.5", filled = false, stroke = 2.2f)
     val BassWave = vector("bass_wave", "M2 12c1.7-6 3.3-6 5 0s3.3 6 5 0 3.3-6 5 0 3.3 6 5 0", filled = false, stroke = 2.2f)

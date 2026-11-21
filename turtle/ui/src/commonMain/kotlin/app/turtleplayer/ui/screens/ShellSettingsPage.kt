@@ -82,6 +82,9 @@ private sealed class SettingsEntry(val key: String, val type: String) {
     class Note(val text: String) : SettingsEntry("main-switch-note", "note")
 }
 
+/** Upstream's Lyrics page pins its live preview; Turtle's Lyrics page drops the display settings, and with them the preview. */
+internal fun SettingsPageRegistration.pinsLyricsPreview(): Boolean = id == SettingsPageId.LYRICS && groups.any { it.id == "display" }
+
 private fun settingsEntries(groups: List<SettingsGroupRegistration>, mainSwitch: SettingsItemRegistration?): List<SettingsEntry> {
     val mainOff = mainSwitch?.checked == false
     val entries = mutableListOf<SettingsEntry>()
@@ -130,7 +133,7 @@ internal fun ShellSettingsPageList(
     LaunchedEffect(page.id, highlightedItemId, highlightIndex) {
         if (highlightIndex >= 0) listState.animateScrollToItem((highlightIndex + headerCount - 1).coerceAtLeast(0))
     }
-    val hasPreview = page.id == SettingsPageId.LYRICS
+    val hasPreview = page.pinsLyricsPreview()
     val pinned = hasPreview && lyricsPreviewPinned()
     val list: @Composable (Modifier, Dp) -> Unit = { listModifier, previewHeight ->
         LazyColumn(state = listState, modifier = listModifier, contentPadding = contentPadding) {
@@ -338,7 +341,7 @@ private fun StandardRow(
                         Glyph(Glyphs.ChevronRight, c.ink2.copy(alpha = alpha), 18.dp)
                     }
 
-                    SettingsControl.ACTION -> TrailingValue(item.valueLabel, accent = true, alpha = alpha, last = true)
+                    SettingsControl.ACTION -> TrailingValue(item.valueLabel?.takeIf { it != item.title }, accent = true, alpha = alpha, last = true)
 
                     else -> {}
                 }

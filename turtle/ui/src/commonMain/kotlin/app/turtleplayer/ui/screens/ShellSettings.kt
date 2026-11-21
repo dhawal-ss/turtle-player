@@ -114,21 +114,27 @@ private fun ShellSettingsContent(slot: SettingsScreenSlot) {
     var settingsRevision by remember { mutableIntStateOf(0) }
     var pageStack by rememberSaveable { mutableStateOf(host.initialPage?.let { listOf(it.name) }.orEmpty()) }
     var highlightedItemId by rememberSaveable { mutableStateOf<String?>(null) }
-    val registry = slot.registryFactory(settingsRevision)
+    // Turtle's settings: upstream's registry reshaped (ShellSettingsTurtle.kt); Integrations passes through.
+    val turtle = rememberTurtleSettings(slot.registryFactory(settingsRevision), host)
+    val registry = turtle.registry
     LaunchedEffect(host.initialPage, registry) {
         val initialPage = host.initialPage
         if (initialPage != null && pageStack == listOf(initialPage.name)) {
-            pageStack = TurtleSettingsNavigation.stackFor(registry, initialPage)
+            // A page Turtle hides (an old deep link or a remembered page) opens the settings home instead.
+            pageStack = if (registry[initialPage] == null) emptyList() else TurtleSettingsNavigation.stackFor(registry, initialPage)
         }
     }
-    val selectedPageId = pageStack.lastOrNull()?.toPageId()
+    val selectedPageId = pageStack.lastOrNull()?.toPageId()?.takeIf { registry[it] != null }
     SideEffect { host.onPageChanged(selectedPageId) }
     val stateHolder = rememberSaveableStateHolder()
     val homeListState = rememberLazyListState()
     val pageListStates = registry.pages.associate { page -> key(page.id) { page.id to rememberLazyListState() } }
 
     val openPage: (SettingsPageId, SettingsPageId?, String?) -> Unit = { pageId, parentPageId, itemId ->
-        if (registry[pageId] != null) {
+        val opener = turtle.openers[pageId]
+        if (opener != null) {
+            opener()
+        } else if (registry[pageId] != null) {
             val next = TurtleSettingsNavigation.stackOnNavigate(registry, pageStack, pageId, parentPageId, host.externalPages)
             if (next == null) {
                 host.onOpenPage(pageId)
@@ -551,7 +557,7 @@ private fun CompactSettingsPage(
     val desktop = host.platform == SettingsPlatform.DESKTOP
     val collapsed = rememberTitleCollapsed(listState)
     // Lyrics pins upstream's live preview at the top, so its title stays in the bar.
-    val largeTitle = page.id != SettingsPageId.LYRICS
+    val largeTitle = !page.pinsLyricsPreview()
     val titleHeader: LazyListScope.() -> Unit = {
         item(key = "title", contentType = "title") { ShellSettingsLargeTitle(page.title, page.subtitle) }
     }
