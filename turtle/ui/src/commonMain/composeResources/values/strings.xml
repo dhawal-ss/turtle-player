@@ -84,4 +84,15 @@
     <string name="shell_next_in_queue">Next in queue</string>
     <string name="shell_open_queue">Open queue</string>
     <string name="shell_queue_end">Nothing queued. Autoplay picks up from here.</string>
+    <string name="shell_explore">Explore</string>
+    <string name="shell_explore_label">EXPLORE · OUTSIDE YOUR USUAL</string>
+    <string name="shell_explore_title">Wander off.</string>
+    <string name="shell_explore_subtitle">Music outside your usual sound. Like something and it can join your mixes.</string>
+    <string name="shell_explore_waiting">Explore fills in once Home has loaded.</string>
+    <string name="shell_moods_genres">Moods &amp; genres</string>
+    <string name="shell_new_releases">New releases</string>
+    <string name="shell_trending">Trending now</string>
+    <string name="shell_charts">Top albums</string>
+    <string name="shell_community">Community playlists</string>
+    <string name="shell_search_library">Search in Your Library</string>
 </resources>

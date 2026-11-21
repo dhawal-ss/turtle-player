@@ -34,9 +34,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +70,7 @@ import app.turtleplayer.ui.generated.resources.shell_albums
 import app.turtleplayer.ui.generated.resources.shell_artists
 import app.turtleplayer.ui.generated.resources.shell_collapse_library
 import app.turtleplayer.ui.generated.resources.shell_expand_library
+import app.turtleplayer.ui.generated.resources.shell_explore
 import app.turtleplayer.ui.generated.resources.shell_hide_now_playing
 import app.turtleplayer.ui.generated.resources.shell_infinity_meta
 import app.turtleplayer.ui.generated.resources.shell_infinity_title
@@ -82,10 +86,13 @@ import app.turtleplayer.ui.generated.resources.shell_open_library
 import app.turtleplayer.ui.generated.resources.shell_open_queue
 import app.turtleplayer.ui.generated.resources.shell_playlists
 import app.turtleplayer.ui.generated.resources.shell_queue_end
+import app.turtleplayer.ui.generated.resources.shell_search_library
+import app.turtleplayer.ui.generated.resources.shell_clear_search
 import app.turtleplayer.ui.generated.resources.shell_your_library
 import app.turtleplayer.ui.theme.LocalShellGround
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
+import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.BuiltinPlaylist
@@ -96,6 +103,8 @@ import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.model.displayThumbnailUrl
 import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.turtle.DesktopLibrarySlot
+import com.metrolist.shared.turtle.HomeSlot
+import com.metrolist.shared.ui.navigation.LocalNavigator
 import com.metrolist.shared.turtle.NavigationSlot
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import kotlinx.coroutines.delay
@@ -108,6 +117,13 @@ object ShellDesktop {
     var nowPlayingOpen by mutableStateOf(true)
     var libraryCollapsed by mutableStateOf(false)
     var libraryFilter by mutableStateOf(LibraryFilter.ALL)
+    var libraryQuery by mutableStateOf("")
+
+    /** True while Explore covers the page (our own page; any upstream navigation closes it). */
+    var explore by mutableStateOf(false)
+
+    /** The last Home Shell drew: Explore reads its YouTube Music data and opener. */
+    internal var home by mutableStateOf<HomeSlot?>(null)
 
     /** The track desktop restores at launch; it is loaded into the player only on play. */
     internal var restoredSong by mutableStateOf<SongItem?>(null)
@@ -118,7 +134,8 @@ object ShellDesktop {
 
 enum class LibraryFilter { ALL, PLAYLISTS, ARTISTS, ALBUMS }
 
-private val PanelShape = RoundedCornerShape(8.dp)
+// Matches upstream's content panel (StandardContentSurface), so all three panels share one radius.
+private val PanelShape = RoundedCornerShape(16.dp)
 private val SidebarWidth = 300.dp
 private val SidebarCollapsedWidth = 72.dp
 private val NowPlayingWidth = 340.dp
@@ -134,6 +151,8 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
     val c = Shell.colors
     val controller = LocalPlaybackController.current
     val state by controller.state.collectAsState()
+    val route = LocalNavigator.current.state.currentRoute
+    LaunchedEffect(route) { ShellDesktop.explore = false }
     BoxWithConstraints(slot.modifier.fillMaxSize().background(c.frame)) {
         val collapsed = ShellDesktop.libraryCollapsed || maxWidth < 960.dp
         val sidebarWidth by animateDpAsState(if (collapsed) SidebarCollapsedWidth else SidebarWidth, ShellMotion.emphasized())
@@ -144,6 +163,8 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 CompositionLocalProvider(LocalShellGround provides c.panel) { slot.content() }
+                // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
+                ExploreOverlay()
             }
             AnimatedVisibility(
                 showNowPlaying,
@@ -177,17 +198,21 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Destinations card: Home first, then upstream's other pages (History, Stats, Together).
         Column(Modifier.fillMaxWidth().clip(PanelShape).background(c.panel).padding(8.dp)) {
+            val explore = ShellDesktop.explore
             slot.items.forEachIndexed { i, item ->
                 if (i == libraryIndex) return@forEachIndexed
-                val selected = i == slot.selectedIndex
-                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { slot.onSelect(i) }
+                val selected = !explore && i == slot.selectedIndex
+                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; slot.onSelect(i) }
+                if (item.key.equals("home", ignoreCase = true)) {
+                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.explore = true }
+                }
             }
         }
         LibraryCard(
             library = library,
             collapsed = collapsed,
             librarySelected = libraryIndex >= 0 && libraryIndex == slot.selectedIndex,
-            onOpenLibrary = { if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
+            onOpenLibrary = { ShellDesktop.explore = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         slot.footer?.invoke()
@@ -287,6 +312,8 @@ private fun LibraryCard(
                 add(LibraryRow(item.id, item.title, meta, art, item is ArtistItem, playing = state.queueTitle == item.title && state.isPlaying) { library.open(item) })
             }
     }
+    val query = ShellDesktop.libraryQuery.trim()
+    val shown = if (query.isEmpty()) rows else rows.filter { it.title.contains(query, ignoreCase = true) || it.meta.contains(query, ignoreCase = true) }
 
     Column(modifier.clip(PanelShape).background(c.panel)) {
         // Header: the title collapses the panel (as in Spotify); the arrow opens the full Library page.
@@ -324,10 +351,11 @@ private fun LibraryCard(
                     ShellChip(stringResource(label), filter == f, { ShellDesktop.libraryFilter = if (filter == f) LibraryFilter.ALL else f })
                 }
             }
+            LibrarySearchField()
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp)) {
-            items(rows, key = { it.key }) { row -> LibraryRowView(row, collapsed, Modifier.animateItem()) }
-            if (!collapsed && rows.none { it.key != "liked" && it.key != "infinity" }) {
+            items(shown, key = { it.key }) { row -> LibraryRowView(row, collapsed, Modifier.animateItem()) }
+            if (!collapsed && query.isEmpty() && rows.none { it.key != "liked" && it.key != "infinity" }) {
                 item(key = "empty") {
                     Text(stringResource(Res.string.shell_library_empty), style = Shell.type.bodySmall, color = c.ink2, modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp))
                 }
@@ -410,7 +438,7 @@ private fun NowPlayingPanel(modifier: Modifier) {
             song,
             transitionSpec = { (slideInHorizontally(ShellMotion.emphasized()) { it / 7 } + fadeIn(ShellMotion.emphasized())) togetherWith fadeOut(ShellMotion.exit()) },
             contentKey = { it.id },
-        ) { s -> ShellArt(s.displayThumbnailUrl, Modifier.fillMaxWidth().aspectRatio(1f), shape = PanelShape, sizePx = 720) }
+        ) { s -> ShellArt(s.displayThumbnailUrl, Modifier.fillMaxWidth().aspectRatio(1f), shape = RoundedCornerShape(8.dp), sizePx = 720) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 AnimatedContent(song, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, contentKey = { it.id }) { s ->
@@ -460,5 +488,43 @@ private fun UpNextCard(queue: List<SongItem>, current: Int, onPlay: (Int) -> Uni
                 }
             }
         }
+    }
+}
+
+/** Spotify's "Search in Your Library": a quiet field that filters the list as you type. */
+@Composable
+private fun LibrarySearchField() {
+    val c = Shell.colors
+    val query = ShellDesktop.libraryQuery
+    Row(
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(34.dp).clip(RoundedCornerShape(6.dp)).background(c.surface2).padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph(Glyphs.Search, c.ink2, 16.dp)
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (query.isEmpty()) Text(stringResource(Res.string.shell_search_library), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1)
+            BasicTextField(
+                value = query,
+                onValueChange = { ShellDesktop.libraryQuery = it },
+                singleLine = true,
+                textStyle = Shell.type.bodySmall.copy(color = c.ink),
+                cursorBrush = SolidColor(c.accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Box(Modifier.size(24.dp).shellPressable({ ShellDesktop.libraryQuery = "" }, label = stringResource(Res.string.shell_clear_search)), contentAlignment = Alignment.Center) {
+                Glyph(Glyphs.Close, c.ink2, 12.dp)
+            }
+        }
+    }
+}
+
+/** Explore fades in over the page; a separate function so it is not scoped to the layout's Row. */
+@Composable
+private fun ExploreOverlay() {
+    AnimatedVisibility(ShellDesktop.explore, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
+        ShellTheme { ShellExplorePage(ShellDesktop.home, Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
     }
 }

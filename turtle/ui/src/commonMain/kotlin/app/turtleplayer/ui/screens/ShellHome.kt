@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -119,6 +120,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
 
     val ground = LocalShellGround.current ?: c.ground
     val desktop = ShellPlatform.desktop
+    SideEffect { if (desktop) ShellDesktop.home = slot }
     // Spotify's header glow: takes the color of the shortcut under the pointer, calm lime otherwise.
     var glowArt by remember { mutableStateOf<String?>(null) }
     var glowInfinity by remember { mutableStateOf(false) }
