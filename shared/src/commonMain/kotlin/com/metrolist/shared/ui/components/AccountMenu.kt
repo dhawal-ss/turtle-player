@@ -372,7 +372,7 @@ internal fun AccountMenuContent(
                 color = colorScheme.primary,
                 textAlign = TextAlign.Center,
             )
-            Text(
+            if (!com.metrolist.shared.turtle.TurtleUiSlots.hideAccountMenuLicense) Text( // Turtle: HOOKS.md #59 (the GPL notice stays on About)
                 stringResource(Res.string.account_menu_license),
                 style = MaterialTheme.typography.bodySmall,
                 color = colorScheme.onSurfaceVariant,

@@ -14,7 +14,7 @@ Shell settings and menus (#49 to #53), podcasts (#54) and Turtle DJ effects (#55
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **69** hook lines, plus about 55 lines of behavior patches below.
+Current total: **70** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -69,6 +69,7 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 53 | `shared/ui/menu/DesktopDropdownMenu.kt` | 1 | `if (TurtleUiSlots.menuSurface?.let { it(MenuSurfaceSlot(...)); true } == null) Surface(` | Desktop menu panels drawn as Shell surfaces | Product designer |
 | 54 | `shared/ui/screens/PodcastContent.kt` | 1 | First line of `PodcastContent`: `TurtleUiSlots.podcastPage?.let { return it(PodcastPageSlot(...)) }` | Shell's podcast show page (follow, play latest, episode progress) | Product designer |
 | 55 | `shared/equalizer/EqualizerProfiles.kt` | 1 | `configuration` returns `TurtleAudioFx.equalizerOverride ?:` upstream's value (our `shared/.../turtle/TurtleAudioFx.kt`, one volatile field) | Turtle DJ's live effects (filter sweep, bass boost/cut, bass swap during blends) without rewriting the listener's saved EQ many times a second. Null outside a DJ set, so upstream's EQ is untouched | Recommendations engineer |
+| 59 | `shared/ui/components/AccountMenu.kt` | 1 | `if (!TurtleUiSlots.hideAccountMenuLicense) Text(` on the "GPL-3.0 MetrolistGroup" line under the account menu | Product owner asked to drop the licence wording from the account menu. GPL-3.0 still requires an Appropriate Legal Notice in the UI: it stays on Settings > About ("Metrolist is licensed under GPL-3.0", kept by #44's credits exception) | Product designer |
 
 ## Behavior patches
 

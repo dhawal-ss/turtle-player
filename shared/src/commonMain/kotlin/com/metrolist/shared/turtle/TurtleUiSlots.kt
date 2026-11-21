@@ -63,6 +63,9 @@ object TurtleUiSlots {
     /** True hides upstream's "support the Metrolist developers" launch prompt. */
     var hideSupportPrompt: Boolean = false
 
+    /** True drops the "GPL-3.0 MetrolistGroup" line under the account menu; the licence stays on About. */
+    var hideAccountMenuLicense: Boolean = false
+
     /**
      * True scraps upstream's Listen Together (product owner, 20 Nov 2026): `Settings.listenTogetherEnabled`
      * reads false, which stops the manager connecting, auto-joining or notifying and hides upstream's own

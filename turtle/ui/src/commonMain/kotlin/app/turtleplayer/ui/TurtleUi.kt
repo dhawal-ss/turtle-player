@@ -33,6 +33,7 @@ object TurtleUi {
         TurtleUiSlots.typography = { shellMaterialTypography() }
         TurtleUiSlots.playlistPicker = { app.turtleplayer.ui.screens.ShellPlaylistPicker(it) }
         TurtleUiSlots.hideSupportPrompt = true
+        TurtleUiSlots.hideAccountMenuLicense = true
         TurtleUiSlots.hideListenTogether = true // the product owner scrapped Listen Together (20 Nov 2026)
         TurtleUiSlots.dialog = { app.turtleplayer.ui.screens.ShellDialog(it) }
         TurtleUiSlots.artistPage = { app.turtleplayer.ui.screens.ShellArtistPage(it) }
