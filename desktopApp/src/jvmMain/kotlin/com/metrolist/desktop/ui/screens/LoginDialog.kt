@@ -152,7 +152,7 @@ fun LoginDialog(
     var cleanupAttempt by remember { mutableStateOf(0) }
     val defaultCleanupError = stringResource(Res.string.webview_cleanup_failed)
     val requestDismiss: () -> Unit = {
-        if (loginCompleted || isSwitchingChannel) {
+        if (loginCompleted || isSwitchingChannel || cleanupError != null) { // Turtle: HOOKS.md #48 (a failed cleanup must not trap the user)
             onDismissRequest()
         } else {
             cleanupRequested = true

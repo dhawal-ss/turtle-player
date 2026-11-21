@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shell_dj_label">TURTLE DJ</string>
+    <string name="shell_dj_queue_title">Turtle DJ set</string>
+    <string name="shell_dj_card_tagline">Your party, mixed live</string>
+    <string name="shell_dj_card_body">Pick a vibe. Turtle plays one continuous set: blends, energy, effects.</string>
+    <string name="shell_dj_card_open">Open the booth</string>
+    <string name="shell_dj_card_live">LIVE · NOW MIXING</string>
+    <string name="shell_dj_card_back">Back to the booth</string>
+
+    <string name="shell_dj_setup_title">Build tonight's set</string>
+    <string name="shell_dj_setup_body">Pick the sound and the shape of the night. Turtle digs the crates, blends every track and paces the energy.</string>
+    <string name="shell_dj_vibe">VIBE</string>
+    <string name="shell_dj_vibe_hint">Nothing picked: Turtle chooses for the arc.</string>
+    <string name="shell_dj_arc">ENERGY ARC</string>
+    <string name="shell_dj_arc_lounge">Chill lounge</string>
+    <string name="shell_dj_arc_lounge_body">Low and warm, long blends</string>
+    <string name="shell_dj_arc_house">House party</string>
+    <string name="shell_dj_arc_house_body">Warm up, build, peak, land</string>
+    <string name="shell_dj_arc_club">Club peak</string>
+    <string name="shell_dj_arc_club_body">Straight to the floor, quick mixes</string>
+    <string name="shell_dj_arc_sunrise">Sunrise</string>
+    <string name="shell_dj_arc_sunrise_body">From the last dance to daylight</string>
+    <string name="shell_dj_length">SET LENGTH</string>
+    <string name="shell_dj_length_minutes">%1$d min</string>
+    <string name="shell_dj_length_hours">%1$d hours</string>
+    <string name="shell_dj_length_hour">1 hour</string>
+    <string name="shell_dj_length_endless">Endless</string>
+    <string name="shell_dj_start">Start the set</string>
+    <string name="shell_dj_digging">Digging the crates…</string>
+    <string name="shell_dj_nothing">No tracks found for this vibe. Check your connection or pick other genres.</string>
+
+    <string name="shell_dj_deck_a">DECK A · ON AIR</string>
+    <string name="shell_dj_deck_b">DECK B · CUED</string>
+    <string name="shell_dj_deck_b_mixing">DECK B · MIXING IN</string>
+    <string name="shell_dj_deck_empty">Picking the next track…</string>
+    <string name="shell_dj_bpm">%1$d BPM</string>
+    <string name="shell_dj_mix_in">MIX IN %1$s</string>
+    <string name="shell_dj_mixing">MIXING</string>
+    <string name="shell_dj_requested">REQUEST</string>
+    <string name="shell_dj_energy">ENERGY</string>
+    <string name="shell_dj_set_time">SET %1$s</string>
+    <string name="shell_dj_set_time_of">SET %1$s / %2$s</string>
+    <string name="shell_dj_up_next">UP NEXT</string>
+    <string name="shell_dj_side_a">A</string>
+    <string name="shell_dj_side_b">B</string>
+    <string name="shell_dj_next_badge">NEXT</string>
+    <string name="shell_dj_beat_estimated">BEAT EST.</string>
+    <string name="shell_dj_beat_live">LIVE AUDIO</string>
+
+    <string name="shell_dj_play">Play</string>
+    <string name="shell_dj_pause">Pause</string>
+    <string name="shell_dj_mix_now">Mix now</string>
+    <string name="shell_dj_skip">Skip</string>
+    <string name="shell_dj_hype">Hype</string>
+    <string name="shell_dj_chill">Chill</string>
+    <string name="shell_dj_fx">FX</string>
+    <string name="shell_dj_fx_filter">Filter</string>
+    <string name="shell_dj_fx_boost">Bass boost</string>
+    <string name="shell_dj_fx_kill">Bass cut</string>
+    <string name="shell_dj_tempo_down">Slow down</string>
+    <string name="shell_dj_tempo_up">Speed up</string>
+    <string name="shell_dj_tempo">TEMPO %1$s</string>
+    <string name="shell_dj_hyped">Turning it up from the next track</string>
+    <string name="shell_dj_chilled">Bringing it down from the next track</string>
+
+    <string name="shell_dj_request">Request</string>
+    <string name="shell_dj_request_title">Request a song</string>
+    <string name="shell_dj_request_hint">Search for a song</string>
+    <string name="shell_dj_request_empty">No songs found</string>
+    <string name="shell_dj_request_slotted">Up next: %1$s</string>
+
+    <string name="shell_dj_exit">Leave the booth</string>
+    <string name="shell_dj_end">End set</string>
+    <string name="shell_dj_end_confirm">Tap again to end</string>
+
+    <string name="shell_dj_genre_dnb">Drum &amp; bass</string>
+    <string name="shell_dj_genre_edm">EDM</string>
+    <string name="shell_dj_genre_disco">Nu disco</string>
+    <string name="shell_dj_genre_trance">Trance</string>
+    <string name="shell_dj_genre_amapiano">Amapiano</string>
+    <string name="shell_dj_genre_dancehall">Dancehall</string>
+</resources>

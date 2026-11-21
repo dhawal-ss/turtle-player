@@ -168,6 +168,7 @@ internal fun SharedSettingsRegistryScreen(
     modifier: Modifier = Modifier,
     registryFactory: @Composable (Int) -> SettingsUiRegistry,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.settingsScreen?.let { return it(com.metrolist.shared.turtle.SettingsScreenSlot(host, modifier, registryFactory)) } // Turtle: HOOKS.md #49
     var settingsRevision by remember { mutableIntStateOf(0) }
     var pageStack by rememberSaveable {
         mutableStateOf(host.initialPage?.let { listOf(it.name) }.orEmpty())

@@ -1304,7 +1304,7 @@ private fun runDesktopApp(args: Array<String>) {
             }
         }
 
-        val appTitle = if (BuildConfig.DEBUG) "Metrolist Debug" else "Metrolist"
+        val appTitle = if (BuildConfig.DEBUG) "Turtle Debug" else "Turtle" // Turtle: HOOKS.md #46
         val windowTitle =
             PlayerState.currentTrack?.takeIf { it.title.isNotBlank() }?.let { track ->
                 val artists = track.artists.joinToString { it.displayName }

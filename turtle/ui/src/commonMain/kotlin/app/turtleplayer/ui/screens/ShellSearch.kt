@@ -105,6 +105,10 @@ import app.turtleplayer.ui.generated.resources.shell_search_remove_history
 import app.turtleplayer.ui.generated.resources.shell_search_retry
 import app.turtleplayer.ui.generated.resources.shell_search_title
 import app.turtleplayer.ui.generated.resources.shell_songs
+import app.turtleplayer.ui.generated.resources.shell_sp_episodes
+import app.turtleplayer.ui.generated.resources.shell_sp_kind_episode
+import app.turtleplayer.ui.generated.resources.shell_sp_kind_podcast
+import app.turtleplayer.ui.generated.resources.shell_sp_podcasts
 import app.turtleplayer.ui.generated.resources.shell_top_result
 import app.turtleplayer.ui.generated.resources.shell_vibe_1
 import app.turtleplayer.ui.generated.resources.shell_vibe_2
@@ -120,12 +124,16 @@ import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
+import com.metrolist.shared.model.EpisodeItem
 import com.metrolist.shared.model.PlaylistItem
+import com.metrolist.shared.model.PodcastItem
 import com.metrolist.shared.model.SearchFilter
 import com.metrolist.shared.model.SearchSummary
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.model.displayThumbnailUrl
+import com.metrolist.shared.model.isPodcast
+import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.turtle.SearchSlot
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -141,6 +149,12 @@ private val FILTERS: List<Pair<SearchFilter?, StringResource>> = listOf(
     SearchFilter.ARTIST to Res.string.shell_artists,
     SearchFilter.ALBUM to Res.string.shell_albums,
     SearchFilter.FEATURED_PLAYLIST to Res.string.shell_playlists,
+)
+
+/** Shows and episodes, unless upstream's "hide podcasts" setting is on. */
+private val PODCAST_FILTERS: List<Pair<SearchFilter?, StringResource>> = listOf(
+    SearchFilter.PODCAST to Res.string.shell_sp_podcasts,
+    SearchFilter.EPISODE to Res.string.shell_sp_episodes,
 )
 
 /** Only the first results rise in (H-Motion); the rest of a long list appears without delay. */
@@ -243,7 +257,8 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
                 else -> {
                     item(key = "filters") {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(16.dp, 14.dp, 16.dp, 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FILTERS.forEach { (f, res) -> ShellChip(stringResource(res), s.selectedFilter == f, { slot.onFilterSelected(f) }) }
+                            val filters = if (Settings.shared.hidePodcasts) FILTERS else FILTERS + PODCAST_FILTERS
+                            filters.forEach { (f, res) -> ShellChip(stringResource(res), s.selectedFilter == f, { slot.onFilterSelected(f) }) }
                         }
                     }
                     when {
@@ -451,6 +466,8 @@ private fun sectionTitle(summary: SearchSummary): String = when (summary.title.l
     "albums" -> stringResource(Res.string.shell_albums)
     "playlists" -> stringResource(Res.string.shell_playlists)
     "videos" -> stringResource(Res.string.shell_videos)
+    "podcasts" -> stringResource(Res.string.shell_sp_podcasts)
+    "episodes" -> stringResource(Res.string.shell_sp_episodes)
     else -> summary.title
 }
 
@@ -518,7 +535,7 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false, 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(item.title, style = Shell.type.body, color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val meta = if (compact) subtitleOf(item).orEmpty() else metaOf(item)
+            val meta = if (compact) searchSubtitle(item).orEmpty() else metaOf(item)
             Text(meta, style = Shell.type.bodySmall, color = if (hovered) c.ink else c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (playing) {
@@ -529,7 +546,7 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false, 
             Spacer(Modifier.width(12.dp))
             LikedBadge()
         }
-        val seconds = (item as? SongItem)?.duration
+        val seconds = (item as? SongItem)?.duration ?: (item as? EpisodeItem)?.duration
         if (seconds != null && seconds > 0 && ShellPlatform.desktop) {
             Spacer(Modifier.width(16.dp))
             Text(formatTime(seconds * 1000), style = Shell.type.bodySmall, color = c.ink2)
@@ -578,8 +595,15 @@ private fun CardRow(items: List<YTItem>, slot: SearchSlot, wide: Boolean) {
 @Composable
 private fun metaOf(item: YTItem): String {
     val kind = kindOf(item)
-    val sub = subtitleOf(item)?.takeIf { it.isNotBlank() }
+    val sub = searchSubtitle(item)?.takeIf { it.isNotBlank() }
     return if (kind != null && sub != null) stringResource(Res.string.shell_meta_pair, kind, sub) else kind ?: sub.orEmpty()
+}
+
+/** Home's subtitles, plus the host of a show and the show (or host) of an episode. */
+private fun searchSubtitle(item: YTItem): String? = when (item) {
+    is PodcastItem -> item.author
+    is EpisodeItem -> listOfNotNull(item.author?.name, item.publishDateText).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { null }
+    else -> subtitleOf(item)
 }
 
 @Composable
@@ -587,6 +611,8 @@ private fun kindOf(item: YTItem): String? = when (item) {
     is ArtistItem -> stringResource(Res.string.shell_kind_artist)
     is AlbumItem -> stringResource(Res.string.shell_kind_album)
     is PlaylistItem -> stringResource(Res.string.shell_kind_playlist)
-    is SongItem -> stringResource(Res.string.shell_kind_song)
+    is PodcastItem -> stringResource(Res.string.shell_sp_kind_podcast)
+    is EpisodeItem -> stringResource(Res.string.shell_sp_kind_episode)
+    is SongItem -> if (item.isPodcast) stringResource(Res.string.shell_sp_kind_episode) else stringResource(Res.string.shell_kind_song)
     else -> null
 }

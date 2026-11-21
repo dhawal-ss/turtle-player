@@ -63,7 +63,7 @@ internal fun DesktopDropdownMenu(
         onDismissRequest = onDismissRequest,
         popupPositionProvider = position,
     ) {
-        Surface(
+        if (com.metrolist.shared.turtle.TurtleUiSlots.menuSurface?.let { it(com.metrolist.shared.turtle.MenuSurfaceSlot(maxHeight, modifier.blockInput(!expanded), content)); true } == null) Surface( // Turtle: HOOKS.md #53
             shape = ComponentShapes.MenuExteriorShape,
             color = if (tonalElevation > 0.dp) MaterialTheme.colorScheme.surface else MenuDefaults.containerColor,
             tonalElevation = tonalElevation,

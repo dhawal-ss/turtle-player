@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell spoken word: podcasts, audiobooks and the player's spoken-word controls (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_sp_filter_podcasts">Podcasts</string>
+    <string name="shell_sp_filter_audiobooks">Audiobooks</string>
+
+    <string name="shell_sp_continue">Continue listening</string>
+    <string name="shell_sp_new_episodes">New episodes</string>
+    <string name="shell_sp_your_shows">Your shows</string>
+    <string name="shell_sp_popular_shows">Popular shows</string>
+    <string name="shell_sp_podcasts_empty_title">Follow a show to start</string>
+    <string name="shell_sp_podcasts_empty_body">Search for a podcast and follow it. New episodes and anything you leave halfway show up here.</string>
+    <string name="shell_sp_loading">Loading</string>
+    <string name="shell_sp_left">%1$s left</string>
+    <string name="shell_sp_minutes">%1$d min</string>
+    <string name="shell_sp_hours_minutes">%1$d h %2$d min</string>
+    <string name="shell_sp_meta_pair">%1$s · %2$s</string>
+
+    <string name="shell_sp_books_label">Audiobooks</string>
+    <string name="shell_sp_books_tagline">Full readings from YouTube. Every book picks up where you left off.</string>
+    <string name="shell_sp_cat_popular">Popular</string>
+    <string name="shell_sp_cat_classics">Classics</string>
+    <string name="shell_sp_cat_fiction">Fiction</string>
+    <string name="shell_sp_cat_mystery">Mystery &amp; thriller</string>
+    <string name="shell_sp_cat_scifi">Sci-fi &amp; fantasy</string>
+    <string name="shell_sp_cat_self_help">Self-help</string>
+    <string name="shell_sp_cat_biography">Biography</string>
+    <string name="shell_sp_cat_history">History</string>
+    <string name="shell_sp_cat_kids">Kids</string>
+    <string name="shell_sp_books_empty">No full audiobooks turned up here right now.</string>
+    <string name="shell_sp_retry">Try again</string>
+    <string name="shell_sp_part_of">Part %1$d of %2$d</string>
+    <string name="shell_sp_book_playlist">Chapters</string>
+    <string name="shell_sp_book_failed">Couldn’t open this book. Try again in a moment.</string>
+    <string name="shell_sp_forget">Remove from Continue listening</string>
+
+    <string name="shell_sp_back_15">Back 15 seconds</string>
+    <string name="shell_sp_forward_30">Forward 30 seconds</string>
+    <string name="shell_sp_speed">Playback speed</string>
+    <string name="shell_sp_speed_value">%1$s×</string>
+    <string name="shell_sp_sleep">Sleep timer</string>
+    <string name="shell_sp_sleep_end">End of episode</string>
+    <string name="shell_sp_sleep_off">Off</string>
+
+    <string name="shell_sp_kind_podcast">Podcast</string>
+    <string name="shell_sp_kind_episode">Episode</string>
+    <string name="shell_sp_podcasts">Podcasts</string>
+    <string name="shell_sp_episodes">Episodes</string>
+    <string name="shell_sp_follow">Follow</string>
+    <string name="shell_sp_following">Following</string>
+    <string name="shell_sp_play_latest">Play latest</string>
+    <string name="shell_sp_more">More</string>
+    <string name="shell_sp_back">Back</string>
+    <string name="shell_sp_find">Find an episode</string>
+    <string name="shell_sp_find_close">Close search</string>
+    <string name="shell_sp_no_matches">No episodes match “%1$s”</string>
+    <string name="shell_sp_load_failed">Couldn’t load this show</string>
+    <string name="shell_sp_save_episode">Save episode</string>
+    <string name="shell_sp_saved_episode">Saved episode</string>
+    <string name="shell_sp_play_next">Play next</string>
+    <string name="shell_sp_add_queue">Add to queue</string>
+    <string name="shell_sp_download">Download</string>
+    <string name="shell_sp_share">Share</string>
+    <string name="shell_sp_played">Played</string>
+    <string name="shell_sp_show_more">Show more</string>
+    <string name="shell_sp_show_less">Show less</string>
+</resources>

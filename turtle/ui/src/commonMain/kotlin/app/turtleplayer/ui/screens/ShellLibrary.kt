@@ -255,8 +255,14 @@ private fun ShellLibContent(slot: LibraryPageSlot) {
 
     val autos =
         remember(slot.autoPlaylists, slot.hiddenItemKeys, active, blockedVersion, hidePodcasts, slot.searchQuery) {
-            if (active in setOf(UpFilter.TRACKS, UpFilter.ARTISTS, UpFilter.ALBUMS, UpFilter.PODCASTS)) {
+            if (active in setOf(UpFilter.TRACKS, UpFilter.ARTISTS, UpFilter.ALBUMS)) {
                 emptyList()
+            } else if (active == UpFilter.PODCASTS) {
+                // Podcasts keeps upstream's "New episodes" and "Episodes for later" above the shows.
+                slot.autoPlaylists.filter {
+                    it.type in setOf("podcasts", "SE") && HiddenLibraryItemKey(HiddenLibraryItemType.AUTO, it.type) !in slot.hiddenItemKeys &&
+                        (slot.searchQuery.isBlank() || it.title.contains(slot.searchQuery.trim(), ignoreCase = true))
+                }
             } else {
                 val term = slot.searchQuery.trim()
                 slot.autoPlaylists

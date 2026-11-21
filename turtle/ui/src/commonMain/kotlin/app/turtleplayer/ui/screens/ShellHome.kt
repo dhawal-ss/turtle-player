@@ -16,6 +16,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -92,6 +94,8 @@ import app.turtleplayer.ui.generated.resources.shell_and_more
 import app.turtleplayer.ui.generated.resources.shell_filter_all
 import app.turtleplayer.ui.generated.resources.shell_filter_mixes
 import app.turtleplayer.ui.generated.resources.shell_filter_music
+import app.turtleplayer.ui.generated.resources.shell_sp_filter_audiobooks
+import app.turtleplayer.ui.generated.resources.shell_sp_filter_podcasts
 import app.turtleplayer.ui.generated.resources.shell_home_infinity_empty
 import app.turtleplayer.ui.generated.resources.shell_home_loading
 import app.turtleplayer.ui.generated.resources.shell_home_offline_body
@@ -115,6 +119,7 @@ import com.metrolist.shared.model.PlaylistItem
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.model.displayThumbnailUrl
+import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.turtle.HomeSlot
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
@@ -135,7 +140,7 @@ private val MIX_TINTS = listOf(0xFFC4577A, 0xFF3E6FD8, 0xFF2E9E7A, 0xFFE8B04B, 0
 private const val MIX_GRID_COLUMNS = 5
 private const val NOTICE_MS = 2800L
 
-private enum class HomeFilter { ALL, MUSIC, MIXES }
+private enum class HomeFilter { ALL, MUSIC, MIXES, PODCASTS, AUDIOBOOKS }
 
 /** One of our mixes with what its card needs, worked out once per shelf list rather than per frame. */
 private class MixEntry(val shelf: HomeShelf, val songs: List<SongItem>, val names: String, val tint: Color)
@@ -209,6 +214,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         ShellInfinity.sheetOpen = true
     }
     InfinitySheetHost()
+    TurtleDjHost()
     if (ShellAppearance.open) ShellThemeSheet()
 
     val ground = LocalShellGround.current ?: c.ground
@@ -223,7 +229,9 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         tween(ShellMotion.TINT_MS, easing = ShellMotion.Emphasized),
     )
     val rise = rememberRiseIn(slot.listState)
-    val current = filter
+    // A hidden Podcasts chip (upstream's "hide podcasts" setting) falls back to All.
+    val current = filter.takeUnless { it == HomeFilter.PODCASTS.ordinal && Settings.shared.hidePodcasts } ?: HomeFilter.ALL.ordinal
+    LaunchedEffect(playback) { ShellSpoken.track(playback) }
     LoadMoreNearEnd(slot, enabled = current == HomeFilter.MUSIC.ordinal)
 
     BoxWithConstraints(slot.modifier.fillMaxSize().background(ground)) {
@@ -257,14 +265,32 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             modifier = Modifier.fillMaxSize().padding(horizontal = if (desktop) 8.dp else 0.dp),
         ) {
             item(key = "chips") {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ShellChip(stringResource(Res.string.shell_filter_all), current == HomeFilter.ALL.ordinal, { filter = HomeFilter.ALL.ordinal })
-                    ShellChip(stringResource(Res.string.shell_filter_music), current == HomeFilter.MUSIC.ordinal, { filter = HomeFilter.MUSIC.ordinal })
-                    ShellChip(stringResource(Res.string.shell_filter_mixes), current == HomeFilter.MIXES.ordinal, { filter = HomeFilter.MIXES.ordinal })
-                    Spacer(Modifier.weight(1f))
+                Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Five chips overflow a phone's width, so they scroll; the palette button stays put.
+                    Row(
+                        Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ShellChip(stringResource(Res.string.shell_filter_all), current == HomeFilter.ALL.ordinal, { filter = HomeFilter.ALL.ordinal })
+                        ShellChip(stringResource(Res.string.shell_filter_music), current == HomeFilter.MUSIC.ordinal, { filter = HomeFilter.MUSIC.ordinal })
+                        ShellChip(stringResource(Res.string.shell_filter_mixes), current == HomeFilter.MIXES.ordinal, { filter = HomeFilter.MIXES.ordinal })
+                        if (!Settings.shared.hidePodcasts) {
+                            ShellChip(stringResource(Res.string.shell_sp_filter_podcasts), current == HomeFilter.PODCASTS.ordinal, { filter = HomeFilter.PODCASTS.ordinal })
+                        }
+                        ShellChip(stringResource(Res.string.shell_sp_filter_audiobooks), current == HomeFilter.AUDIOBOOKS.ordinal, { filter = HomeFilter.AUDIOBOOKS.ordinal })
+                    }
                     GlyphButton(Glyphs.Palette, stringResource(Res.string.shell_theme_open), { ShellAppearance.open = true }, c.ink2, size = 36.dp, iconSize = 20.dp)
                 }
                 Spacer(Modifier.height(14.dp))
+            }
+
+            // Podcasts and Audiobooks replace the music shelves with their own (ShellPodcasts.kt, ShellAudiobooks.kt).
+            if (current == HomeFilter.PODCASTS.ordinal || current == HomeFilter.AUDIOBOOKS.ordinal) {
+                item(key = if (current == HomeFilter.PODCASTS.ordinal) "podcasts" else "audiobooks") {
+                    if (current == HomeFilter.PODCASTS.ordinal) ShellPodcastsSection(slot) else ShellAudiobooksSection(slot)
+                }
+                return@LazyColumn
             }
 
             if (failed) {
@@ -315,6 +341,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 item(key = "infinity") {
                     InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 2), onOpen = ::openInfinity)
                 }
+                item(key = "turtle_dj") { TurtleDjCard(wide, Modifier.riseIn(rise, "turtle_dj", 3)) }
             }
 
             if (current != HomeFilter.MUSIC.ordinal && lists.mixes.isNotEmpty()) {

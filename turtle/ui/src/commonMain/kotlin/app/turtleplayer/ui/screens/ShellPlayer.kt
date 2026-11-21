@@ -470,6 +470,8 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                 GlyphButton(Glyphs.Next, stringResource(Res.string.shell_next), controller::skipToNext, c.ink, size = 60.dp, iconSize = 32.dp)
                 GlyphButton(Glyphs.Repeat, stringResource(Res.string.shell_repeat), vm::toggleRepeat, if (modes.repeat != 0) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = modes.repeat != 0)
             }
+            // Podcasts and audiobooks: speed, -15 / +30 and sleep (hidden for music).
+            SpokenWordControls(song = song, controller = controller, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 GlyphButton(Glyphs.Devices, stringResource(Res.string.shell_devices), { surface = PlayerSurface.DEVICES }, if (state.castState.device != null) c.accent else c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
                 Spacer(Modifier.weight(1f))
@@ -481,6 +483,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
         }
         PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint)
         InfinitySheetHost()
+        TurtleDjHost()
         ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars))
     }
 }
@@ -565,6 +568,7 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     // Any left open from an earlier session are closed once, so they never cover the page.
     app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song?.displayThumbnailUrl)
     InfinitySheetHost()
+    TurtleDjHost()
     SideEffect { com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras?.removeQueueIndex?.let { ShellInfinity.removeAt = it } }
     LaunchedEffect(Unit) {
         if (slot.isQueueOpen()) slot.onToggleQueue()

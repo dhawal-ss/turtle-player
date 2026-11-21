@@ -487,11 +487,13 @@ tasks.named<Test>("desktopTest") {
 val prepareComposeResourceAliases =
     tasks.register<Sync>("prepareComposeResourceAliases") {
         val catalog = layout.projectDirectory.dir("src/commonMain/composeResources")
-        from(catalog)
+        from(catalog) { exclude("drawable/logo.png") } // Turtle: HOOKS.md #44 (logo comes from turtle/branding)
         mapOf("in" to "id", "iw" to "he").forEach { (legacy, modern) ->
             from(catalog.dir("values-$legacy")) { into("values-$modern") }
         }
         into(layout.buildDirectory.dir("generated/composeResourceAliases"))
+        from(rootProject.file("turtle/branding")) // Turtle: HOOKS.md #44
+        filesMatching("**/strings*.xml") { filter { l -> if ("<string" !in l || Regex("name=\"(credits_|account_menu_license)").containsMatchIn(l)) l else l.replace("Metrolist-KMP", "Turtle").replace("Metrolist", "Turtle").replace("MetroList", "Turtle") } } // Turtle: HOOKS.md #44
     }
 
 compose.resources {

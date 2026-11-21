@@ -212,3 +212,29 @@ class LibraryPageSlot(
     val onPlayAlbum: ((AlbumItem) -> Unit)?,
     val presentation: LibraryPresentation,
 )
+
+/** `PodcastContent` (podcast show page on phone and desktop). */
+class PodcastPageSlot(
+    val page: com.metrolist.shared.model.PodcastPage?,
+    val isLoading: Boolean,
+    val isSaving: Boolean,
+    val error: String?,
+    val onBackClick: (() -> Unit)?,
+    val onRetry: () -> Unit,
+    val onPlay: () -> Unit,
+    val onToggleSaved: () -> Unit,
+    val onPodcastMenuClick: () -> Unit,
+    val onEpisodeClick: (com.metrolist.shared.model.EpisodeItem) -> Unit,
+    val onToggleEpisodeSaved: (com.metrolist.shared.model.EpisodeItem) -> Unit,
+    val onPlayNext: (com.metrolist.shared.model.EpisodeItem) -> Unit,
+    val onAddToQueue: (com.metrolist.shared.model.EpisodeItem) -> Unit,
+    val onDownload: ((com.metrolist.shared.model.EpisodeItem) -> Unit)?,
+    val onShare: (com.metrolist.shared.model.EpisodeItem) -> Unit,
+    val modifier: Modifier,
+    val contentPadding: PaddingValues,
+    val currentEpisodeId: String?,
+    val isPlaying: Boolean,
+    val onChannelClick: ((String) -> Unit)?,
+    val detailsInDialog: Boolean,
+    val onLoadMore: (() -> Unit)?,
+)

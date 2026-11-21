@@ -52,6 +52,7 @@ fun PlayerMenuActionGroup(
     actions: List<PlayerMenuAction>,
     modifier: Modifier = Modifier,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuActionGroup?.let { return it(com.metrolist.shared.turtle.MenuActionsSlot(actions, modifier, popup = false)) } // Turtle: HOOKS.md #52
     if (actions.isEmpty()) return
 
     Column(
@@ -122,6 +123,7 @@ fun PlayerMenuPrimaryActions(
     actions: List<PlayerMenuAction>,
     modifier: Modifier = Modifier,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuPrimaryActions?.let { return it(com.metrolist.shared.turtle.MenuActionsSlot(actions, modifier, popup = false)) } // Turtle: HOOKS.md #52
     if (actions.isEmpty()) return
 
     Row(

@@ -558,6 +558,7 @@ private fun NowPlayingContent(song: SongItem, state: com.metrolist.shared.ui.pla
                 LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
             }
         }
+        SpokenWordControls(song = song, controller = controller, modifier = Modifier.fillMaxWidth())
         SteerCard(tint, captions = false)
         UpNextCard(state.queue, state.currentQueueIndex) { controller.playQueueIndex(it) }
     }

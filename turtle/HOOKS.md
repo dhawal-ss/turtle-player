@@ -4,15 +4,17 @@ Every line we change in an upstream (Metrolist) file is listed here, with the re
 else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-hooks.sh`) fails a PR
 that edits an upstream path without also updating this file.
 
-Budget: **under 55 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
+Budget: **under 75 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
 20 Nov 2026 when we chose to replace upstream's UI with Shell, from 40 the same day when the
 product owner asked that the whole app, player surfaces and dialogs included, use Shell's design,
 and from 50 the same day because the product owner scrapped Listen Together (20 Nov 2026), which
-needs four lines (#41 to #43) to switch off without deleting upstream's ~200 files;
+needs four lines (#41 to #43) to switch off without deleting upstream's ~200 files, and to 75 the
+same day when the product owner asked for "everything to be Turtle": rebrand (#44 to #47),
+Shell settings and menus (#49 to #53), podcasts (#54) and Turtle DJ effects (#55);
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **51** hook lines, plus about 55 lines of behavior patches below.
+Current total: **69** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -55,6 +57,18 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 41 | `shared/settings/Settings.kt` | 2 | `listenTogetherEnabled` becomes a getter/setter that reads false while `TurtleUiSlots.hideListenTogether` is set; the stored preference moves to `private var listenTogetherEnabledStored` under the same key | The product owner scrapped Listen Together (20 Nov 2026). Upstream's own off switch already stops the manager connecting, restoring or auto-joining a room, sending, and notifying, and hides its gated entry points (desktop sidebar, Android top-bar button, player and queue menus, Android/mobile/desktop invite deep links, settings search); forcing it off at the source covers them all and a stored `true` from an earlier install. Shell sets the flag in `TurtleUi.install()` | Product designer |
 | 42 | `shared/ui/settings/SharedIntegrationsScreen.kt` | 1 | First line of `SharedIntegrationsScreen`: shadows `host` with `host.copy(listenTogetherManager = null, onOpenListenTogether = null)` while the flag is set | Removes the Listen Together card from Integrations settings on Android, desktop and mobile (upstream shows it even when switched off, leading to its enable toggle) | Product designer |
 | 43 | `shared/ui/navigation/Screen.kt` | 1 | `screenForNavigationId`: `NavigationId.LISTEN_TOGETHER -> Screen.ListenTogether.takeUnless { TurtleUiSlots.hideListenTogether }` | The large-screen Android rail (`visibleSidebarScreens`) ignores upstream's off switch; this drops the tab there and in every other id-to-screen lookup | Product designer |
+| 44 | `shared/build.gradle.kts` | 3 | In `prepareComposeResourceAliases` (a Sync of `composeResources` into the build dir): `from(catalog) { exclude("drawable/logo.png") }`, `from(rootProject.file("turtle/branding"))`, and `filesMatching("**/strings*.xml") { filter { … } }` replacing "Metrolist" with "Turtle" in `<string>` lines except `credits_*` and `account_menu_license` | Rebrand to Turtle in every language without editing upstream's 58 strings files, so string merges stay conflict-free. Credits and the GPL notice keep naming Metrolist; lowercase paths (`~/.config/metrolist`) are untouched. The in-app logo comes from `turtle/branding/drawable/logo.png`. Note: resource offsets are compiled into `:shared`, so never run the app with `:shared:compileKotlinDesktop` excluded after strings change | Product designer |
+| 45 | `androidApp/build.gradle.kts` | 2 | `manifestPlaceholders["appLabel"]` is "Turtle" (release) and "Turtle Debug" (debug) | The launcher name | Product designer |
+| 46 | `desktop/Main.kt`, `desktop/utils/ComposeTrayManager.kt` | 2 | Window title "Turtle"/"Turtle Debug"; tray tooltip fallback "Turtle" | Desktop name | Product designer |
+| 47 | Icons (whole files) | 0 | `androidApp/.../res/mipmap-anydpi-v26/ic_launcher.xml` points at our `turtle_icon_*` drawables; `res/drawable/ic_notification.xml`, `desktopMain/resources/logo.svg`, `logo.png`, `logo_dark.png` replaced with the Turtle mark | Turtle's own icon. On an upstream conflict in these files, keep ours. Installer icons (`logo.ico`, `logo.icns`) are still upstream's | Product designer |
+| 48 | `desktop/ui/screens/LoginDialog.kt` | 1 | `requestDismiss` also dismisses when `cleanupError != null` | Upstream bug: cancelling sign-in wipes the WebView2 profile while the app's own WebView2 still holds its files, so cleanup fails forever and the dialog can never close. Now the second close closes it | KMP lead |
+| 49 | `shared/ui/settings/SharedSettingsScreen.kt` | 1 | First line of `SharedSettingsRegistryScreen`: `TurtleUiSlots.settingsScreen?.let { return it(SettingsScreenSlot(host, modifier, registryFactory)) }` | Shell draws every Settings page (phone, desktop overlay, Integrations) from upstream's own registry, so every setting, search hit and deep link keeps working. Navigation and search go through public wrappers in our `turtle/TurtleSettingsSlots.kt` | Product designer |
+| 50 | `shared/ui/menu/SheetMediaMenu.kt` | 1 | First line of the sheet menu header: `TurtleUiSlots.menuHeader?.let { return it(MenuHeaderSlot(..., popup = false)) }` | Song/item menus use Shell's header | Product designer |
+| 51 | `shared/ui/menu/ContextMediaMenu.kt` | 3 | First lines of the popup header, primary action tiles and action group: `menuHeader`, `menuPrimaryActions`, `menuActionGroup` slots | Shell's context menus; upstream still decides actions, order and nesting. Actions beyond the first three show as rows instead of being dropped | Product designer |
+| 52 | `shared/ui/components/PlayerMenuComponents.kt` | 2 | First lines of the player menu's action group and primary actions: `menuActionGroup`, `menuPrimaryActions` | Player menus in Shell's look | Product designer |
+| 53 | `shared/ui/menu/DesktopDropdownMenu.kt` | 1 | `if (TurtleUiSlots.menuSurface?.let { it(MenuSurfaceSlot(...)); true } == null) Surface(` | Desktop menu panels drawn as Shell surfaces | Product designer |
+| 54 | `shared/ui/screens/PodcastContent.kt` | 1 | First line of `PodcastContent`: `TurtleUiSlots.podcastPage?.let { return it(PodcastPageSlot(...)) }` | Shell's podcast show page (follow, play latest, episode progress) | Product designer |
+| 55 | `shared/equalizer/EqualizerProfiles.kt` | 1 | `configuration` returns `TurtleAudioFx.equalizerOverride ?:` upstream's value (our `shared/.../turtle/TurtleAudioFx.kt`, one volatile field) | Turtle DJ's live effects (filter sweep, bass boost/cut, bass swap during blends) without rewriting the listener's saved EQ many times a second. Null outside a DJ set, so upstream's EQ is untouched | Recommendations engineer |
 
 ## Behavior patches
 

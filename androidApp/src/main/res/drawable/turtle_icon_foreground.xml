@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Turtle's mark: a domed shell in three plates, head up, two feet (turtle/HOOKS.md #47). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shell -->
+    <path android:fillColor="#D4F55A" android:pathData="M29,62 C29,46 40,37 54,37 C68,37 79,46 79,62 Z" />
+    <!-- Plates, cut into the shell -->
+    <path android:fillColor="#00000000" android:strokeColor="#0B0B0C" android:strokeWidth="2.6" android:strokeLineCap="round"
+        android:pathData="M50,45.5 L58,45.5 L62,52.5 L58,59.5 L50,59.5 L46,52.5 Z M46,52.5 L34,55 M62,52.5 L74,55 M50,45.5 L47,39.5 M58,45.5 L61,39.5" />
+    <!-- Head -->
+    <path android:fillColor="#D4F55A" android:pathData="M80,58 C80,52.5 83.5,49 88,49 C92.5,49 95,52.5 95,56 C95,59.5 92,62 88,62 L81,62 C80.4,61 80,59.6 80,58 Z" />
+    <path android:fillColor="#0B0B0C" android:pathData="M89.4,54.6 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0" />
+    <!-- Feet -->
+    <path android:fillColor="#D4F55A" android:pathData="M35,63 L44,63 L44,69 C44,70.7 42.7,72 41,72 L38,72 C36.3,72 35,70.7 35,69 Z" />
+    <path android:fillColor="#D4F55A" android:pathData="M64,63 L73,63 L73,69 C73,70.7 71.7,72 70,72 L67,72 C65.3,72 64,70.7 64,69 Z" />
+    <!-- Tail -->
+    <path android:fillColor="#D4F55A" android:pathData="M29,59 L22,62 L29,62 Z" />
+</vector>

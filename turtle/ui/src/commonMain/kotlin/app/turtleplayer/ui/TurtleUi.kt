@@ -39,6 +39,12 @@ object TurtleUi {
         TurtleUiSlots.playlistPage = { app.turtleplayer.ui.screens.ShellPlaylistPage(it) }
         TurtleUiSlots.albumPage = { app.turtleplayer.ui.screens.ShellAlbumPage(it) }
         TurtleUiSlots.libraryPage = { app.turtleplayer.ui.screens.ShellLibraryPage(it) }
+        TurtleUiSlots.settingsScreen = { app.turtleplayer.ui.screens.ShellSettingsScreen(it) }
+        TurtleUiSlots.menuHeader = { app.turtleplayer.ui.screens.ShellMenuHeader(it) }
+        TurtleUiSlots.menuPrimaryActions = { app.turtleplayer.ui.screens.ShellMenuPrimaryActions(it) }
+        TurtleUiSlots.menuActionGroup = { app.turtleplayer.ui.screens.ShellMenuActionGroup(it) }
+        TurtleUiSlots.menuSurface = { app.turtleplayer.ui.screens.ShellMenuSurface(it) }
+        TurtleUiSlots.podcastPage = { app.turtleplayer.ui.screens.ShellPodcastPage(it) }
     }
 
     /** Shell's scheme for the whole app; reading [ShellThemes.active] recomposes the app when the theme changes. */

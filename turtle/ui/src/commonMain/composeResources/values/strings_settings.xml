@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shell_set_results">%1$d results</string>
+    <string name="shell_set_show">Show</string>
+    <string name="shell_set_hide">Hide</string>
+    <string name="shell_set_selected">Selected</string>
+    <string name="shell_set_explicit_badge">E</string>
+</resources>

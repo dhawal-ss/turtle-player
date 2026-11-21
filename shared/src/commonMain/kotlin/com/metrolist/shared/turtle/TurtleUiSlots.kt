@@ -58,6 +58,7 @@ object TurtleUiSlots {
     var albumPage: (@Composable (AlbumPageSlot) -> Unit)? = null
     var artistPage: (@Composable (ArtistPageSlot) -> Unit)? = null
     var libraryPage: (@Composable (LibraryPageSlot) -> Unit)? = null
+    var podcastPage: (@Composable (PodcastPageSlot) -> Unit)? = null
 
     /** True hides upstream's "support the Metrolist developers" launch prompt. */
     var hideSupportPrompt: Boolean = false
@@ -75,6 +76,17 @@ object TurtleUiSlots {
 
     /** While true, upstream's full player shows instead of ours (Shell hands over for lyrics, queue, more). */
     var showUpstreamPlayer by mutableStateOf(false)
+
+    /** Shell's Settings (and Integrations) drawn from upstream's settings registry; null keeps upstream's. */
+    var settingsScreen: (@Composable (SettingsScreenSlot) -> Unit)? = null
+
+    /** Shell's look for upstream's media menus (sheets and context menus); null keeps upstream's. */
+    var menuHeader: (@Composable (MenuHeaderSlot) -> Unit)? = null
+    var menuPrimaryActions: (@Composable (MenuActionsSlot) -> Unit)? = null
+    var menuActionGroup: (@Composable (MenuActionsSlot) -> Unit)? = null
+
+    /** Shell's panel for upstream's desktop dropdown and context menus; null keeps upstream's. */
+    var menuSurface: (@Composable (MenuSurfaceSlot) -> Unit)? = null
 }
 
 /** Everything upstream's HomeContent receives that our Home needs; callbacks keep upstream's wiring. */

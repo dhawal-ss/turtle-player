@@ -221,6 +221,10 @@ object TurtleBridge {
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
 
+    // Spoken word (TurtleSpoken.kt): podcast shelves, the audiobook catalog and per-book resume.
+    /** Podcasts and audiobooks for Shell; independent of the runtime, so it works before it starts. */
+    val spoken: TurtleSpoken get() = TurtleSpoken
+
     private const val KOIN_POLL_MS = 100L
     private const val STARTUP_WAIT_MS = 60_000L
 }

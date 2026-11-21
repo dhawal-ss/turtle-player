@@ -113,6 +113,7 @@ fun ExpressiveMediaMenuHeader(
     actions: List<MediaMenuHeaderAction> = emptyList(),
     subtitleLinks: AnnotatedString? = null,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuHeader?.let { return it(com.metrolist.shared.turtle.MenuHeaderSlot(title, subtitle, thumbnail, modifier, thumbnailAspectRatio, fallbackIcon, isExplicit, artistId, actions, subtitleLinks, popup = false)) } // Turtle: HOOKS.md #50
     Row(
         modifier =
             modifier

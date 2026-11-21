@@ -157,6 +157,7 @@ fun PodcastContent(
     detailsInDialog: Boolean = false,
     onLoadMore: (() -> Unit)? = null,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.podcastPage?.let { return it(com.metrolist.shared.turtle.PodcastPageSlot(page, isLoading, isSaving, error, onBackClick, onRetry, onPlay, onToggleSaved, onPodcastMenuClick, onEpisodeClick, onToggleEpisodeSaved, onPlayNext, onAddToQueue, onDownload, onShare, modifier, contentPadding, currentEpisodeId, isPlaying, onChannelClick, detailsInDialog, onLoadMore)) } // Turtle: HOOKS.md #54
     val listState = rememberLazyListState()
     LaunchedEffect(listState, page?.continuation, page?.episodes?.size, isLoading, error) {
         if (page?.continuation == null || isLoading || error != null || onLoadMore == null) return@LaunchedEffect

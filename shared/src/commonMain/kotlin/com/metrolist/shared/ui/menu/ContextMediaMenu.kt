@@ -460,6 +460,7 @@ private fun MediaContextMenuHeader(
     subtitleLinks: AnnotatedString?,
     thumbnailAspectRatio: Float = 1f,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuHeader?.let { return it(com.metrolist.shared.turtle.MenuHeaderSlot(title, subtitle, thumbnail, Modifier, thumbnailAspectRatio, fallbackIcon, isExplicit, null, emptyList(), subtitleLinks, popup = true)) } // Turtle: HOOKS.md #51
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -530,6 +531,7 @@ private fun MediaContextMenuHeader(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ExpressiveMenuPrimaryActions(actions: List<PlayerMenuAction>) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuPrimaryActions?.let { return it(com.metrolist.shared.turtle.MenuActionsSlot(actions, Modifier, popup = true)) } // Turtle: HOOKS.md #51
     val visibleActions = actions.take(3)
     if (visibleActions.isEmpty()) return
     Row(
@@ -614,6 +616,7 @@ fun ExpressiveMenuActionGroup(
     groupIndex: Int,
     groupCount: Int,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.menuActionGroup?.let { return it(com.metrolist.shared.turtle.MenuActionsSlot(actions, Modifier, popup = true, groupIndex = groupIndex, groupCount = groupCount)) } // Turtle: HOOKS.md #51
     DropdownMenuGroup(
         shapes = MenuDefaults.groupShape(if (isDesktop) 0 else groupIndex, if (isDesktop) 1 else groupCount),
         modifier = Modifier.fillMaxWidth(),
