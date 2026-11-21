@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell Search (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_search_loading">Searching</string>
+    <string name="shell_search_failed">Couldn’t load results. Check your connection.</string>
+    <string name="shell_search_retry">Try again</string>
+    <string name="shell_search_no_results">No results for “%1$s”</string>
+    <string name="shell_search_no_results_hint">Check the spelling, try fewer words, or start from a vibe.</string>
+    <string name="shell_search_remove_history">Remove %1$s from recent searches</string>
+    <string name="shell_search_liked_badge">Liked</string>
+    <string name="shell_search_liked_song">Liked song</string>
+</resources>

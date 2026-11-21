@@ -24,6 +24,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,22 +90,39 @@ private fun BottomTabs(slot: NavigationSlot) {
             exit = slideOutVertically(ShellMotion.exit()) { it } + fadeOut(ShellMotion.exit()),
             modifier = modifier,
         ) {
+            // Report the full height, system navigation bar included, so the mini player sits above the tabs.
             Row(
-                Modifier.fillMaxWidth().background(c.ground.copy(alpha = 0.96f)).windowInsetsPadding(WindowInsets.navigationBars)
-                    .height(64.dp).onSizeChanged { with(density) { slot.onOccupiedHeightChanged(it.height.toDp()) } },
+                Modifier.fillMaxWidth().onSizeChanged { with(density) { slot.onOccupiedHeightChanged(it.height.toDp()) } }
+                    // Content fades out behind the mini player above the tabs, as in Spotify.
+                    .drawBehind {
+                        val fade = 88.dp.toPx()
+                        drawRect(
+                            Brush.verticalGradient(0f to Color.Transparent, 1f to c.ground.copy(alpha = 0.96f), startY = -fade, endY = 0f),
+                            topLeft = Offset(0f, -fade), size = Size(size.width, fade),
+                        )
+                    }
+                    .background(c.ground.copy(alpha = 0.96f)).windowInsetsPadding(WindowInsets.navigationBars).height(68.dp),
             ) {
                 slot.items.forEachIndexed { i, item ->
                     val selected = i == slot.selectedIndex
                     val tint by animateColorAsState(if (selected) c.ink else c.ink2, ShellMotion.emphasized())
                     val pop by animateFloatAsState(if (selected) 1f else 0.94f, ShellMotion.spring())
+                    // A soft pill grows behind the selected glyph (H-Motion 07); lime stays for "yours / now".
+                    val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
+                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Glyph(glyphFor(item, selected), tint, 24.dp, Modifier.scale(pop))
+                        Box(contentAlignment = Alignment.Center) {
+                            Box(Modifier.size(56.dp, 32.dp).graphicsLayer { scaleX = 0.6f + 0.4f * pill; alpha = pill }.clip(CircleShape).background(c.surface3))
+                            Glyph(glyphFor(item, selected), tint, 24.dp, Modifier.scale(pop))
+                        }
                         Spacer(Modifier.height(4.dp))
-                        Text(item.label, style = Shell.type.bodySmall.copy(fontSize = Shell.type.index.fontSize), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            item.label, style = Shell.type.bodySmall.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
+                            color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -104,12 +130,12 @@ private fun BottomTabs(slot: NavigationSlot) {
     }
     if (slot.floating) {
         Box(slot.modifier.fillMaxSize()) {
-            slot.content()
+            SlotContent(slot)
             bar(Modifier.align(Alignment.BottomCenter))
         }
     } else {
         Column(slot.modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f)) { slot.content() }
+            Box(Modifier.weight(1f)) { SlotContent(slot) }
             bar(Modifier)
         }
     }
@@ -129,7 +155,7 @@ private fun Rail(slot: NavigationSlot) {
                     val bg by animateColorAsState(if (selected) c.accent else c.ground, ShellMotion.emphasized())
                     val fg by animateColorAsState(if (selected) c.onAccent else c.ink2, ShellMotion.emphasized())
                     Column(
-                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
+                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -142,6 +168,18 @@ private fun Rail(slot: NavigationSlot) {
                 slot.footer?.invoke()
             }
         }
-        Box(Modifier.weight(1f).fillMaxHeight()) { slot.content() }
+        Box(Modifier.weight(1f).fillMaxHeight()) { SlotContent(slot) }
     }
+}
+
+/**
+ * Upstream pages read their text colour from [LocalContentColor]; upstream's own scaffold provides
+ * it, so our takeover must too or their titles render black on the dark ground.
+ */
+@Composable
+internal fun SlotContent(slot: NavigationSlot) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalContentColor provides androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+        content = slot.content,
+    )
 }

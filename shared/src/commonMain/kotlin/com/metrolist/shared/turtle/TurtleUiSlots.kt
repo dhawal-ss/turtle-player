@@ -124,6 +124,8 @@ class NavigationSlot(
     val footer: (@Composable () -> Unit)?,
     val modifier: Modifier,
     val content: @Composable () -> Unit,
+    /** Upstream's per-tab modifier (long-press Search for music recognition, TV focus), by item index. */
+    val itemModifier: @Composable (Int) -> Modifier = { Modifier },
 )
 
 /** Desktop's bottom player bar, with the actions that live in desktop-only state. */
@@ -137,6 +139,12 @@ class DesktopPlayerBarSlot(
     val onVolumeChange: (Float) -> Unit,
     /** The restored track before playback starts (desktop loads it into the player only on play). */
     val restoredSong: SongItem?,
+    val isShuffled: () -> Boolean = { false },
+    val onToggleShuffle: (() -> Unit)? = null,
+    val repeatMode: () -> com.metrolist.shared.model.RepeatMode = { com.metrolist.shared.model.RepeatMode.OFF },
+    val onCycleRepeat: (() -> Unit)? = null,
+    val isQueueOpen: () -> Boolean = { false },
+    val isLyricsOpen: () -> Boolean = { false },
 )
 
 /**

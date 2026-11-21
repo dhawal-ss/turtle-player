@@ -150,7 +150,7 @@ private val NowPlayingWidth = 340.dp
 internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlot) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
-    val state by controller.state.collectAsState()
+    val state by controller.rememberCalmState()
     val route = LocalNavigator.current.state.currentRoute
     LaunchedEffect(route) { ShellDesktop.explore = false }
     BoxWithConstraints(slot.modifier.fillMaxSize().background(c.frame)) {
@@ -162,7 +162,7 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 DesktopSidebar(slot, library, collapsed, Modifier.width(sidebarWidth).fillMaxHeight().padding(start = 8.dp, top = 8.dp, bottom = 8.dp))
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
-                CompositionLocalProvider(LocalShellGround provides c.panel) { slot.content() }
+                CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
                 // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
                 ExploreOverlay()
             }
@@ -269,8 +269,7 @@ private fun LibraryCard(
 ) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
-    val state by controller.state.collectAsState()
-    val scope = rememberCoroutineScope()
+    val state by controller.rememberCalmState()
     val infinityTitle = stringResource(Res.string.shell_infinity_title)
     val likedTitle = stringResource(Res.string.shell_liked_songs)
     val playlistKind = stringResource(Res.string.shell_kind_playlist)
@@ -282,18 +281,15 @@ private fun LibraryCard(
 
     val filter = ShellDesktop.libraryFilter
     val items = library.items()
+    val activeQueue = ShellQueue.activeTitle(state)
     val rows = buildList {
         if (filter == LibraryFilter.ALL || filter == LibraryFilter.PLAYLISTS) {
             add(LibraryRow("liked", likedTitle, playlistKind, null, false, Glyphs.Heart, c.onAccent, c.accent) {
                 library.open(PlaylistItem(id = BuiltinPlaylist.LIKED.id, title = likedTitle, thumbnail = null))
             })
             add(
-                LibraryRow("infinity", infinityTitle, infinityMeta, null, false, Glyphs.Infinity, c.accent, c.surface2, playing = state.queueTitle == infinityTitle && state.isPlaying) {
-                    if (state.queueTitle == infinityTitle) controller.togglePlayPause()
-                    else scope.launch {
-                        val songs = TurtleBridge.infinityMix()
-                        if (songs.isNotEmpty()) controller.playQueue(songs, queueTitle = infinityTitle)
-                    }
+                LibraryRow("infinity", infinityTitle, infinityMeta, null, false, Glyphs.Infinity, c.accent, c.surface2, playing = activeQueue == infinityTitle && state.isPlaying) {
+                    if (activeQueue == infinityTitle) controller.togglePlayPause() else ShellActions.playInfinity(controller, infinityTitle)
                 },
             )
         }
@@ -309,7 +305,7 @@ private fun LibraryCard(
                     else -> playlistKind
                 }
                 val art = (item as? PlaylistItem)?.customThumbnail ?: item.thumbnail
-                add(LibraryRow(item.id, item.title, meta, art, item is ArtistItem, playing = state.queueTitle == item.title && state.isPlaying) { library.open(item) })
+                add(LibraryRow(item.id, item.title, meta, art, item is ArtistItem, playing = activeQueue == item.title && state.isPlaying) { library.open(item) })
             }
     }
     val query = ShellDesktop.libraryQuery.trim()
@@ -326,7 +322,7 @@ private fun LibraryCard(
             val tint by animateColorAsState(if (hovered || librarySelected) c.ink else c.ink2, ShellMotion.emphasized())
             Row(
                 Modifier.height(44.dp).clip(RoundedCornerShape(6.dp)).hoverable(source)
-                    .shellPressable({ ShellDesktop.libraryCollapsed = !ShellDesktop.libraryCollapsed }, label = stringResource(if (collapsed) Res.string.shell_expand_library else Res.string.shell_collapse_library))
+                    .shellPressable({ ShellDesktop.libraryCollapsed = !collapsed }, label = stringResource(if (collapsed) Res.string.shell_expand_library else Res.string.shell_collapse_library))
                     .padding(horizontal = if (collapsed) 12.dp else 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -418,18 +414,17 @@ private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, modifier: Modifi
 private fun NowPlayingPanel(modifier: Modifier) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
-    val state by controller.state.collectAsState()
+    val state by controller.rememberCalmState()
     val song = state.currentSong ?: ShellDesktop.restoredSong ?: return
-    val scope = rememberCoroutineScope()
-    val tint = artworkTint(song.displayThumbnailUrl, 0.28f, base = c.panel)
+    val tint = artworkTint(song.displayThumbnailUrl, 0.14f, base = c.panel)
     Column(
-        modifier.clip(PanelShape).background(Brush.verticalGradient(0f to tint, 0.55f to c.panel))
+        modifier.clip(PanelShape).background(tint)
             .verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                state.queueTitle?.takeIf { it.isNotBlank() } ?: song.title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold),
+                ShellQueue.activeTitle(state) ?: song.title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold),
                 color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
             )
             SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.nowPlayingOpen = false }
@@ -443,17 +438,17 @@ private fun NowPlayingPanel(modifier: Modifier) {
             Column(Modifier.weight(1f)) {
                 AnimatedContent(song, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, contentKey = { it.id }) { s ->
                     Column {
-                        Text(s.title, style = Shell.type.headline.copy(fontSize = 22.sp, lineHeight = 26.sp), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(s.title, style = Shell.type.body.copy(fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(s.artists.joinToString(", ") { it.name }, style = Shell.type.body, color = c.ink.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
             GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
-                scope.launch { TurtleBridge.lessLikeThis(song); delay(300); controller.skipToNext() }
+                ShellActions.lessLikeThis(controller, song)
             }, c.ink2, size = 36.dp, iconSize = 20.dp)
             LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
         }
-        SteerCard(tint)
+        SteerCard(tint, captions = false)
         UpNextCard(state.queue, state.currentQueueIndex) { controller.playQueueIndex(it) }
     }
 }

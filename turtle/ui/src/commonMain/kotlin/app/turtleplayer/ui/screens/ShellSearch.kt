@@ -1,10 +1,16 @@
 package app.turtleplayer.ui.screens
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,18 +32,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,11 +54,16 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.Equalizer
@@ -77,9 +91,18 @@ import app.turtleplayer.ui.generated.resources.shell_kind_album
 import app.turtleplayer.ui.generated.resources.shell_kind_artist
 import app.turtleplayer.ui.generated.resources.shell_kind_playlist
 import app.turtleplayer.ui.generated.resources.shell_kind_song
+import app.turtleplayer.ui.generated.resources.shell_meta_pair
 import app.turtleplayer.ui.generated.resources.shell_playlists
 import app.turtleplayer.ui.generated.resources.shell_recent_searches
+import app.turtleplayer.ui.generated.resources.shell_search_failed
 import app.turtleplayer.ui.generated.resources.shell_search_hint
+import app.turtleplayer.ui.generated.resources.shell_search_liked_badge
+import app.turtleplayer.ui.generated.resources.shell_search_liked_song
+import app.turtleplayer.ui.generated.resources.shell_search_loading
+import app.turtleplayer.ui.generated.resources.shell_search_no_results
+import app.turtleplayer.ui.generated.resources.shell_search_no_results_hint
+import app.turtleplayer.ui.generated.resources.shell_search_remove_history
+import app.turtleplayer.ui.generated.resources.shell_search_retry
 import app.turtleplayer.ui.generated.resources.shell_search_title
 import app.turtleplayer.ui.generated.resources.shell_songs
 import app.turtleplayer.ui.generated.resources.shell_top_result
@@ -103,7 +126,9 @@ import com.metrolist.shared.model.SearchSummary
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.model.displayThumbnailUrl
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.turtle.SearchSlot
+import kotlinx.coroutines.flow.distinctUntilChanged
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 
@@ -118,6 +143,9 @@ private val FILTERS: List<Pair<SearchFilter?, StringResource>> = listOf(
     SearchFilter.FEATURED_PLAYLIST to Res.string.shell_playlists,
 )
 
+/** Only the first results rise in (H-Motion); the rest of a long list appears without delay. */
+private const val RISE_COUNT = 8
+
 /**
  * Shell's Search, in Spotify's familiar shape: a white search field, Browse all tiles before typing,
  * suggestions while typing, and after searching a top result followed by songs and card rows.
@@ -131,8 +159,38 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
     BoxWithConstraints(slot.modifier.fillMaxSize().background(LocalShellGround.current ?: c.ground)) {
         val wide = maxWidth > 840.dp
         val listState = rememberLazyListState()
-        val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
-        LaunchedEffect(nearEnd, s.selectedFilter) { if (nearEnd && s.selectedFilter != null && s.filteredResults?.continuation != null) slot.onLoadMore() }
+
+        // Results, de-duplicated by id once per page so LazyColumn keys stay unique.
+        val filtered = s.filteredResults
+        val filteredItems = remember(filtered) { filtered?.items.orEmpty().distinctBy { it.id } }
+        val summaries = remember(s.searchSummary) {
+            s.searchSummary?.summaries.orEmpty().map { it.copy(items = it.items.distinctBy { item -> item.id }) }
+        }
+        val top = remember(summaries) { summaries.firstOrNull { it.isTopResult }?.items?.firstOrNull() }
+        val rest = remember(summaries) { summaries.filterNot { it.isTopResult } }
+        val songsBeside = remember(rest, top, wide) {
+            if (wide && top != null) rest.firstOrNull { sm -> sm.items.isNotEmpty() && sm.items.all { it is SongItem } } else null
+        }
+        val sections = remember(rest, songsBeside) { rest.filter { it !== songsBeside && it.items.isNotEmpty() } }
+        val suggestionQueries = remember(s.searchSuggestions) { s.searchSuggestions?.queries.orEmpty().distinct().take(6) }
+        val suggestionItems = remember(s.searchSuggestions) { s.searchSuggestions?.recommendedItems.orEmpty().distinctBy { it.id }.take(5) }
+
+        val showingFiltered = s.selectedFilter != null && filtered != null
+        val hasResults = if (s.selectedFilter != null) filteredItems.isNotEmpty() else summaries.any { it.items.isNotEmpty() }
+        // Mirrors upstream's showNoResults (SearchContent.kt).
+        val showNoResults = s.hasSearched && !s.isSearching && !s.searchFailed &&
+            if (showingFiltered) filteredItems.isEmpty() && filtered?.continuation == null else summaries.all { it.items.isEmpty() }
+        // Keys of results that already rose in for this query and filter, so scrolling back never replays it.
+        val risen = remember(s.query, s.selectedFilter) { mutableSetOf<Any>() }
+
+        // Paging, keyed like upstream so a page that still leaves us near the end asks for the next one.
+        LaunchedEffect(s.selectedFilter, filtered?.continuation, filteredItems.size, s.isLoadingMore, s.loadMoreFailed) {
+            if (s.selectedFilter == null || filtered?.continuation == null || s.isLoadingMore || s.loadMoreFailed) return@LaunchedEffect
+            snapshotFlow {
+                val info = listState.layoutInfo
+                info.totalItemsCount > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 3
+            }.distinctUntilChanged().collect { nearEnd -> if (nearEnd) slot.onLoadMore() }
+        }
 
         LazyColumn(
             state = listState,
@@ -149,19 +207,14 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
 
             when {
                 !s.isQuerySubmitted && s.query.isBlank() -> {
-                    if (s.searchHistory.isNotEmpty()) {
-                        item(key = "recent") {
-                            SectionTitle(stringResource(Res.string.shell_recent_searches))
-                            FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                s.searchHistory.take(8).forEach { q -> ShellChip(q, false, { slot.onHistoryItemClick(q) }) }
-                            }
-                        }
+                    val history = s.searchHistory.distinct().take(8)
+                    if (history.isNotEmpty()) {
+                        item(key = "recent") { SectionTitle(stringResource(Res.string.shell_recent_searches)) }
+                        items(history, key = { "h:$it" }) { q -> HistoryRow(q, slot) }
                     }
                     item(key = "vibes") {
                         SectionTitle(stringResource(Res.string.shell_vibes_title))
-                        FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            VIBES.forEach { res -> val v = stringResource(res); ShellChip(v, false, { slot.onSearch(v) }) }
-                        }
+                        VibeChips(slot)
                     }
                     item(key = "browse") {
                         SectionTitle(stringResource(Res.string.shell_browse_all))
@@ -177,58 +230,96 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
                 }
 
                 !s.isQuerySubmitted -> {
-                    val suggestions = s.searchSuggestions
-                    items(suggestions?.queries.orEmpty().take(6), key = { "q:$it" }) { q ->
+                    items(suggestionQueries, key = { "q:$it" }) { q ->
                         Row(Modifier.widthIn(max = 760.dp).fillMaxWidth().shellPressable({ slot.onSearch(q) }).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Glyph(Glyphs.Search, c.ink2, 18.dp)
                             Spacer(Modifier.width(14.dp))
                             Text(q, style = Shell.type.body, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    items(suggestions?.recommendedItems.orEmpty().take(5), key = { "r:${it.id}" }) { item -> Box(Modifier.widthIn(max = 760.dp)) { ResultRow(item, slot) } }
+                    items(suggestionItems, key = { "r:${it.id}" }) { item -> Box(Modifier.widthIn(max = 760.dp)) { ResultRow(item, slot) } }
                 }
 
                 else -> {
                     item(key = "filters") {
-                        Row(Modifier.padding(16.dp, 14.dp, 16.dp, 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()).padding(16.dp, 14.dp, 16.dp, 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FILTERS.forEach { (f, res) -> ShellChip(stringResource(res), s.selectedFilter == f, { slot.onFilterSelected(f) }) }
                         }
                     }
-                    if (s.selectedFilter != null) {
-                        items(s.filteredResults?.items.orEmpty(), key = { "f:${it.id}" }) { item -> ResultRow(item, slot) }
-                    } else {
-                        val summaries = s.searchSummary?.summaries.orEmpty()
-                        val top = summaries.firstOrNull { it.isTopResult }?.items?.firstOrNull()
-                        val rest = summaries.filterNot { it.isTopResult }
-                        val songsBeside = if (wide && top != null) rest.firstOrNull { sm -> sm.items.isNotEmpty() && sm.items.all { it is SongItem } } else null
-                        if (top != null && songsBeside != null) {
-                            // Spotify's desktop shape: the top result beside the first four songs.
-                            item(key = "top") {
-                                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Column(Modifier.weight(0.42f)) {
-                                        SectionTitle(stringResource(Res.string.shell_top_result))
-                                        TopResultCard(top, slot, wide, Modifier.weight(1f))
-                                    }
-                                    Column(Modifier.weight(0.58f)) {
-                                        SectionTitle(sectionTitle(songsBeside), start = 0.dp)
-                                        songsBeside.items.take(4).forEach { item -> ResultRow(item, slot, compact = true) }
+                    when {
+                        s.isSearching && !hasResults -> item(key = "skeleton") { SkeletonRows() }
+                        s.searchFailed && !hasResults -> item(key = "failed") {
+                            Message(stringResource(Res.string.shell_search_failed), null) {
+                                ShellChip(stringResource(Res.string.shell_search_retry), false, {
+                                    val f = s.selectedFilter
+                                    if (f != null) slot.onFilterSelected(f) else slot.onSearch(s.query)
+                                })
+                            }
+                        }
+                        showNoResults -> item(key = "empty") {
+                            Message(stringResource(Res.string.shell_search_no_results, s.query), stringResource(Res.string.shell_search_no_results_hint)) {
+                                VibeChips(slot, Modifier)
+                            }
+                        }
+                        s.selectedFilter != null -> {
+                            itemsIndexed(filteredItems, key = { _, it -> "f:${it.id}" }) { i, item ->
+                                ResultRow(item, slot, modifier = Modifier.rise("f:${item.id}", i, risen))
+                            }
+                            if (s.isLoadingMore || s.loadMoreFailed) {
+                                item(key = "more") {
+                                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                        if (s.loadMoreFailed) {
+                                            ShellChip(stringResource(Res.string.shell_search_retry), false, { slot.onLoadMore() })
+                                        } else {
+                                            CircularProgressIndicator(Modifier.size(20.dp), color = c.ink2, strokeWidth = 2.dp)
+                                        }
                                     }
                                 }
                             }
-                        } else if (top != null) {
-                            item(key = "top") {
-                                SectionTitle(stringResource(Res.string.shell_top_result))
-                                TopResultCard(top, slot, wide)
-                            }
                         }
-                        rest.filter { it !== songsBeside }.forEach { summary ->
-                            if (summary.items.all { it is SongItem }) {
-                                item(key = "t:${summary.title}") { SectionTitle(sectionTitle(summary)) }
-                                items(summary.items.take(6), key = { "s:${summary.title}:${it.id}" }) { item -> ResultRow(item, slot) }
-                            } else {
-                                item(key = "c:${summary.title}") {
-                                    SectionTitle(sectionTitle(summary))
-                                    CardRow(summary.items, slot, wide)
+                        else -> {
+                            var n = 0
+                            if (top != null && songsBeside != null) {
+                                n = 1 + minOf(4, songsBeside.items.size)
+                                // Spotify's desktop shape: the top result beside the first four songs.
+                                item(key = "top") {
+                                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Column(Modifier.weight(0.42f)) {
+                                            SectionTitle(stringResource(Res.string.shell_top_result))
+                                            TopResultCard(top, slot, wide, Modifier.weight(1f).rise("top:${top.id}", 0, risen))
+                                        }
+                                        Column(Modifier.weight(0.58f)) {
+                                            SectionTitle(sectionTitle(songsBeside), start = 0.dp)
+                                            songsBeside.items.take(4).forEachIndexed { i, item ->
+                                                ResultRow(item, slot, compact = true, modifier = Modifier.rise("sb:${item.id}", i + 1, risen))
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (top != null) {
+                                n = 1
+                                item(key = "top") {
+                                    SectionTitle(stringResource(Res.string.shell_top_result))
+                                    TopResultCard(top, slot, wide, Modifier.rise("top:${top.id}", 0, risen))
+                                }
+                            }
+                            sections.forEachIndexed { si, summary ->
+                                if (summary.items.all { it is SongItem }) {
+                                    val rows = summary.items.take(6)
+                                    val base = n
+                                    n += rows.size
+                                    item(key = "t:$si:${summary.title}") { SectionTitle(sectionTitle(summary)) }
+                                    itemsIndexed(rows, key = { _, it -> "s:$si:${it.id}" }) { i, item ->
+                                        ResultRow(item, slot, modifier = Modifier.rise("s:$si:${item.id}", base + i, risen))
+                                    }
+                                } else {
+                                    val index = n++
+                                    item(key = "c:$si:${summary.title}") {
+                                        Column(Modifier.rise("c:$si:${summary.title}", index, risen)) {
+                                            SectionTitle(sectionTitle(summary))
+                                            CardRow(summary.items, slot, wide)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -239,32 +330,110 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
     }
 }
 
+/**
+ * H-Motion's rise: fade in and lift 10dp, 300ms emphasized, staggered 80 + i×40ms. Only the first
+ * [RISE_COUNT] results animate, and each key only once per result set ([risen]).
+ */
+@Composable
+private fun Modifier.rise(key: Any, index: Int, risen: MutableSet<Any>): Modifier {
+    val progress = remember(key) { Animatable(if (index < RISE_COUNT && risen.add(key)) 0f else 1f) }
+    LaunchedEffect(key) {
+        if (progress.value < 1f) {
+            progress.animateTo(1f, tween(ShellMotion.EMPHASIZED_MS, 80 + index * ShellMotion.STAGGER_MS, ShellMotion.Emphasized))
+        }
+    }
+    return this.graphicsLayer {
+        alpha = progress.value
+        translationY = (1f - progress.value) * 10.dp.toPx()
+    }
+}
+
 @Composable
 private fun SearchField(slot: SearchSlot) {
     val c = Shell.colors
     val q = slot.uiState.query
+    val ring by animateColorAsState(if (q.isNotEmpty()) c.accent else c.accent.copy(alpha = 0f), tween(200, easing = ShellMotion.Emphasized))
+    val textStyle = Shell.type.body.copy(fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    // The ring sits just outside the field, like H-Search's box-shadow: a 2dp border around a 2dp gap.
+    Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().border(2.dp, ring, RoundedCornerShape(10.dp)).padding(2.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(8.dp)).background(c.ink)
+                .padding(start = 12.dp, end = if (q.isEmpty()) 12.dp else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Glyph(Glyphs.Search, c.ground, 22.dp)
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (q.isEmpty()) Text(stringResource(Res.string.shell_search_hint), style = textStyle, color = c.ground.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                BasicTextField(
+                    value = q,
+                    onValueChange = slot.onQueryChange,
+                    singleLine = true,
+                    textStyle = textStyle.copy(color = c.ground),
+                    cursorBrush = SolidColor(c.ground),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { slot.onSearch(q) }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(slot.focusRequester),
+                )
+            }
+            if (q.isNotEmpty()) {
+                GlyphButton(Glyphs.Close, stringResource(Res.string.shell_clear_search), { slot.onQueryChange("") }, c.ground, size = 48.dp, iconSize = 16.dp)
+            }
+        }
+    }
+}
+
+/** A recent search: tap to search again, ✕ (48dp target) to forget it. */
+@Composable
+private fun HistoryRow(q: String, slot: SearchSlot) {
+    val c = Shell.colors
     Row(
-        Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(48.dp).clip(RoundedCornerShape(8.dp)).background(c.ink).padding(horizontal = 12.dp),
+        Modifier.widthIn(max = 760.dp).fillMaxWidth().shellPressable({ slot.onHistoryItemClick(q) }).padding(start = 16.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Glyph(Glyphs.Search, c.ground, 22.dp)
-        Spacer(Modifier.width(10.dp))
-        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (q.isEmpty()) Text(stringResource(Res.string.shell_search_hint), style = Shell.type.body, color = c.ground.copy(alpha = 0.6f))
-            BasicTextField(
-                value = q,
-                onValueChange = slot.onQueryChange,
-                singleLine = true,
-                textStyle = Shell.type.body.copy(color = c.ground),
-                cursorBrush = SolidColor(c.ground),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { slot.onSearch(q) }),
-                modifier = Modifier.fillMaxWidth().focusRequester(slot.focusRequester),
-            )
-        }
-        if (q.isNotEmpty()) {
-            Box(Modifier.size(36.dp).shellPressable({ slot.onQueryChange("") }, label = stringResource(Res.string.shell_clear_search)), contentAlignment = Alignment.Center) {
-                Glyph(Glyphs.Close, c.ground, 16.dp)
+        Glyph(Glyphs.History, c.ink2, 18.dp)
+        Spacer(Modifier.width(14.dp))
+        Text(q, style = Shell.type.body, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        GlyphButton(Glyphs.Close, stringResource(Res.string.shell_search_remove_history, q), { slot.onRemoveHistoryItem(q) }, c.ink2, size = 48.dp, iconSize = 14.dp)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VibeChips(slot: SearchSlot, modifier: Modifier = Modifier.padding(horizontal = 16.dp)) {
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        VIBES.forEach { res -> val v = stringResource(res); ShellChip(v, false, { slot.onSearch(v) }) }
+    }
+}
+
+/** A short centered-left message (failed / no results) with an action below it. */
+@Composable
+private fun Message(title: String, hint: String?, action: @Composable () -> Unit) {
+    val c = Shell.colors
+    Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(16.dp, 28.dp, 16.dp, 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = Shell.type.body.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold), color = c.ink)
+        if (hint != null) Text(hint, style = Shell.type.bodySmall, color = c.ink2)
+        Spacer(Modifier.height(6.dp))
+        action()
+    }
+}
+
+/** Six placeholder rows pulsing while the first results load. */
+@Composable
+private fun SkeletonRows() {
+    val c = Shell.colors
+    val pulse = rememberInfiniteTransition()
+    val alpha by pulse.animateFloat(0.5f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse))
+    val label = stringResource(Res.string.shell_search_loading)
+    Column(Modifier.fillMaxWidth().semantics { contentDescription = label }.graphicsLayer { this.alpha = alpha }.padding(top = 8.dp)) {
+        repeat(6) {
+            Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(48.dp).clip(RoundedCornerShape(4.dp)).background(c.surface2))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.fillMaxWidth(0.55f).height(12.dp).clip(RoundedCornerShape(3.dp)).background(c.surface2))
+                    Box(Modifier.fillMaxWidth(0.35f).height(10.dp).clip(RoundedCornerShape(3.dp)).background(c.surface2))
+                }
             }
         }
     }
@@ -293,38 +462,48 @@ private fun BrowseTile(name: String, tint: Color, onClick: () -> Unit, modifier:
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TopResultCard(item: YTItem, slot: SearchSlot, wide: Boolean, modifier: Modifier = Modifier) {
     val c = Shell.colors
     val (hover, hovered) = rememberHover()
     val bg by animateColorAsState(if (hovered) c.surface3 else c.surface2, ShellMotion.emphasized())
+    val isSong = item is SongItem
+    val liked = isSong && SongLikeState.isLiked(item.id)
     Box(
         modifier.padding(start = 16.dp).then(if (wide) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().padding(end = 16.dp))
             .clip(RoundedCornerShape(8.dp)).background(bg).hoverable(hover)
-            .combinedClickable(onClick = { slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
-            .padding(20.dp),
+            .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
+            .padding(16.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            ShellArt(item.displayThumbnailUrl, Modifier.size(if (wide) 100.dp else 92.dp), shape = if (item is ArtistItem) CircleShape else ShellShapes.Art)
-            Text(item.title, style = Shell.type.headline.copy(fontSize = Shell.type.headline.fontSize * 1.3f), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(kindOf(item), subtitleOf(item)?.takeIf { it.isNotBlank() }).joinToString(" · "), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            ShellArt(item.displayThumbnailUrl, Modifier.size(92.dp), shape = if (item is ArtistItem) CircleShape else ShellShapes.Art)
+            // Songs keep clear of the play button in the corner.
+            Column(Modifier.padding(end = if (isSong) 64.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    item.title,
+                    style = Shell.type.title.copy(fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.02).em),
+                    color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                Text(metaOf(item), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (liked) Text(stringResource(Res.string.shell_search_liked_song), style = Shell.type.bodySmall, color = c.accent, maxLines = 1)
+            }
         }
-        if (item is SongItem) HoverPlayButton(hovered, 48.dp, { slot.onItemClick(item) }, Modifier.align(Alignment.BottomEnd))
+        // Touch has no hover, so a song's play button is always there (H-Search).
+        if (isSong) HoverPlayButton(true, 52.dp, { slot.onItemClick(item) }, Modifier.align(Alignment.BottomEnd))
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false) {
+private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false, modifier: Modifier = Modifier) {
     val c = Shell.colors
     val playing = slot.isPlaying && slot.currentSongId == item.id
+    val liked = item is SongItem && SongLikeState.isLiked(item.id)
     val (hover, hovered) = rememberHover()
     val bg by animateColorAsState(if (hovered) c.surface2 else Color.Transparent, ShellMotion.emphasized())
     val artSize = if (compact) 44.dp else 48.dp
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = if (compact) 0.dp else 8.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(hover)
-            .combinedClickable(onClick = { slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
+        modifier.fillMaxWidth().padding(horizontal = if (compact) 0.dp else 8.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(hover)
+            .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
             .padding(horizontal = 8.dp, vertical = if (compact) 4.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -339,12 +518,16 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false) 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(item.title, style = Shell.type.body, color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val meta = if (compact) subtitleOf(item).orEmpty() else listOfNotNull(kindOf(item), subtitleOf(item)?.takeIf { it.isNotBlank() }).joinToString(" · ")
+            val meta = if (compact) subtitleOf(item).orEmpty() else metaOf(item)
             Text(meta, style = Shell.type.bodySmall, color = if (hovered) c.ink else c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (playing) {
             Spacer(Modifier.width(12.dp))
             Equalizer(height = 12.dp)
+        }
+        if (liked) {
+            Spacer(Modifier.width(12.dp))
+            LikedBadge()
         }
         val seconds = (item as? SongItem)?.duration
         if (seconds != null && seconds > 0 && ShellPlatform.desktop) {
@@ -354,7 +537,19 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false) 
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/** Mono "LIKED" tag: lime on lime 12%, because lime means yours. */
+@Composable
+private fun LikedBadge() {
+    val c = Shell.colors
+    Text(
+        stringResource(Res.string.shell_search_liked_badge).uppercase(),
+        style = Shell.type.index.copy(fontSize = 10.sp, letterSpacing = 0.04.em),
+        color = c.accent,
+        maxLines = 1,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(c.accent.copy(alpha = 0.12f)).padding(horizontal = 7.dp, vertical = 4.dp),
+    )
+}
+
 @Composable
 private fun CardRow(items: List<YTItem>, slot: SearchSlot, wide: Boolean) {
     val c = Shell.colors
@@ -365,7 +560,7 @@ private fun CardRow(items: List<YTItem>, slot: SearchSlot, wide: Boolean) {
             val (hover, hovered) = rememberHover()
             Column(
                 Modifier.hoverable(hover).cardHover(hovered).width(size)
-                    .combinedClickable(onClick = { slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) }),
+                    .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) }),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Box {
@@ -377,6 +572,14 @@ private fun CardRow(items: List<YTItem>, slot: SearchSlot, wide: Boolean) {
             }
         }
     }
+}
+
+/** "Kind · subtitle", either part optional. */
+@Composable
+private fun metaOf(item: YTItem): String {
+    val kind = kindOf(item)
+    val sub = subtitleOf(item)?.takeIf { it.isNotBlank() }
+    return if (kind != null && sub != null) stringResource(Res.string.shell_meta_pair, kind, sub) else kind ?: sub.orEmpty()
 }
 
 @Composable

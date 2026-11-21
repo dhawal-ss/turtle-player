@@ -66,10 +66,11 @@ val turtleModule: Module = module {
     // Start our runtime when the app starts (in the background), not on first playback: Home needs
     // our shelves and search needs the library index before anything plays.
     single(createdAtStart = true) { TurtleAutoStart(get()) }
-    single<PlayEventStore> {
+    single {
         val spec = turtleDatabaseSpec()
         SqlitePlayEventStore(spec.driver, spec.path)
     }
+    single<PlayEventStore> { get<SqlitePlayEventStore>() }
     single { ListeningSessionTracker(get(), Clock.System, deviceTime) }
     single { PlayerObserver(get()) }
     single { SpotifyHistoryImporter(get(), deviceTime) }
@@ -86,7 +87,7 @@ val turtleModule: Module = module {
     single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get())) }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -159,8 +160,14 @@ object TurtleBridge {
     /** "Less like this" on a song (no-op when our runtime is unavailable). */
     suspend fun lessLikeThis(song: SongItem) { runtime?.lessLikeThis(song) }
 
-    /** Discovery dial: 0 familiar, 0.5 balanced, 1 adventurous. */
-    suspend fun setDiscoveryDial(position: Double) { runtime?.setDiscoveryDial(position) }
+    /** Discovery dial: 0 familiar, 0.5 balanced, 1 adventurous. Saved, and applied to the taste engine. */
+    suspend fun setDiscoveryDial(position: Double) {
+        discoveryDialState.value = position
+        runtime?.setDiscoveryDial(position)
+    }
+
+    /** The dial's current position, restored from our database at startup. */
+    val discoveryDial: StateFlow<Double> get() = discoveryDialState
 
     /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
     val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()

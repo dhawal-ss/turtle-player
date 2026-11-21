@@ -88,6 +88,28 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
             connection.execSQL("CREATE INDEX IF NOT EXISTS idx_play_event_source ON play_event(source)")
             connection.execSQL("PRAGMA user_version = 1")
         }
+        if (version < 2) {
+            // Small settings of ours (discovery dial, ...), kept beside the history they shape.
+            connection.execSQL("CREATE TABLE IF NOT EXISTS pref (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execSQL("PRAGMA user_version = 2")
+        }
+    }
+
+    /** A stored setting of ours, or null when never set. */
+    suspend fun pref(key: String): String? = db {
+        connection.prepare("SELECT value FROM pref WHERE key = ?").use {
+            it.bindText(1, key)
+            if (it.step()) it.getText(0) else null
+        }
+    }
+
+    suspend fun setPref(key: String, value: String) = db {
+        connection.prepare("INSERT OR REPLACE INTO pref (key, value) VALUES (?, ?)").use {
+            it.bindText(1, key)
+            it.bindText(2, value)
+            it.step()
+        }
+        Unit
     }
 
     private suspend fun <T> db(block: () -> T): T = withContext(Dispatchers.IO) { mutex.withLock { block() } }

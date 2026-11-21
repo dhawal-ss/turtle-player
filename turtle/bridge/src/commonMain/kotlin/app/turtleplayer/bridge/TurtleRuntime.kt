@@ -37,6 +37,7 @@ class TurtleRuntime(
     private val cache: SongCache,
     private val search: TurtleSearch,
     private val home: TurtleHomeShelves,
+    private val store: SqlitePlayEventStore,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -46,7 +47,10 @@ class TurtleRuntime(
         val scope = turtleScope.scope
         librarySync.start(scope)
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
-        scope.launch { runCatching { taste.refresh() } }
+        scope.launch {
+            restoreDiscoveryDial()
+            runCatching { taste.refresh() }
+        }
         taste.observe(scope)
         libraryContentSearchOverride = ::searchLibrary
         searchSummaryOverride = ::rerankSearch
@@ -137,8 +141,18 @@ class TurtleRuntime(
         if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
     }
 
-    /** Discovery dial position: 0 familiar, 0.5 balanced, 1 adventurous. */
-    suspend fun setDiscoveryDial(position: Double) = taste.setDiscoveryDial(DiscoveryDial.fromPosition(position))
+    /** Discovery dial position: 0 familiar, 0.5 balanced, 1 adventurous. Saved across launches. */
+    suspend fun setDiscoveryDial(position: Double) {
+        val p = position.coerceIn(0.0, 1.0)
+        taste.setDiscoveryDial(DiscoveryDial.fromPosition(p))
+        runCatching { store.setPref(PREF_DIAL, p.toString()) }.onFailure { TurtleLog.error("could not save the discovery dial", it) }
+    }
+
+    private suspend fun restoreDiscoveryDial() {
+        val saved = runCatching { store.pref(PREF_DIAL)?.toDoubleOrNull() }.getOrNull() ?: return
+        discoveryDialState.value = saved
+        taste.setDiscoveryDial(DiscoveryDial.fromPosition(saved))
+    }
 
     /**
      * The Infinity Mix's opening queue: the taste engine's Up Next as playable songs. Upstream's
@@ -185,5 +199,9 @@ class TurtleRuntime(
         const val RANK_TIMEOUT_MS = 1_500L
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
+        const val PREF_DIAL = "discovery_dial"
     }
 }
+
+/** The discovery dial as the UI shows it; balanced until our saved value is restored. */
+internal val discoveryDialState = kotlinx.coroutines.flow.MutableStateFlow(0.5)

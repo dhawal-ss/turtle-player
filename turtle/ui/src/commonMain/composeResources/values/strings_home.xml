@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell Home and Explore states (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_home_loading">Loading Home</string>
+    <string name="shell_home_offline_title">Can’t reach YouTube Music</string>
+    <string name="shell_home_offline_body">Your Infinity Mix still plays from what you’ve heard.</string>
+    <string name="shell_home_infinity_empty">Infinity needs a few plays first. Search for something you love.</string>
+    <string name="shell_explore_loading">Loading Explore</string>
+    <string name="shell_explore_offline">Explore needs a connection. It fills in when you’re back online.</string>
+</resources>

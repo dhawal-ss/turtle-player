@@ -14,8 +14,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.hoverable
@@ -56,6 +60,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellShapes
@@ -65,19 +70,29 @@ import app.turtleplayer.ui.generated.resources.shell_play
 import org.jetbrains.compose.resources.stringResource
 import coil3.compose.AsyncImage
 
-/** Press feedback shared by every tappable Shell element: scale to 0.96 over the tap duration. */
+/**
+ * Press feedback shared by every tappable Shell element: scale to 0.96 over the tap duration, a hand
+ * cursor on desktop, and a lime focus ring in [focusShape] for keyboard users (H-Search's focus
+ * language). [onLongClick] opens the item menu on phones, so cards never need `combinedClickable`.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun Modifier.shellPressable(
     onClick: () -> Unit,
     role: Role = Role.Button,
     label: String? = null,
+    onLongClick: (() -> Unit)? = null,
+    focusShape: Shape = RoundedCornerShape(8.dp),
 ): Modifier {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, tween(ShellMotion.TAP_MS, easing = ShellMotion.Emphasized))
     return this
         .graphicsLayer { scaleX = scale; scaleY = scale }
-        .clickable(interactionSource = interaction, indication = null, role = role, onClick = onClick)
+        .then(if (focused) Modifier.border(2.dp, Shell.colors.accent, focusShape) else Modifier)
+        .pointerHoverIcon(PointerIcon.Hand)
+        .combinedClickable(interactionSource = interaction, indication = null, role = role, onLongClick = onLongClick, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
 }
 
@@ -186,17 +201,18 @@ fun ShortcutTile(
     modifier: Modifier = Modifier,
     onPlay: (() -> Unit)? = null,
     onHover: (Boolean) -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
 ) {
     val c = Shell.colors
     val (source, hovered) = rememberHover()
     androidx.compose.runtime.LaunchedEffect(hovered) { onHover(hovered) }
     val bg by animateColorAsState(if (hovered) c.surface3 else c.surface2, ShellMotion.emphasized())
     Row(
-        modifier.height(56.dp).clip(ShellShapes.Tile).background(bg).hoverable(source).shellPressable(onClick),
+        modifier.height(56.dp).clip(ShellShapes.Tile).background(bg).hoverable(source).shellPressable(onClick, onLongClick = onLongClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         art(Modifier.size(56.dp))
-        Text(title, style = Shell.type.title, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+        Text(title, style = Shell.type.title.copy(fontSize = 14.sp), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
         AnimatedVisibility(playing && !hovered, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
             Equalizer(modifier = Modifier.padding(end = 10.dp))
         }
@@ -261,6 +277,10 @@ fun InfinityCube(artUrls: List<String?>, playing: Boolean, modifier: Modifier = 
 /** Snackbar-style confirmation that springs up from the bottom. */
 @Composable
 fun ShellToast(message: String?, modifier: Modifier = Modifier) {
+    // Keep the last text while the toast animates away, so it doesn't blank out mid-exit.
+    val last = remember { arrayOf(message.orEmpty()) }
+    if (message != null) last[0] = message
+    val shown = message ?: last[0]
     AnimatedVisibility(
         message != null,
         enter = slideInVertically(ShellMotion.spring()) { it * 2 } + fadeIn(ShellMotion.emphasized()),
@@ -273,7 +293,7 @@ fun ShellToast(message: String?, modifier: Modifier = Modifier) {
         ) {
             Box(Modifier.size(22.dp).clip(CircleShape).background(Shell.colors.accent), contentAlignment = Alignment.Center) { CheckGlyph(Shell.colors.onAccent, 14.dp) }
             Spacer(Modifier.width(12.dp))
-            Text(message.orEmpty(), style = Shell.type.label, color = Shell.colors.ground)
+            Text(shown, style = Shell.type.label, color = Shell.colors.ground)
         }
     }
 }

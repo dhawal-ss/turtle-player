@@ -307,7 +307,7 @@ fun <T> AdaptiveNavigationScaffold(
     onToggleVisibility: ((T) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    com.metrolist.shared.turtle.TurtleUiSlots.navigation?.takeUnless { isEditing }?.let { slot -> val v = items.filter { it.visible }; return slot(com.metrolist.shared.turtle.NavigationSlot(v.map { com.metrolist.shared.turtle.NavigationSlotItem(it.key.toString(), it.label, it.icon) }, v.indexOfFirst { it.key == selectedKey }, { onSelect(v[it].key) }, navigationVisible, navigationSuiteType == NavigationSuiteType.NavigationBar, floatingNavigation, onFloatingNavigationOccupiedHeightChanged, { navigationHeader(navigationSuiteType) }, navigationFooter?.let { f -> { f(isSidebarExpanded) } }, modifier, content)) } // Turtle: HOOKS.md #27
+    com.metrolist.shared.turtle.TurtleUiSlots.navigation?.takeUnless { isEditing }?.let { slot -> val v = items.filter { it.visible }; return slot(com.metrolist.shared.turtle.NavigationSlot(v.map { com.metrolist.shared.turtle.NavigationSlotItem(it.key.toString(), it.label, it.icon) }, v.indexOfFirst { it.key == selectedKey }, { onSelect(v[it].key) }, navigationVisible, navigationSuiteType.isNavigationBar, floatingNavigation, onFloatingNavigationOccupiedHeightChanged, { navigationHeader(navigationSuiteType) }, navigationFooter?.let { f -> { f(isSidebarExpanded) } }, modifier, content, { itemModifier(v[it].key) })) } // Turtle: HOOKS.md #27
     val visibleItems = if (isEditing) items else items.filter { it.visible }
     val navigationItems: @Composable () -> Unit = {
         visibleItems.forEach { item ->
