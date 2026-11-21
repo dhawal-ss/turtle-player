@@ -116,7 +116,7 @@ internal fun MobilePlaylistActions(
             }
         }
     }
-    PopupContent(workflow.song.takeIf { userPlaylists != null }) { _ ->
+    if (com.metrolist.shared.turtle.TurtleUiSlots.playlistPicker?.let { picker -> workflow.song?.takeIf { userPlaylists != null }?.let { picker(com.metrolist.shared.turtle.PlaylistPickerSlot(workflow.songs, editablePlaylists.map { com.metrolist.shared.turtle.PickerPlaylist(it.id, it.title, it.songCount, it.thumbnailUrl, it.id in membership) }, workflow.selectedPlaylists.mapTo(mutableSetOf()) { it.id }, workflow.completedIds, workflow.failedIds, workflow.busy, workflow.failed, { id -> editablePlaylists.firstOrNull { it.id == id }?.let { workflow.togglePlaylist(it.playlist) } }, workflow::addSelected, workflow::showCreate, workflow::dismissSong)) }; true } == null) PopupContent(workflow.song.takeIf { userPlaylists != null }) { _ -> // Turtle: HOOKS.md #33
         ModalBottomSheet(
             onDismissRequest = { workflow.dismissSong() },
             sheetState =

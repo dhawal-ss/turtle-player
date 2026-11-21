@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell Lyrics (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_lyrics_none">No lyrics for this song</string>
+    <string name="shell_lyrics_none_hint">Lyrics come from LRCLib, KuGou and others when available.</string>
+    <string name="shell_lyrics_not_synced">Not synced</string>
+    <string name="shell_lyrics_back_to_current">Back to current line</string>
+    <string name="shell_lyrics_loading">Loading lyrics</string>
+</resources>

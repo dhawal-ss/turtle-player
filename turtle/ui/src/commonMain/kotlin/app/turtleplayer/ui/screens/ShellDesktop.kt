@@ -1,5 +1,13 @@
 package app.turtleplayer.ui.screens
 
+import app.turtleplayer.ui.generated.resources.shell_now_playing_view
+import androidx.compose.foundation.layout.PaddingValues
+import com.metrolist.shared.turtle.TurtleUiSlots
+import app.turtleplayer.ui.generated.resources.shell_np_sleep_timer
+import app.turtleplayer.ui.generated.resources.shell_more
+import app.turtleplayer.ui.generated.resources.shell_devices
+import app.turtleplayer.ui.generated.resources.shell_lyrics
+import app.turtleplayer.ui.generated.resources.shell_queue
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -128,11 +136,29 @@ object ShellDesktop {
     /** The track desktop restores at launch; it is loaded into the player only on play. */
     internal var restoredSong by mutableStateOf<SongItem?>(null)
 
-    /** Upstream's queue toggle, published by the player bar so the Now Playing panel can open the queue. */
-    internal var openQueue: (() -> Unit)? = null
+    /** What the right panel shows: Now Playing, or one of Shell's player surfaces. */
+    var panel by mutableStateOf(DesktopPanel.NOW_PLAYING)
+
+    /** Shows [mode] in the right panel, or closes the panel when it is already showing it. */
+    fun toggle(mode: DesktopPanel) {
+        if (nowPlayingOpen && panel == mode) {
+            nowPlayingOpen = false
+        } else {
+            panel = mode
+            nowPlayingOpen = true
+        }
+    }
+
+    /** Opens [mode] in the right panel. */
+    fun show(mode: DesktopPanel) {
+        panel = mode
+        nowPlayingOpen = true
+    }
 }
 
 enum class LibraryFilter { ALL, PLAYLISTS, ARTISTS, ALBUMS }
+
+enum class DesktopPanel { NOW_PLAYING, QUEUE, LYRICS, DEVICES, MORE, SLEEP }
 
 // Matches upstream's content panel (StandardContentSurface), so all three panels share one radius.
 private val PanelShape = RoundedCornerShape(16.dp)
@@ -171,7 +197,7 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 enter = expandHorizontally(ShellMotion.emphasized(), expandFrom = Alignment.Start) + fadeIn(ShellMotion.emphasized()),
                 exit = shrinkHorizontally(ShellMotion.exit(), shrinkTowards = Alignment.Start) + fadeOut(ShellMotion.exit()),
             ) {
-                NowPlayingPanel(Modifier.width(NowPlayingWidth).fillMaxHeight().padding(top = 8.dp, bottom = 8.dp, end = 8.dp))
+                RightPanel(library, Modifier.width(NowPlayingWidth).fillMaxHeight().padding(top = 8.dp, bottom = 8.dp, end = 8.dp))
             }
         }
     }
@@ -409,26 +435,97 @@ private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, modifier: Modifi
 // Now Playing view
 // ---------------------------------------------------------------------------------------------
 
-/** Spotify's Now Playing view: big artwork, like, our Discovery dial and what plays next. */
+/** Desktop services for Shell's surfaces: upstream's desktop lyrics, queue and timer state, via hook #30. */
 @Composable
-private fun NowPlayingPanel(modifier: Modifier) {
+private fun rememberDesktopServices(library: DesktopLibrarySlot): ShellPlayerServices? {
+    val extras = TurtleUiSlots.desktopExtras ?: return null
+    return remember(extras, library) {
+        ShellPlayerServices(
+            lyrics = extras.lyrics,
+            lyricsLoading = extras.lyricsLoading,
+            lyricsOffsetMs = extras.lyricsOffsetMs,
+            ensureLyrics = { song -> if (extras.lyricsSongId() != song.id && !extras.lyricsLoading()) extras.loadLyrics(song) },
+            removeQueueIndex = extras.removeQueueIndex,
+            addToPlaylist = extras.addToPlaylist,
+            share = null,
+            download = null,
+            isDownloaded = { false },
+            openArtist = { id -> library.open(ArtistItem(id = id, title = "", thumbnail = null)) },
+            openAlbum = { id -> library.open(AlbumItem(id = id, title = "", thumbnail = null, artists = emptyList())) },
+            startSleepTimer = extras.startSleepTimer,
+            cancelSleepTimer = extras.cancelSleepTimer,
+            sleepTimerActive = extras.sleepTimerActive,
+        )
+    }
+}
+
+/**
+ * The right panel: Spotify's Now Playing view, or one of Shell's own player surfaces (queue, lyrics,
+ * devices, more, sleep timer) in its place. Upstream's drawers and expanded player are never shown.
+ */
+@Composable
+private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
     val song = state.currentSong ?: ShellDesktop.restoredSong ?: return
+    val services = rememberDesktopServices(library)
     val tint = artworkTint(song.displayThumbnailUrl, 0.14f, base = c.panel)
-    Column(
-        modifier.clip(PanelShape).background(tint)
-            .verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                ShellQueue.activeTitle(state) ?: song.title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold),
-                color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-            )
+    val requested = ShellDesktop.panel
+    val mode = if (services == null && requested != DesktopPanel.DEVICES) DesktopPanel.NOW_PLAYING else requested
+    Column(modifier.clip(PanelShape).background(tint)) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (mode != DesktopPanel.NOW_PLAYING) {
+                SmallIconButton(Glyphs.ArrowLeft, stringResource(Res.string.shell_now_playing_view)) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING }
+                Spacer(Modifier.width(4.dp))
+            }
+            val title = when (mode) {
+                DesktopPanel.NOW_PLAYING -> ShellQueue.activeTitle(state) ?: song.title
+                DesktopPanel.QUEUE -> stringResource(Res.string.shell_queue)
+                DesktopPanel.LYRICS -> stringResource(Res.string.shell_lyrics)
+                DesktopPanel.DEVICES -> stringResource(Res.string.shell_devices)
+                DesktopPanel.MORE -> stringResource(Res.string.shell_more)
+                DesktopPanel.SLEEP -> stringResource(Res.string.shell_np_sleep_timer)
+            }
+            Text(title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (mode == DesktopPanel.NOW_PLAYING && services != null) {
+                SmallIconButton(Glyphs.More, stringResource(Res.string.shell_more)) { ShellDesktop.panel = DesktopPanel.MORE }
+            }
             SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.nowPlayingOpen = false }
         }
+        AnimatedContent(mode, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, modifier = Modifier.weight(1f)) { m ->
+            val pad = Modifier.fillMaxSize().padding(horizontal = 16.dp)
+            if (m == DesktopPanel.NOW_PLAYING || (services == null && m != DesktopPanel.DEVICES)) {
+                NowPlayingContent(song, state, tint)
+            } else if (m == DesktopPanel.DEVICES) {
+                Column(pad.verticalScroll(rememberScrollState())) { ShellDevices(state, controller) }
+            } else if (services != null) {
+                when (m) {
+                    DesktopPanel.QUEUE -> ShellQueueList(state, controller, services, pad, PaddingValues(bottom = 16.dp))
+                    DesktopPanel.LYRICS -> {
+                        val live = rememberLivePosition(controller, state.isPlaying, song.id)
+                        ShellLyricsFor(song, services, live, { controller.seekTo(it); live.ms = it }, pad, compact = true, contentPadding = PaddingValues(vertical = 16.dp))
+                    }
+                    DesktopPanel.MORE -> Column(pad.verticalScroll(rememberScrollState())) {
+                        ShellMoreActions(song, controller, services, onShow = { s -> if (s == PlayerSurface.SLEEP) ShellDesktop.panel = DesktopPanel.SLEEP }, onDone = { ShellDesktop.panel = DesktopPanel.NOW_PLAYING })
+                    }
+                    DesktopPanel.SLEEP -> Column(pad.verticalScroll(rememberScrollState())) { ShellSleepTimer(services) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING } }
+                    else -> Unit
+                }
+            }
+        }
+    }
+}
+
+/** Spotify's Now Playing view: big artwork, like, our Discovery dial and what plays next. */
+@Composable
+private fun NowPlayingContent(song: SongItem, state: com.metrolist.shared.ui.playback.PlaybackUiState, tint: Color) {
+    val c = Shell.colors
+    val controller = LocalPlaybackController.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         AnimatedContent(
             song,
             transitionSpec = { (slideInHorizontally(ShellMotion.emphasized()) { it / 7 } + fadeIn(ShellMotion.emphasized())) togetherWith fadeOut(ShellMotion.exit()) },
@@ -457,15 +554,13 @@ private fun NowPlayingPanel(modifier: Modifier) {
 private fun UpNextCard(queue: List<SongItem>, current: Int, onPlay: (Int) -> Unit) {
     val c = Shell.colors
     val next = (current + 1 until queue.size).take(4).map { it to queue[it] }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.ink.copy(alpha = 0.06f)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(Res.string.shell_next_in_queue), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f))
-            ShellDesktop.openQueue?.let { open ->
-                Text(
-                    stringResource(Res.string.shell_open_queue), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink2,
-                    modifier = Modifier.shellPressable(open),
-                )
-            }
+            Text(
+                stringResource(Res.string.shell_open_queue), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink2,
+                modifier = Modifier.shellPressable({ ShellDesktop.show(DesktopPanel.QUEUE) }),
+            )
         }
         if (next.isEmpty()) Text(stringResource(Res.string.shell_queue_end), style = Shell.type.bodySmall, color = c.ink2)
         next.forEach { (index, s) ->

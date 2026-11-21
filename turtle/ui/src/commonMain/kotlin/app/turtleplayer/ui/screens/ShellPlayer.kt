@@ -382,7 +382,9 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
     val unlikedText = stringResource(Res.string.shell_unliked_toast)
     val lessText = stringResource(Res.string.shell_less_toast)
     LaunchedEffect(toast) { if (toast != null) { delay(2400); toast = null } }
-    val handOver = { TurtleUiSlots.showUpstreamPlayer = true }
+    // Lyrics, queue, more, sleep and devices are Shell's own surfaces: we never hand over to upstream's player.
+    var surface by remember { mutableStateOf<PlayerSurface?>(null) }
+    val services = rememberPhoneServices(slot)
     val source = (modes.queueTitle ?: ShellQueue.activeTitle(state))?.takeIf { it.isNotBlank() }
 
     Box(Modifier.fillMaxSize().background(tint)) {
@@ -397,7 +399,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                     IndexLabel(stringResource(if (source != null) Res.string.shell_playing_from else Res.string.shell_now_playing_label), color = c.ink.copy(alpha = 0.75f))
                     if (source != null) Text(source, style = Shell.type.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                 }
-                GlyphButton(Glyphs.More, stringResource(Res.string.shell_more), handOver, c.ink)
+                GlyphButton(Glyphs.More, stringResource(Res.string.shell_more), { surface = PlayerSurface.MORE }, c.ink)
             }
             // The art is the largest square that fits what height is left, centred in it, so tall
             // phones get full-width art and short screens or landscape keep every control.
@@ -444,15 +446,15 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                 GlyphButton(Glyphs.Repeat, stringResource(Res.string.shell_repeat), vm::toggleRepeat, if (modes.repeat != 0) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = modes.repeat != 0)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                GlyphButton(Glyphs.Devices, stringResource(Res.string.shell_devices), handOver, c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
+                GlyphButton(Glyphs.Devices, stringResource(Res.string.shell_devices), { surface = PlayerSurface.DEVICES }, if (state.castState.device != null) c.accent else c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
                 Spacer(Modifier.weight(1f))
-                // Open upstream's player straight on the page asked for, not on its plain player view.
-                GlyphButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), { vm.setLyricsVisible(true); handOver() }, c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
-                GlyphButton(Glyphs.Queue, stringResource(Res.string.shell_queue), { vm.setQueueVisible(true); handOver() }, c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
+                GlyphButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), { surface = PlayerSurface.LYRICS }, c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
+                GlyphButton(Glyphs.Queue, stringResource(Res.string.shell_queue), { surface = PlayerSurface.QUEUE }, c.ink.copy(alpha = 0.85f), iconSize = 20.dp)
             }
             SteerCard(tint)
             Spacer(Modifier.height(12.dp))
         }
+        PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint)
         ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars))
     }
 }
@@ -515,40 +517,20 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     var volume by remember(slot.volume) { mutableFloatStateOf(slot.volume) }
     val shuffled = slot.isShuffled()
     val repeat = slot.repeatMode()
-    // Queue, lyrics and the Now Playing view share the right side: opening one closes the others, as in Spotify.
-    val openQueue = {
-        if (slot.isQueueOpen()) {
-            slot.onToggleQueue()
-        } else {
-            ShellDesktop.nowPlayingOpen = false
-            if (slot.isLyricsOpen()) slot.onToggleLyrics()
-            slot.onToggleQueue()
-        }
+    // Queue, lyrics and devices are Shell's own right-panel surfaces; upstream's drawers stay closed.
+    // Any left open from an earlier session are closed once, so they never cover the page.
+    LaunchedEffect(Unit) {
+        if (slot.isQueueOpen()) slot.onToggleQueue()
+        if (slot.isLyricsOpen()) slot.onToggleLyrics()
     }
-    val openLyrics = {
-        if (slot.isLyricsOpen()) {
-            slot.onToggleLyrics()
-        } else {
-            ShellDesktop.nowPlayingOpen = false
-            if (slot.isQueueOpen()) slot.onToggleQueue()
-            slot.onToggleLyrics()
-        }
-    }
-    val toggleNowPlaying = {
-        val open = !ShellDesktop.nowPlayingOpen
-        if (open) {
-            if (slot.isQueueOpen()) slot.onToggleQueue()
-            if (slot.isLyricsOpen()) slot.onToggleLyrics()
-        }
-        ShellDesktop.nowPlayingOpen = open
-    }
+    val panel = ShellDesktop.panel.takeIf { ShellDesktop.nowPlayingOpen }
     val infinityTitle = stringResource(Res.string.shell_infinity_title)
     val infinityOn = ShellQueue.activeTitle(state) == infinityTitle
-    SideEffect { ShellDesktop.openQueue = openQueue; ShellDesktop.restoredSong = slot.restoredSong }
+    SideEffect { ShellDesktop.restoredSong = slot.restoredSong }
     Row(Modifier.fillMaxWidth().height(80.dp).background(c.frame).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (song != null) {
-                ShellArt(song.displayThumbnailUrl, Modifier.size(56.dp).shellPressable(slot.onExpand), shape = RoundedCornerShape(4.dp))
+                ShellArt(song.displayThumbnailUrl, Modifier.size(56.dp).shellPressable({ ShellDesktop.show(DesktopPanel.NOW_PLAYING) }), shape = RoundedCornerShape(4.dp))
                 Spacer(Modifier.width(12.dp))
                 AnimatedContent(song, transitionSpec = { quickFade }, contentKey = { it.id }, modifier = Modifier.weight(1f, fill = false)) { s ->
                     Column {
@@ -585,11 +567,10 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
             }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            val npv = ShellDesktop.nowPlayingOpen
-            GlyphButton(Glyphs.NowPlayingView, stringResource(Res.string.shell_now_playing_view), toggleNowPlaying, if (npv) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = npv)
-            GlyphButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), openLyrics, if (slot.isLyricsOpen()) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = slot.isLyricsOpen())
-            GlyphButton(Glyphs.Queue, stringResource(Res.string.shell_queue), openQueue, if (slot.isQueueOpen()) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = slot.isQueueOpen())
-            GlyphButton(Glyphs.Devices, stringResource(Res.string.shell_devices), slot.onToggleDevices, c.ink2, size = 36.dp, iconSize = 18.dp)
+            PanelButton(Glyphs.NowPlayingView, stringResource(Res.string.shell_now_playing_view), DesktopPanel.NOW_PLAYING, panel)
+            PanelButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), DesktopPanel.LYRICS, panel)
+            PanelButton(Glyphs.Queue, stringResource(Res.string.shell_queue), DesktopPanel.QUEUE, panel)
+            PanelButton(Glyphs.Devices, stringResource(Res.string.shell_devices), DesktopPanel.DEVICES, panel)
             Glyph(Glyphs.Volume, c.ink2, 18.dp, contentDescription = stringResource(Res.string.shell_volume))
             Spacer(Modifier.width(6.dp))
             ShellSeekBar(
@@ -599,4 +580,101 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
             GlyphButton(Glyphs.Fullscreen, stringResource(Res.string.shell_fullscreen), slot.onToggleFullscreen, c.ink2, size = 36.dp, iconSize = 18.dp)
         }
     }
+}
+
+/** Phone services: upstream's player view model and platform (downloads, playlists), in Shell's surfaces. */
+@Composable
+private fun rememberPhoneServices(slot: PlayerSlot): ShellPlayerServices {
+    val vm = slot.viewModel
+    val controller = LocalPlaybackController.current
+    val platform = com.metrolist.shared.ui.player.LocalPlayerPlatform.current
+    val addToPlaylist = platform.rememberPlaylistAdder()
+    val download = platform.rememberSongDownloader()
+    val downloaded = platform.downloadedSongIds()
+    val lyrics by remember(vm) { vm.uiState.map { PhoneLyrics(it.lyrics, it.isLyricsLoading, it.lyricsOffsetMs, it.currentSong?.id) }.distinctUntilChanged() }
+        .collectAsState(PhoneLyrics(emptyList(), false, 0, null))
+    val sleep by remember(controller) { controller.state.map { it.sleepTimerState.isActive }.distinctUntilChanged() }.collectAsState(false)
+    return ShellPlayerServices(
+        lyrics = { lyrics.entries },
+        lyricsLoading = { lyrics.loading },
+        lyricsOffsetMs = { lyrics.offsetMs },
+        ensureLyrics = { song ->
+            val current = vm.uiState.value
+            if (lyrics.songId != song.id || (current.lyrics.isEmpty() && !current.isLyricsLoading)) current.currentSong?.let { vm.loadLyrics(it) }
+        },
+        removeQueueIndex = { index -> vm.uiState.value.queueEntryKeys.getOrNull(index)?.let { vm.removeQueueEntry(it) } },
+        addToPlaylist = { addToPlaylist(listOf(it)) },
+        share = { vm.shareSong(it) },
+        download = { download(listOf(it)) },
+        isDownloaded = { it in downloaded },
+        openArtist = { slot.onClose(); slot.onNavigateToArtist(it) },
+        openAlbum = { slot.onClose(); slot.onNavigateToAlbum(it) },
+        startSleepTimer = { ms, endOfSong -> if (endOfSong) controller.stopSleepTimerAfterCurrentSong(false) else controller.startSleepTimer(ms, false) },
+        cancelSleepTimer = controller::cancelSleepTimer,
+        sleepTimerActive = { sleep },
+    )
+}
+
+private data class PhoneLyrics(val entries: List<com.metrolist.shared.model.LyricsEntry>, val loading: Boolean, val offsetMs: Int, val songId: String?)
+
+/** Lyrics and queue take over the player full screen (as in Spotify); the rest are bottom sheets. */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
+    surface: PlayerSurface?,
+    onSurface: (PlayerSurface?) -> Unit,
+    song: SongItem,
+    state: com.metrolist.shared.ui.playback.PlaybackUiState,
+    controller: PlaybackController,
+    services: ShellPlayerServices,
+    live: LivePosition,
+    tint: Color,
+) {
+    val c = Shell.colors
+    val full = surface == PlayerSurface.LYRICS || surface == PlayerSurface.QUEUE
+    androidx.compose.animation.AnimatedVisibility(
+        full,
+        enter = androidx.compose.animation.slideInVertically(ShellMotion.emphasized()) { it / 6 } + fadeIn(ShellMotion.emphasized()),
+        exit = androidx.compose.animation.slideOutVertically(ShellMotion.exit()) { it / 6 } + fadeOut(ShellMotion.exit()),
+        modifier = Modifier.matchParentSize(),
+    ) {
+        if (full) NavigationBackHandler(enabled = true) { onSurface(null) }
+        // Remember which full surface is showing so the exit animation keeps its content.
+        val shown = remember { arrayOf(PlayerSurface.LYRICS) }
+        if (surface == PlayerSurface.LYRICS) shown[0] = PlayerSurface.LYRICS else if (surface == PlayerSurface.QUEUE) shown[0] = PlayerSurface.QUEUE
+        Column(
+            Modifier.fillMaxSize().background(lerp(tint, Color.Black, 0.15f)).windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars).padding(horizontal = 20.dp),
+        ) {
+            SurfaceHeader(song.title, song.artists.joinToString(", ") { it.name }) { onSurface(null) }
+            if (shown[0] == PlayerSurface.LYRICS) {
+                ShellLyricsFor(song, services, live, { controller.seekTo(it); live.ms = it }, Modifier.weight(1f).fillMaxWidth(), compact = false)
+            } else {
+                ShellQueueList(state, controller, services, Modifier.weight(1f).fillMaxWidth())
+            }
+            // A slim transport so lyrics and queue never strand you without controls.
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                GlyphButton(Glyphs.Previous, stringResource(Res.string.shell_previous), controller::skipToPrevious, c.ink, iconSize = 24.dp)
+                PlayPauseButton(state.isPlaying, controller::togglePlayPause, 56.dp, c.ink, c.ground, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
+                GlyphButton(Glyphs.Next, stringResource(Res.string.shell_next), controller::skipToNext, c.ink, iconSize = 24.dp)
+            }
+        }
+    }
+    val sheet = surface == PlayerSurface.MORE || surface == PlayerSurface.SLEEP || surface == PlayerSurface.DEVICES
+    val lastSheet = remember { arrayOf(PlayerSurface.MORE) }
+    if (sheet && surface != null) lastSheet[0] = surface
+    ShellBottomSheet(sheet, onDismiss = { onSurface(null) }) {
+        when (lastSheet[0]) {
+            PlayerSurface.SLEEP -> ShellSleepTimer(services) { onSurface(null) }
+            PlayerSurface.DEVICES -> ShellDevices(state, controller)
+            else -> ShellMoreActions(song, controller, services, onShow = onSurface, onDone = { onSurface(null) })
+        }
+    }
+}
+
+/** A player-bar button that shows [mode] in the right panel; lime with a dot while it is showing. */
+@Composable
+private fun PanelButton(glyph: ImageVector, label: String, mode: DesktopPanel, showing: DesktopPanel?) {
+    val c = Shell.colors
+    val on = showing == mode
+    GlyphButton(glyph, label, { ShellDesktop.toggle(mode) }, if (on) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = on)
 }

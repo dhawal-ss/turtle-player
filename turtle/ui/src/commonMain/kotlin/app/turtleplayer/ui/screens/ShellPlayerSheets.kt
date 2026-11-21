@@ -1,0 +1,361 @@
+package app.turtleplayer.ui.screens
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.turtleplayer.ui.components.Equalizer
+import app.turtleplayer.ui.components.Glyph
+import app.turtleplayer.ui.components.Glyphs
+import app.turtleplayer.ui.components.IndexLabel
+import app.turtleplayer.ui.components.ShellArt
+import app.turtleplayer.ui.components.rememberHover
+import app.turtleplayer.ui.components.shellPressable
+import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_np_add_to_playlist
+import app.turtleplayer.ui.generated.resources.shell_np_close
+import app.turtleplayer.ui.generated.resources.shell_np_connected
+import app.turtleplayer.ui.generated.resources.shell_np_devices_none
+import app.turtleplayer.ui.generated.resources.shell_np_devices_searching
+import app.turtleplayer.ui.generated.resources.shell_np_disconnect
+import app.turtleplayer.ui.generated.resources.shell_np_download
+import app.turtleplayer.ui.generated.resources.shell_np_downloaded
+import app.turtleplayer.ui.generated.resources.shell_np_go_to_album
+import app.turtleplayer.ui.generated.resources.shell_np_go_to_artist
+import app.turtleplayer.ui.generated.resources.shell_np_minutes
+import app.turtleplayer.ui.generated.resources.shell_np_now_playing
+import app.turtleplayer.ui.generated.resources.shell_np_queue_empty
+import app.turtleplayer.ui.generated.resources.shell_np_remove_from_queue
+import app.turtleplayer.ui.generated.resources.shell_np_share
+import app.turtleplayer.ui.generated.resources.shell_np_sleep_cancel
+import app.turtleplayer.ui.generated.resources.shell_np_sleep_end_of_song
+import app.turtleplayer.ui.generated.resources.shell_np_sleep_on
+import app.turtleplayer.ui.generated.resources.shell_np_sleep_timer
+import app.turtleplayer.ui.generated.resources.shell_np_start_radio
+import app.turtleplayer.ui.generated.resources.shell_np_this_device
+import app.turtleplayer.ui.generated.resources.shell_next_in_queue
+import app.turtleplayer.ui.theme.Shell
+import app.turtleplayer.ui.theme.ShellMotion
+import com.metrolist.shared.cast.CastConnectionStatus
+import com.metrolist.shared.model.LyricsEntry
+import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.model.displayThumbnailUrl
+import com.metrolist.shared.ui.playback.PlaybackController
+import com.metrolist.shared.ui.playback.PlaybackUiState
+import org.jetbrains.compose.resources.stringResource
+
+/**
+ * What Shell's own player surfaces (lyrics, queue, more, sleep timer) need from the platform, so the
+ * same Shell UI runs on phones (upstream's PlayerViewModel) and desktop (TurtleUiSlots.desktopExtras)
+ * without ever handing over to upstream's player.
+ */
+internal class ShellPlayerServices(
+    val lyrics: () -> List<LyricsEntry>,
+    val lyricsLoading: () -> Boolean,
+    val lyricsOffsetMs: () -> Int,
+    /** Loads lyrics for the current song if they are not loaded yet. */
+    val ensureLyrics: (SongItem) -> Unit,
+    /** Removes the queue entry at this index, or null when the platform can't. */
+    val removeQueueIndex: ((Int) -> Unit)?,
+    val addToPlaylist: (SongItem) -> Unit,
+    val share: ((SongItem) -> Unit)?,
+    val download: ((SongItem) -> Unit)?,
+    val isDownloaded: (String) -> Boolean,
+    val openArtist: (String) -> Unit,
+    val openAlbum: ((String) -> Unit)?,
+    val startSleepTimer: (durationMs: Long, endOfSong: Boolean) -> Unit,
+    val cancelSleepTimer: () -> Unit,
+    val sleepTimerActive: () -> Boolean,
+)
+
+/** The player surface showing over (phone) or beside (desktop) Now Playing. */
+internal enum class PlayerSurface { LYRICS, QUEUE, MORE, SLEEP, DEVICES }
+
+// ---------------------------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------------------------
+
+/** Now playing on top, then what plays next; tap to jump, ✕ to remove. */
+@Composable
+internal fun ShellQueueList(
+    state: PlaybackUiState,
+    controller: PlaybackController,
+    services: ShellPlayerServices,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+) {
+    val c = Shell.colors
+    val queue = state.queue
+    val current = state.currentQueueIndex
+    val listState = rememberLazyListState()
+    LazyColumn(modifier, state = listState, contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        val now = queue.getOrNull(current)
+        if (now != null) {
+            item(key = "now-label") { IndexLabel(stringResource(Res.string.shell_np_now_playing), Modifier.padding(vertical = 8.dp)) }
+            item(key = "now-$current") { QueueRow(now, playing = true, isPlaying = state.isPlaying, onClick = controller::togglePlayPause, onRemove = null) }
+        }
+        val upcoming = if (current >= 0) (current + 1 until queue.size).toList() else queue.indices.toList()
+        item(key = "next-label") { IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.padding(top = 16.dp, bottom = 8.dp)) }
+        if (upcoming.isEmpty()) {
+            item(key = "empty") { Text(stringResource(Res.string.shell_np_queue_empty), style = Shell.type.bodySmall, color = c.ink2) }
+        }
+        itemsIndexed(upcoming, key = { _, index -> "q-$index-${queue[index].id}" }) { _, index ->
+            QueueRow(
+                queue[index], playing = false, isPlaying = false,
+                onClick = { controller.playQueueIndex(index) },
+                onRemove = services.removeQueueIndex?.let { remove -> { remove(index) } },
+                modifier = Modifier.animateItem(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueRow(song: SongItem, playing: Boolean, isPlaying: Boolean, onClick: () -> Unit, onRemove: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val c = Shell.colors
+    val (source, hovered) = rememberHover()
+    val bg by animateColorAsState(if (hovered) c.ink.copy(alpha = 0.08f) else Color.Transparent, ShellMotion.emphasized())
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(source)
+            .shellPressable(onClick, label = song.title).padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ShellArt(song.displayThumbnailUrl, Modifier.size(44.dp), shape = RoundedCornerShape(4.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(song.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (playing && isPlaying) Equalizer(height = 12.dp, modifier = Modifier.padding(horizontal = 12.dp))
+        if (onRemove != null) {
+            Box(Modifier.size(44.dp).shellPressable(onRemove, label = stringResource(Res.string.shell_np_remove_from_queue), focusShape = CircleShape), contentAlignment = Alignment.Center) {
+                Glyph(Glyphs.Close, c.ink2, 14.dp)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// More, sleep timer, devices
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+internal fun ShellMoreActions(
+    song: SongItem,
+    controller: PlaybackController,
+    services: ShellPlayerServices,
+    onShow: (PlayerSurface) -> Unit,
+    onDone: () -> Unit,
+) {
+    val sleepOn = services.sleepTimerActive()
+    SheetHeader(song)
+    ActionRow(Glyphs.Add, stringResource(Res.string.shell_np_add_to_playlist)) { onDone(); services.addToPlaylist(song) }
+    song.artists.firstOrNull()?.id?.let { artistId ->
+        ActionRow(Glyphs.Artist, stringResource(Res.string.shell_np_go_to_artist)) { onDone(); services.openArtist(artistId) }
+    }
+    val albumId = song.album?.id
+    val openAlbum = services.openAlbum
+    if (albumId != null && openAlbum != null) {
+        ActionRow(Glyphs.Album, stringResource(Res.string.shell_np_go_to_album)) { onDone(); openAlbum(albumId) }
+    }
+    ActionRow(Glyphs.Radio, stringResource(Res.string.shell_np_start_radio)) { onDone(); controller.startRadio(song) }
+    services.download?.let { download ->
+        val done = services.isDownloaded(song.id)
+        ActionRow(Glyphs.Download, stringResource(if (done) Res.string.shell_np_downloaded else Res.string.shell_np_download), enabled = !done) { onDone(); download(song) }
+    }
+    services.share?.let { share -> ActionRow(Glyphs.Share, stringResource(Res.string.shell_np_share)) { onDone(); share(song) } }
+    ActionRow(Glyphs.Sleep, stringResource(if (sleepOn) Res.string.shell_np_sleep_on else Res.string.shell_np_sleep_timer), accent = sleepOn) { onShow(PlayerSurface.SLEEP) }
+}
+
+@Composable
+internal fun ShellSleepTimer(services: ShellPlayerServices, onDone: () -> Unit) {
+    val c = Shell.colors
+    Text(stringResource(Res.string.shell_np_sleep_timer), style = Shell.type.title.copy(fontSize = Shell.type.body.fontSize), color = c.ink, modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp))
+    listOf(15, 30, 45, 60, 90).forEach { minutes ->
+        ActionRow(null, stringResource(Res.string.shell_np_minutes, minutes)) { services.startSleepTimer(minutes * 60_000L, false); onDone() }
+    }
+    ActionRow(null, stringResource(Res.string.shell_np_sleep_end_of_song)) { services.startSleepTimer(0L, true); onDone() }
+    if (services.sleepTimerActive()) {
+        ActionRow(Glyphs.Close, stringResource(Res.string.shell_np_sleep_cancel), accent = true) { services.cancelSleepTimer(); onDone() }
+    }
+}
+
+/** Speakers and TVs on the network; this device first. Discovery runs while the list is showing. */
+@Composable
+internal fun ShellDevices(state: PlaybackUiState, controller: PlaybackController) {
+    val c = Shell.colors
+    DisposableEffect(controller) {
+        controller.startCastDiscovery()
+        onDispose { controller.stopCastDiscovery() }
+    }
+    val cast = state.castState
+    val connected = cast.status == CastConnectionStatus.CONNECTED
+    ActionRow(Glyphs.Devices, stringResource(Res.string.shell_np_this_device), accent = !connected && cast.status != CastConnectionStatus.CONNECTING) {
+        if (cast.device != null) controller.disconnectCast()
+    }
+    state.castDevices.forEach { device ->
+        val active = cast.device?.id == device.id
+        ActionRow(
+            Glyphs.Speaker,
+            device.name,
+            accent = active && connected,
+            trailing = if (active && connected) stringResource(Res.string.shell_np_connected) else null,
+        ) { if (active) controller.disconnectCast() else controller.castTo(device) }
+    }
+    if (state.castDevices.isEmpty()) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Equalizer(color = c.ink2, height = 10.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(stringResource(Res.string.shell_np_devices_searching), style = Shell.type.bodySmall, color = c.ink2)
+        }
+        Text(stringResource(Res.string.shell_np_devices_none), style = Shell.type.bodySmall, color = c.ink2.copy(alpha = 0.7f), modifier = Modifier.padding(horizontal = 12.dp))
+    }
+    if (connected) {
+        ActionRow(Glyphs.Close, stringResource(Res.string.shell_np_disconnect)) { controller.disconnectCast() }
+    }
+}
+
+@Composable
+private fun SheetHeader(song: SongItem) {
+    val c = Shell.colors
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        ShellArt(song.displayThumbnailUrl, Modifier.size(48.dp), shape = RoundedCornerShape(4.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(song.title, style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp).height(1.dp).background(c.hairline))
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun ActionRow(glyph: ImageVector?, label: String, accent: Boolean = false, enabled: Boolean = true, trailing: String? = null, onClick: () -> Unit) {
+    val c = Shell.colors
+    val (source, hovered) = rememberHover()
+    val bg by animateColorAsState(if (hovered) c.ink.copy(alpha = 0.06f) else Color.Transparent, ShellMotion.emphasized())
+    val tint = when {
+        !enabled -> c.ink2.copy(alpha = 0.6f)
+        accent -> c.accent
+        else -> c.ink
+    }
+    Row(
+        Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp)).background(bg).hoverable(source)
+            .then(if (enabled) Modifier.shellPressable(onClick, label = label) else Modifier).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (glyph != null) {
+            Glyph(glyph, tint, 22.dp)
+            Spacer(Modifier.width(16.dp))
+        }
+        Text(label, style = Shell.type.body, color = tint, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (trailing != null) IndexLabel(trailing, color = c.accent)
+    }
+}
+
+/**
+ * Shell's bottom sheet for phones: a scrim and a rounded panel that springs up (H-Motion), closing on
+ * scrim tap or Back. The caller keeps it composed and toggles [visible].
+ */
+@Composable
+internal fun BoxScope.ShellBottomSheet(visible: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    val c = Shell.colors
+    if (visible) com.metrolist.shared.ui.navigation.NavigationBackHandler(enabled = true) { onDismiss() }
+    AnimatedVisibility(visible, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit()), modifier = Modifier.matchParentSize()) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f))
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        )
+    }
+    AnimatedVisibility(
+        visible,
+        enter = slideInVertically(ShellMotion.spring()) { it } + fadeIn(ShellMotion.emphasized()),
+        exit = slideOutVertically(ShellMotion.exit()) { it } + fadeOut(ShellMotion.exit()),
+        modifier = Modifier.align(Alignment.BottomCenter),
+    ) {
+        Column(
+            Modifier.widthIn(max = 560.dp).fillMaxWidth().clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)).background(c.surface1)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                .windowInsetsPadding(WindowInsets.navigationBars).padding(horizontal = 8.dp).padding(bottom = 8.dp),
+        ) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(c.ink2.copy(alpha = 0.5f)))
+            }
+            content()
+        }
+    }
+}
+
+/** Header for a full-screen surface (lyrics, queue): the song's title with a close chevron. */
+@Composable
+internal fun SurfaceHeader(title: String, subtitle: String?, onClose: () -> Unit) {
+    val c = Shell.colors
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        GlyphButton(Glyphs.ChevronDown, stringResource(Res.string.shell_np_close), onClose, c.ink, iconSize = 24.dp)
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle != null) Text(subtitle, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.size(48.dp))
+    }
+}
+
+/** Lyrics for whatever is playing, loading them on first show. */
+@Composable
+internal fun ShellLyricsFor(song: SongItem, services: ShellPlayerServices, live: LivePosition, onSeek: (Long) -> Unit, modifier: Modifier, compact: Boolean, contentPadding: PaddingValues = PaddingValues(0.dp)) {
+    LaunchedEffect(song.id) { services.ensureLyrics(song) }
+    ShellLyricsView(
+        entries = services.lyrics(),
+        loading = services.lyricsLoading(),
+        position = { live.ms },
+        offsetMs = services.lyricsOffsetMs(),
+        onSeek = onSeek,
+        modifier = modifier,
+        contentPadding = contentPadding,
+        compact = compact,
+    )
+}

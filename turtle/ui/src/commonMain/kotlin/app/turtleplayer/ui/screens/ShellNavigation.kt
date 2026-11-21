@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,7 +99,7 @@ private fun BottomTabs(slot: NavigationSlot) {
                     .drawBehind {
                         val fade = 88.dp.toPx()
                         drawRect(
-                            Brush.verticalGradient(0f to Color.Transparent, 1f to c.ground.copy(alpha = 0.96f), startY = -fade, endY = 0f),
+                            Brush.verticalGradient(0f to Color.Transparent, 0.6f to c.ground.copy(alpha = 0.9f), 1f to c.ground.copy(alpha = 0.96f), startY = -fade, endY = 0f),
                             topLeft = Offset(0f, -fade), size = Size(size.width, fade),
                         )
                     }
@@ -131,11 +133,15 @@ private fun BottomTabs(slot: NavigationSlot) {
     if (slot.floating) {
         Box(slot.modifier.fillMaxSize()) {
             SlotContent(slot)
+            HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
             bar(Modifier.align(Alignment.BottomCenter))
         }
     } else {
         Column(slot.modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f)) { SlotContent(slot) }
+            Box(Modifier.weight(1f)) {
+                SlotContent(slot)
+                HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
+            }
             bar(Modifier)
         }
     }
@@ -182,4 +188,23 @@ internal fun SlotContent(slot: NavigationSlot) {
         androidx.compose.material3.LocalContentColor provides androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
         content = slot.content,
     )
+}
+
+/**
+ * Where upstream hides the tabs (search results, detail pages), the mini player still floats at the
+ * bottom: fade content out behind it and the gesture area, as the tab bar does elsewhere.
+ */
+@Composable
+private fun HiddenBarScrim(slot: NavigationSlot, modifier: Modifier) {
+    val c = Shell.colors
+    val controller = com.metrolist.shared.ui.playback.LocalPlaybackController.current
+    val list by controller.listState.collectAsState(null)
+    val show = !slot.navigationVisible && list?.currentSongId != null
+    AnimatedVisibility(show, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit()), modifier = modifier) {
+        // Mini player height plus the system bar inset, fading to the ground.
+        Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to c.ground.copy(alpha = 0.9f), 1f to c.ground.copy(alpha = 0.96f)))) {
+            Spacer(Modifier.height(84.dp))
+            Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+        }
+    }
 }

@@ -105,7 +105,7 @@ fun MetrolistTheme(
     IosAppearanceProvider {
         MaterialExpressiveTheme(
             colorScheme = animatedColorScheme,
-            typography = MetrolistTypography(),
+            typography = com.metrolist.shared.turtle.TurtleUiSlots.typography?.invoke() ?: MetrolistTypography(), // Turtle: HOOKS.md #32
             shapes = MetrolistShapes,
             motionScheme = motionScheme,
             content = { MetrolistHapticsProvider(content) },

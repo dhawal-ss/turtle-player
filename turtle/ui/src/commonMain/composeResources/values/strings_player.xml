@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shell_np_add_to_playlist">Add to playlist</string>
+    <string name="shell_np_go_to_artist">Go to artist</string>
+    <string name="shell_np_go_to_album">Go to album</string>
+    <string name="shell_np_start_radio">Start radio</string>
+    <string name="shell_np_download">Download</string>
+    <string name="shell_np_downloaded">Downloaded</string>
+    <string name="shell_np_share">Share</string>
+    <string name="shell_np_sleep_timer">Sleep timer</string>
+    <string name="shell_np_sleep_on">Sleep timer is on</string>
+    <string name="shell_np_minutes">%1$d minutes</string>
+    <string name="shell_np_sleep_end_of_song">End of this song</string>
+    <string name="shell_np_sleep_cancel">Turn off sleep timer</string>
+    <string name="shell_np_now_playing">Now playing</string>
+    <string name="shell_np_queue_empty">Nothing queued. Autoplay keeps the music going.</string>
+    <string name="shell_np_remove_from_queue">Remove from queue</string>
+    <string name="shell_np_this_device">This device</string>
+    <string name="shell_np_connected">Connected</string>
+    <string name="shell_np_disconnect">Disconnect</string>
+    <string name="shell_np_devices_searching">Looking for speakers and TVs…</string>
+    <string name="shell_np_devices_none">Make sure they are on the same Wi-Fi.</string>
+    <string name="shell_np_close">Close</string>
+</resources>

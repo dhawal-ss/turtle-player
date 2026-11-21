@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shell_pick_title">Add to playlist</string>
+    <string name="shell_pick_create">New playlist</string>
+    <string name="shell_pick_add">Done</string>
+    <string name="shell_pick_added">Added</string>
+    <string name="shell_pick_already">Already in this playlist</string>
+    <string name="shell_pick_failed">Couldn't update some playlists. Try again.</string>
+    <string name="shell_pick_none">No playlists yet. Make one above.</string>
+    <string name="shell_pick_count">%1$d SONGS</string>
+    <plurals name="shell_pick_songs">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
+</resources>

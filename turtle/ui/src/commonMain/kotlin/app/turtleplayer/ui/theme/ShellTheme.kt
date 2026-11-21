@@ -202,3 +202,36 @@ fun shellMaterialScheme(colors: ShellColors, desktop: Boolean): ColorScheme {
         surfaceContainerHighest = colors.surface3,
     )
 }
+
+/**
+ * Shell's type for the whole app (turtle/HOOKS.md #32): upstream's own screens (Library, album,
+ * artist, playlist, settings, dialogs) set display and headline styles in Space Grotesk and text in
+ * Inter, so the app reads as one product.
+ */
+@Composable
+fun shellMaterialTypography(): androidx.compose.material3.Typography {
+    val grotesk = FontFamily(variable(Res.font.space_grotesk, 500), variable(Res.font.space_grotesk, 700))
+    val inter = FontFamily(variable(Res.font.inter, 400), variable(Res.font.inter, 500), variable(Res.font.inter, 600), variable(Res.font.inter, 700))
+    return remember(grotesk, inter) {
+        val base = androidx.compose.material3.Typography()
+        fun TextStyle.display() = copy(fontFamily = grotesk, fontWeight = FontWeight.Bold, letterSpacing = (-0.02).em)
+        fun TextStyle.text(weight: FontWeight) = copy(fontFamily = inter, fontWeight = weight)
+        base.copy(
+            displayLarge = base.displayLarge.display(),
+            displayMedium = base.displayMedium.display(),
+            displaySmall = base.displaySmall.display(),
+            headlineLarge = base.headlineLarge.display(),
+            headlineMedium = base.headlineMedium.display(),
+            headlineSmall = base.headlineSmall.display(),
+            titleLarge = base.titleLarge.display(),
+            titleMedium = base.titleMedium.text(FontWeight.SemiBold),
+            titleSmall = base.titleSmall.text(FontWeight.SemiBold),
+            bodyLarge = base.bodyLarge.text(FontWeight.Normal),
+            bodyMedium = base.bodyMedium.text(FontWeight.Normal),
+            bodySmall = base.bodySmall.text(FontWeight.Normal),
+            labelLarge = base.labelLarge.text(FontWeight.SemiBold),
+            labelMedium = base.labelMedium.text(FontWeight.Medium),
+            labelSmall = base.labelSmall.text(FontWeight.Medium),
+        )
+    }
+}

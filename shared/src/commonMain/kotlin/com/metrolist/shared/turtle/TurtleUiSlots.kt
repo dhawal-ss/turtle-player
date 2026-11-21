@@ -41,8 +41,17 @@ object TurtleUiSlots {
      */
     var colorScheme: ((Boolean) -> ColorScheme?)? = null
 
+    /** Type scale for the whole app (upstream screens included); null keeps upstream's. */
+    var typography: (@Composable () -> androidx.compose.material3.Typography)? = null
+
     /** Desktop data Shell's sidebar needs; the desktop app registers it at startup. Non-null means desktop. */
     var desktopLibrary: DesktopLibrarySlot? = null
+
+    /** Desktop player services for Shell's panels (lyrics, queue edits, sleep timer); null on phones. */
+    var desktopExtras: DesktopPlayerExtras? = null
+
+    /** Shell's add-to-playlist sheet in place of upstream's chooser (phones); null keeps upstream's. */
+    var playlistPicker: (@Composable (PlaylistPickerSlot) -> Unit)? = null
 
     /** While true, upstream's full player shows instead of ours (Shell hands over for lyrics, queue, more). */
     var showUpstreamPlayer by mutableStateOf(false)
@@ -154,4 +163,39 @@ class DesktopPlayerBarSlot(
 class DesktopLibrarySlot(
     val items: () -> List<YTItem>,
     val open: (YTItem) -> Unit,
+)
+
+/**
+ * Desktop player services Shell's own panels use instead of upstream's drawers and dialogs: lyrics,
+ * queue edits, sleep timer and add-to-playlist. Set once at startup from desktop `Main.kt`.
+ */
+class DesktopPlayerExtras(
+    val lyrics: () -> List<com.metrolist.shared.model.LyricsEntry>,
+    val lyricsLoading: () -> Boolean,
+    val lyricsOffsetMs: () -> Int,
+    val lyricsSongId: () -> String?,
+    val loadLyrics: (SongItem) -> Unit,
+    val removeQueueIndex: (Int) -> Unit,
+    val startSleepTimer: (durationMs: Long, stopAfterCurrentSong: Boolean) -> Unit,
+    val cancelSleepTimer: () -> Unit,
+    val sleepTimerActive: () -> Boolean,
+    val addToPlaylist: (SongItem) -> Unit,
+)
+
+/** A playlist the user can add to, for Shell's picker. [contains] is true when the songs are already in it. */
+class PickerPlaylist(val id: String, val name: String, val songCount: Int, val thumbnail: String?, val contains: Boolean)
+
+/** Upstream's add-to-playlist workflow (selection, progress, create), drawn by Shell. */
+class PlaylistPickerSlot(
+    val songs: List<SongItem>,
+    val playlists: List<PickerPlaylist>,
+    val selectedIds: Set<String>,
+    val completedIds: Set<String>,
+    val failedIds: Set<String>,
+    val busy: Boolean,
+    val failed: Boolean,
+    val onToggle: (String) -> Unit,
+    val onAdd: () -> Unit,
+    val onCreate: () -> Unit,
+    val onDismiss: () -> Unit,
 )

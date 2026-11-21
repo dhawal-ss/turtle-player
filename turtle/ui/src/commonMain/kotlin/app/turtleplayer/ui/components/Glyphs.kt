@@ -55,9 +55,17 @@ object Glyphs {
     val Volume = vector("volume", "M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11", filled = false)
     val Heart = vector("heart", "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", filled = true)
     val ArrowRight = vector("arrow_right", "M5 12h14M13 6l6 6-6 6", filled = false, stroke = 2f)
+    val ArrowLeft = vector("arrow_left", "M19 12H5M11 6l-6 6 6 6", filled = false, stroke = 2f)
     val NowPlayingView = vector("now_playing_view", "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM15 5v14", filled = false)
     val History = vector("history", "M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4v4.5H8M12 7.5V12l3 2", filled = false)
     val Stats = vector("stats", "M5 20V11M12 20V4M19 20v-6", filled = false, stroke = 2.2f)
+    val Artist = vector("artist", "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4.5 20.5c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5", filled = false)
+    val Album = vector("album", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z", filled = false)
+    val Radio = vector("radio", "M12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8", filled = false)
+    val Download = vector("download", "M12 4v11M7 10l5 5 5-5M5 20h14", filled = false, stroke = 2f)
+    val Share = vector("share", "M12 15V4M8 8l4-4 4 4M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6", filled = false)
+    val Sleep = vector("sleep", "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z", filled = false)
+    val Speaker = vector("speaker", "M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM12 11a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 6.5v.5", filled = false)
     val Together = vector("together", "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6M16 4.6a3.5 3.5 0 0 1 0 6.3M18 14.3c2.1.7 3.5 2.9 3.5 5.7", filled = false)
 }
 

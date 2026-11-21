@@ -12,6 +12,7 @@ import app.turtleplayer.ui.theme.ShellColors
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.ShellThemes
 import app.turtleplayer.ui.theme.shellMaterialScheme
+import app.turtleplayer.ui.theme.shellMaterialTypography
 import com.metrolist.shared.turtle.TurtleUiSlots
 import org.koin.core.module.Module
 import org.koin.dsl.module
@@ -28,6 +29,8 @@ object TurtleUi {
         TurtleUiSlots.navigation = { ShellNavigation(it) }
         TurtleUiSlots.desktopPlayerBar = { ShellDesktopPlayerBar(it) }
         TurtleUiSlots.colorScheme = { dark -> if (dark) appScheme() else null }
+        TurtleUiSlots.typography = { shellMaterialTypography() }
+        TurtleUiSlots.playlistPicker = { app.turtleplayer.ui.screens.ShellPlaylistPicker(it) }
     }
 
     /** Shell's scheme for the whole app; reading [ShellThemes.active] recomposes the app when the theme changes. */
