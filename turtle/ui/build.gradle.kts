@@ -43,5 +43,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.koin.core)
         }
+        // Offscreen snapshots of Shell screens (DjSnapshotTest renders the DJ booth to PNGs).
+        getByName("desktopTest").dependencies {
+            implementation(kotlin("test"))
+            implementation(compose.desktop.currentOs)
+        }
     }
 }

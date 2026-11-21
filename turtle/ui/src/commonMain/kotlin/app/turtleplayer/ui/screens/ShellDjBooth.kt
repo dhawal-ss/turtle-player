@@ -1,5 +1,6 @@
 package app.turtleplayer.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -7,14 +8,18 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,9 +74,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -79,8 +87,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.turtleplayer.bridge.DjArc
 import app.turtleplayer.bridge.DjEngine
+import app.turtleplayer.bridge.DjRack
 import app.turtleplayer.bridge.DjTrack
+import app.turtleplayer.mix.TransitionStyle
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.IndexLabel
@@ -88,53 +99,12 @@ import app.turtleplayer.ui.components.PlayPauseButton
 import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.ShellToast
 import app.turtleplayer.ui.components.shellPressable
-import app.turtleplayer.ui.generated.resources.Res
-import app.turtleplayer.ui.generated.resources.shell_dj_beat_estimated
-import app.turtleplayer.ui.generated.resources.shell_dj_beat_live
-import app.turtleplayer.ui.generated.resources.shell_dj_bpm
-import app.turtleplayer.ui.generated.resources.shell_dj_chill
-import app.turtleplayer.ui.generated.resources.shell_dj_chilled
-import app.turtleplayer.ui.generated.resources.shell_dj_deck_a
-import app.turtleplayer.ui.generated.resources.shell_dj_deck_b
-import app.turtleplayer.ui.generated.resources.shell_dj_deck_b_mixing
-import app.turtleplayer.ui.generated.resources.shell_dj_deck_empty
-import app.turtleplayer.ui.generated.resources.shell_dj_digging
-import app.turtleplayer.ui.generated.resources.shell_dj_end
-import app.turtleplayer.ui.generated.resources.shell_dj_end_confirm
-import app.turtleplayer.ui.generated.resources.shell_dj_energy
-import app.turtleplayer.ui.generated.resources.shell_dj_exit
-import app.turtleplayer.ui.generated.resources.shell_dj_fx
-import app.turtleplayer.ui.generated.resources.shell_dj_fx_boost
-import app.turtleplayer.ui.generated.resources.shell_dj_fx_filter
-import app.turtleplayer.ui.generated.resources.shell_dj_fx_kill
-import app.turtleplayer.ui.generated.resources.shell_dj_hype
-import app.turtleplayer.ui.generated.resources.shell_dj_hyped
-import app.turtleplayer.ui.generated.resources.shell_dj_label
-import app.turtleplayer.ui.generated.resources.shell_dj_mix_in
-import app.turtleplayer.ui.generated.resources.shell_dj_mix_now
-import app.turtleplayer.ui.generated.resources.shell_dj_mixing
-import app.turtleplayer.ui.generated.resources.shell_dj_next_badge
-import app.turtleplayer.ui.generated.resources.shell_dj_pause
-import app.turtleplayer.ui.generated.resources.shell_dj_play
-import app.turtleplayer.ui.generated.resources.shell_dj_request
-import app.turtleplayer.ui.generated.resources.shell_dj_request_empty
-import app.turtleplayer.ui.generated.resources.shell_dj_request_hint
-import app.turtleplayer.ui.generated.resources.shell_dj_request_slotted
-import app.turtleplayer.ui.generated.resources.shell_dj_request_title
-import app.turtleplayer.ui.generated.resources.shell_dj_requested
-import app.turtleplayer.ui.generated.resources.shell_dj_set_time
-import app.turtleplayer.ui.generated.resources.shell_dj_set_time_of
-import app.turtleplayer.ui.generated.resources.shell_dj_side_a
-import app.turtleplayer.ui.generated.resources.shell_dj_side_b
-import app.turtleplayer.ui.generated.resources.shell_dj_skip
-import app.turtleplayer.ui.generated.resources.shell_dj_tempo
-import app.turtleplayer.ui.generated.resources.shell_dj_tempo_down
-import app.turtleplayer.ui.generated.resources.shell_dj_tempo_up
-import app.turtleplayer.ui.generated.resources.shell_dj_up_next
+import app.turtleplayer.ui.generated.resources.*
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import com.metrolist.shared.equalizer.AudioSpectrumMeter
 import com.metrolist.shared.model.displayThumbnailUrl
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.playback.PlaybackController
 import kotlinx.coroutines.Dispatchers
@@ -154,10 +124,10 @@ import kotlin.math.sin
 internal const val DJ_BANDS = 18
 
 /**
- * The booth's beat: the app's own post-EQ spectrum ([AudioSpectrumMeter], fed by Android's
- * EqualizerAudioProcessor and desktop's AudioRenderer) with a kick detector on the low bands. When
- * no audio reaches the meter (another output path, or a platform without the tap) it falls back to a
- * pulse on the estimated tempo, and [real] says so. Values change every frame: read them in draw.
+ * The booth's beat: the app's own post-EQ spectrum ([AudioSpectrumMeter]) with a kick detector on the
+ * low bands. When the rack has measured the tempo, the pulse locks to its beat phase instead. With no
+ * audio reaching the meter it falls back to a pulse on the estimated tempo, and [real] says so.
+ * Values change every frame: read them in draw.
  */
 @Stable
 internal class DjPulse {
@@ -185,6 +155,7 @@ internal fun rememberDjPulse(playing: Boolean, bpm: () -> Float): DjPulse {
         var env = pulse.beat
         var lastFrame = -1L
         var origin = -1L
+        var lastPhase = 0f
         while (true) {
             val now = withFrameNanos { it } / 1_000_000L
             if (origin < 0) origin = now
@@ -201,16 +172,23 @@ internal fun rememberDjPulse(playing: Boolean, bpm: () -> Float): DjPulse {
                     if (levels[i] > 0.12f) loud = true
                 }
                 if (loud) lastLoud = now
-                val bass = if (n >= 4) (levels[0] + levels[1] + levels[2] + levels[3]) / 4f else 0f
-                val onset = bass - slowBass
-                slowBass = slowBass * 0.9f + bass * 0.1f
-                if (loud && onset > 0.02f) env = max(env, (onset * 8f).coerceAtMost(1f))
+                val deck = DjRack.rack.onAir
+                if (deck != null && deck.active && deck.bpmMeasured) {
+                    // Locked to the measured beat grid: a kick on each beat the rack tracks.
+                    val ph = deck.beatPhase
+                    if (ph < lastPhase - 0.5f) env = 1f
+                    lastPhase = ph
+                } else {
+                    val bass = if (n >= 4) (levels[0] + levels[1] + levels[2] + levels[3]) / 4f else 0f
+                    val onset = bass - slowBass
+                    slowBass = slowBass * 0.9f + bass * 0.1f
+                    if (loud && onset > 0.02f) env = max(env, (onset * 8f).coerceAtMost(1f))
+                }
             }
             val real = playing && now - lastLoud < 1_500
             if (pulse.real != real) pulse.real = real
             if (!real) {
                 if (playing) {
-                    // Estimated: a kick on every beat of the tempo prior and a gently moving spectrum.
                     val phase = ((now - origin) * currentBpm() / 60_000f) % 1f
                     env = exp(-phase * 7f)
                     for (i in 0 until DJ_BANDS) {
@@ -237,11 +215,14 @@ internal fun rememberDjPulse(playing: Boolean, bpm: () -> Float): DjPulse {
 }
 
 /** Arc colours: the light the booth throws. */
-internal fun app.turtleplayer.bridge.DjArc.vibe(): Color = when (this) {
-    app.turtleplayer.bridge.DjArc.Lounge -> Color(0xFF6FE3C8)
-    app.turtleplayer.bridge.DjArc.HouseParty -> Color(0xFFD4F55A)
-    app.turtleplayer.bridge.DjArc.ClubPeak -> Color(0xFFFF4FA3)
-    app.turtleplayer.bridge.DjArc.Sunrise -> Color(0xFFFFB347)
+internal fun DjArc.vibe(): Color = when (this) {
+    DjArc.Lounge -> Color(0xFF6FE3C8)
+    DjArc.HouseParty -> Color(0xFFD4F55A)
+    DjArc.ClubPeak -> Color(0xFFFF4FA3)
+    DjArc.Waves -> Color(0xFFFF7A59)
+    DjArc.Workout -> Color(0xFFFF5A5F)
+    DjArc.Focus -> Color(0xFF7FA7FF)
+    DjArc.Sunrise -> Color(0xFFFFB347)
 }
 
 /**
@@ -283,20 +264,13 @@ internal fun DjVinyl(
                 val spokes = 72
                 val stroke = 2.dp.toPx()
                 for (k in 0 until spokes) {
-                    // Mirror the spectrum around the ring: bass at the top and bottom.
                     val half = k % (spokes / 2)
                     val band = ((if (half < spokes / 4) half else spokes / 2 - 1 - half) * DJ_BANDS / (spokes / 4)).coerceIn(0, DJ_BANDS - 1)
                     val v = ring.bars[band]
                     val len = reach * (0.12f + 0.88f * v.pow(1.4f)) * (0.85f + 0.15f * ring.beat)
                     val a = (k.toFloat() / spokes) * 2f * PI.toFloat() - PI.toFloat() / 2
                     val dir = Offset(cos(a), sin(a))
-                    drawLine(
-                        ringColor.copy(alpha = 0.25f + 0.65f * v),
-                        center + dir * inner,
-                        center + dir * (inner + len),
-                        strokeWidth = stroke,
-                        cap = StrokeCap.Round,
-                    )
+                    drawLine(ringColor.copy(alpha = 0.25f + 0.65f * v), center + dir * inner, center + dir * (inner + len), strokeWidth = stroke, cap = StrokeCap.Round)
                 }
             }
         }
@@ -309,7 +283,6 @@ internal fun DjVinyl(
                     val groove = Color.White.copy(alpha = 0.05f)
                     for (k in 0 until 16) drawCircle(groove, r * (0.47f + k * 0.032f), style = Stroke(1f))
                     drawCircle(Color.White.copy(alpha = 0.10f), r - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
-                    // A pressing mark, so the spin reads even on a plain label.
                     drawLine(Color.White.copy(alpha = 0.12f), Offset(r, r * 0.12f), Offset(r, r * 0.42f), 2.dp.toPx(), StrokeCap.Round)
                 },
             contentAlignment = Alignment.Center,
@@ -317,7 +290,6 @@ internal fun DjVinyl(
             ShellArt(artUrl, Modifier.size(disc * 0.42f), shape = CircleShape, fallback = ringColor.copy(alpha = 0.55f))
             Box(Modifier.size(disc * 0.05f).clip(CircleShape).background(Color(0xFF0B0B0C)))
         }
-        // Light from above: fixed, so the record turns under it.
         Canvas(Modifier.size(disc)) {
             val w = this.size.minDimension * 0.26f
             val inset = w / 2 + this.size.minDimension * 0.06f
@@ -328,27 +300,20 @@ internal fun DjVinyl(
     }
 }
 
-/** The booth: two decks, crossfader, visualizer, transport, FX pads, energy graph and up next. */
+/** The booth: Auto (the DJ mixes, you steer the vibe) or You DJ (you pick the track, the move and the moment). */
 @Composable
 internal fun DjBooth(s: DjSession, onExit: () -> Unit) {
     val controller = LocalPlaybackController.current
     val calm by controller.rememberCalmState()
     val playing = calm.isPlaying
     val vibe = s.arc.vibe()
-    val pulse = rememberDjPulse(playing) { (s.current?.track?.bpm ?: 120) * s.speed }
+    val pulse = rememberDjPulse(playing) { s.liveBpm.takeIf { it > 0f }?.times(s.speed) ?: ((s.current?.track?.bpm ?: 120) * s.speed) }
     var requestOpen by remember { mutableStateOf(false) }
-    var toast by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    var toast by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(toast) {
         if (toast != null) {
             delay(2_400)
             toast = null
-        }
-    }
-    val toastText = toast?.let { (kind, arg) ->
-        when (kind) {
-            TOAST_SLOTTED -> stringResource(Res.string.shell_dj_request_slotted, arg)
-            TOAST_HYPE -> stringResource(Res.string.shell_dj_hyped)
-            else -> stringResource(Res.string.shell_dj_chilled)
         }
     }
     val ground = Shell.colors.ground
@@ -367,24 +332,13 @@ internal fun DjBooth(s: DjSession, onExit: () -> Unit) {
                 if (loading) {
                     DjLoading(s, vibe, onExit)
                 } else {
-                    BoothContent(
-                        s = s,
-                        controller = controller,
-                        playing = playing,
-                        fxAvailable = calm.isAudioProcessingAvailable,
-                        vibe = vibe,
-                        pulse = pulse,
-                        wide = wide,
-                        width = boothWidth,
-                        onExit = onExit,
-                        onRequest = { requestOpen = true },
-                        onToast = { toast = it },
-                    )
+                    BoothContent(s, controller, playing, vibe, pulse, wide, boothWidth, onExit, onRequest = { requestOpen = true })
                 }
             }
         }
-        DjRequestSheet(requestOpen, s, controller, onDismiss = { requestOpen = false }) { title -> toast = TOAST_SLOTTED to title }
-        ShellToast(toastText, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).widthIn(max = 520.dp))
+        val slotted = stringResource(Res.string.shell_dj_request_slotted, "%s")
+        DjRequestSheet(requestOpen, s, controller, onDismiss = { requestOpen = false }) { title -> toast = slotted.replace("%s", title) }
+        ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).widthIn(max = 520.dp))
     }
 }
 
@@ -393,32 +347,30 @@ private fun BoothContent(
     s: DjSession,
     controller: PlaybackController,
     playing: Boolean,
-    fxAvailable: Boolean,
     vibe: Color,
     pulse: DjPulse,
     wide: Boolean,
     width: Dp,
     onExit: () -> Unit,
     onRequest: () -> Unit,
-    onToast: (Pair<Int, String>) -> Unit,
 ) {
-    val haptics = LocalHapticFeedback.current
+    val you = s.mode == DjMode.You
+    var fxOpen by remember { mutableStateOf(false) }
     if (wide) {
         Column(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 12.dp)) {
             DjTopBar(s, vibe, pulse, controller, onExit)
-            Row(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                Column(Modifier.weight(1.35f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                        DjDeck(s.current, onAir = true, s, playing, pulse, 280.dp, vibe, controller, Modifier.weight(1.15f))
-                        DjDeck(s.upcoming.firstOrNull(), onAir = false, s, playing, pulse, 200.dp, vibe, controller, Modifier.weight(0.85f))
-                    }
-                    DjCrossfader(s, vibe, Modifier.fillMaxWidth())
-                    DjVisualizer(pulse, vibe, Modifier.fillMaxWidth().weight(1f).heightIn(min = 56.dp))
-                    DjTransport(s, controller, playing, vibe, haptics, onToast, big = true)
-                    DjPads(s, controller, vibe, haptics, fxAvailable, onRequest, columns = 6)
+            Row(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                Column(Modifier.weight(1.3f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    DjModeSwitch(s, vibe)
+                    DjDecks(s, controller, playing, pulse, vibe, 260.dp)
+                    DjNarration(s, vibe, pulse)
+                    DjCrossfader(s, controller, vibe, Modifier.fillMaxWidth())
+                    DjTransport(s, controller, playing, vibe, big = true)
+                    DjFxSection(s, controller, vibe, open = you || fxOpen, onToggle = { fxOpen = !fxOpen }, showToggle = !you, columns = 4)
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                    DjEnergyPanel(s, pulse, vibe, graphHeight = 150.dp)
+                    if (you) DjYouPanel(s, controller, vibe) else DjAutoPanel(s, controller, vibe)
+                    DjEnergyPanel(s, pulse, vibe, graphHeight = 140.dp)
                     DjUpNext(s, vibe, onRequest)
                 }
             }
@@ -430,18 +382,25 @@ private fun BoothContent(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             DjTopBar(s, vibe, pulse, controller, onExit)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                DjDeck(s.current, onAir = true, s, playing, pulse, vinylA, vibe, controller, Modifier.weight(1.15f))
-                DjDeck(s.upcoming.firstOrNull(), onAir = false, s, playing, pulse, vinylA * 0.74f, vibe, controller, Modifier.weight(0.85f))
-            }
-            DjCrossfader(s, vibe, Modifier.fillMaxWidth())
-            DjVisualizer(pulse, vibe, Modifier.fillMaxWidth().height(56.dp))
-            DjTransport(s, controller, playing, vibe, haptics, onToast, big = false)
-            DjPads(s, controller, vibe, haptics, fxAvailable, onRequest, columns = 3)
+            DjModeSwitch(s, vibe)
+            DjDecks(s, controller, playing, pulse, vibe, vinylA)
+            DjNarration(s, vibe, pulse)
+            DjCrossfader(s, controller, vibe, Modifier.fillMaxWidth())
+            DjTransport(s, controller, playing, vibe, big = false)
+            if (you) DjYouPanel(s, controller, vibe) else DjAutoPanel(s, controller, vibe)
+            DjFxSection(s, controller, vibe, open = you || fxOpen, onToggle = { fxOpen = !fxOpen }, showToggle = !you, columns = 4)
             DjEnergyPanel(s, pulse, vibe, graphHeight = 96.dp)
             DjUpNext(s, vibe, onRequest)
         }
     }
+}
+
+@Composable
+private fun DjModeSwitch(s: DjSession, vibe: Color) {
+    DjSegmented(
+        listOf(stringResource(Res.string.shell_dj_auto_tab) to Glyphs.Turntable, stringResource(Res.string.shell_dj_you_tab) to Glyphs.Crossfader),
+        if (s.mode == DjMode.Auto) 0 else 1, vibe, Modifier.fillMaxWidth(),
+    ) { ShellDj.setMode(if (it == 0) DjMode.Auto else DjMode.You) }
 }
 
 @Composable
@@ -473,13 +432,17 @@ private fun DjTopBar(s: DjSession, vibe: Color, pulse: DjPulse, controller: Play
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            IndexLabel(stringResource(Res.string.shell_dj_label), color = vibe)
+            // The label and the set clock share a line, so the set's name keeps the full width below.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IndexLabel(stringResource(Res.string.shell_dj_label), color = vibe)
+                Spacer(Modifier.width(8.dp))
+                DjSetClock(s)
+            }
             Text(
                 djArcName(s.arc) + " · " + s.genres.take(3).map { djGenreName(it) }.joinToString(", "),
                 style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        DjSetClock(s)
         Spacer(Modifier.width(10.dp))
         DjEndButton { ShellDj.end(controller) }
     }
@@ -490,8 +453,8 @@ private fun DjTopBar(s: DjSession, vibe: Color, pulse: DjPulse, controller: Play
 private fun DjSetClock(s: DjSession) {
     val seconds by remember(s) { derivedStateOf { s.elapsedMs / 1000 } }
     val now = formatSetTime(seconds)
-    val text = s.length.minutes?.let { stringResource(Res.string.shell_dj_set_time_of, now, formatSetTime(it * 60L)) }
-        ?: stringResource(Res.string.shell_dj_set_time, now)
+    // Elapsed only: it sits beside the label on phones, and the energy graph shows what is left.
+    val text = stringResource(Res.string.shell_dj_set_time, now)
     IndexLabel(text, color = Shell.colors.ink2)
 }
 
@@ -538,6 +501,16 @@ private fun DjEndButton(onEnd: () -> Unit) {
     }
 }
 
+// ---- Decks ----------------------------------------------------------------------------------------
+
+@Composable
+private fun DjDecks(s: DjSession, controller: PlaybackController, playing: Boolean, pulse: DjPulse, vibe: Color, vinyl: Dp) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        DjDeck(s.current, onAir = true, s, playing, pulse, vinyl, vibe, controller, Modifier.weight(1.15f))
+        DjDeck(s.upcoming.firstOrNull(), onAir = false, s, playing, pulse, vinyl * 0.74f, vibe, controller, Modifier.weight(0.85f))
+    }
+}
+
 @Composable
 private fun DjDeck(
     slot: DjSlot?,
@@ -574,21 +547,30 @@ private fun DjDeck(
                 if (shown == null) {
                     Text(stringResource(Res.string.shell_dj_deck_empty), style = Shell.type.bodySmall, color = c.ink2, textAlign = TextAlign.Center)
                 } else {
-                    Text(
-                        shown.track.song.title, style = Shell.type.title.copy(fontSize = if (onAir) 17.sp else 14.sp, lineHeight = if (onAir) 21.sp else 18.sp),
-                        color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            shown.track.song.title, style = Shell.type.title.copy(fontSize = if (onAir) 17.sp else 14.sp, lineHeight = if (onAir) 21.sp else 18.sp),
+                            color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (onAir) DjLikeButton(shown, vibe)
+                    }
                     Text(
                         shown.track.song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink2,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        DjTag("≈ " + stringResource(Res.string.shell_dj_bpm, (shown.track.bpm * s.speed).roundToInt()), c.ink2)
-                        if (onAir) {
+                    if (onAir) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            DjBpmTag(s, vibe)
                             DjMixCountdown(s, controller, playing, shown.track.song.id, vibe)
-                        } else if (shown.requested) {
-                            DjTag(stringResource(Res.string.shell_dj_requested), vibe, filled = true)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        DjBeatDots(pulse, vibe, s.liveBpmMeasured)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val bpm = (shown.track.bpm * s.speed).roundToInt()
+                            DjTag(stringResource(if (shown.track.bpmMeasured) Res.string.shell_dj_bpm_live else Res.string.shell_dj_bpm_est, bpm), c.ink2)
+                            if (shown.requested) DjTag(stringResource(Res.string.shell_dj_requested), vibe, filled = true)
                         }
                     }
                 }
@@ -597,13 +579,65 @@ private fun DjDeck(
     }
 }
 
-/** "MIX IN 1:32", or MIXING: the only part of a deck that follows the position. */
+/** The on-air tempo: measured from the audio (solid) or the estimate (≈) until the rack is sure. */
+@Composable
+private fun DjBpmTag(s: DjSession, vibe: Color) {
+    val bpm = ((if (s.liveBpm > 0f) s.liveBpm else 120f) * s.speed).roundToInt()
+    if (s.liveBpmMeasured) {
+        DjTag(stringResource(Res.string.shell_dj_bpm_live, bpm), vibe, filled = true)
+    } else {
+        DjTag(stringResource(Res.string.shell_dj_bpm_est, bpm), Shell.colors.ink2)
+    }
+}
+
+/** Four dots, one per beat of the bar, lit on the beat the rack is tracking. */
+@Composable
+private fun DjBeatDots(pulse: DjPulse, vibe: Color, measured: Boolean) {
+    val off = Shell.colors.surface3
+    Canvas(Modifier.size(64.dp, 10.dp)) {
+        pulse.frame
+        val deck = DjRack.rack.onAir
+        val beat = if (measured && deck != null && deck.active) deck.beatInBar else -1
+        val r = 4.dp.toPx()
+        val gap = (size.width - r * 2 * 4) / 3
+        for (i in 0 until 4) {
+            val lit = i == beat
+            val x = r + i * (r * 2 + gap)
+            val color = when {
+                lit && i == 0 -> vibe
+                lit -> vibe.copy(alpha = 0.7f)
+                else -> off
+            }
+            drawCircle(color, if (lit) r * (1f + 0.25f * pulse.beat) else r * 0.8f, Offset(x, size.height / 2))
+        }
+    }
+}
+
+@Composable
+private fun DjLikeButton(slot: DjSlot, vibe: Color) {
+    val c = Shell.colors
+    val haptics = LocalHapticFeedback.current
+    val liked = slot.track.song.id in SongLikeState.likedSongIds
+    val label = stringResource(if (liked) Res.string.shell_dj_unlike else Res.string.shell_dj_like)
+    Box(
+        Modifier.padding(start = 4.dp).size(32.dp).clip(CircleShape)
+            .shellPressable({
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                ShellDj.like()
+            }, label = label, focusShape = CircleShape),
+        contentAlignment = Alignment.Center,
+    ) { Glyph(if (liked) Glyphs.Heart else Glyphs.HeartLine, if (liked) vibe else c.ink2, 18.dp) }
+}
+
+/** "BLEND IN 1:32", or MIXING: the only part of a deck that follows the position. */
 @Composable
 private fun DjMixCountdown(s: DjSession, controller: PlaybackController, playing: Boolean, songId: String, vibe: Color) {
     if (s.mixing) return DjTag(stringResource(Res.string.shell_dj_mixing), vibe, filled = true)
+    if (s.mode == DjMode.You) return
     val live = rememberLivePosition(controller, playing, songId)
     val left = s.mixPointMs - live.ms
     if (s.mixPointMs == Long.MAX_VALUE || left < 0) return
+    // Short on purpose: the move itself is named on the Mix button and the Next move card.
     DjTag(stringResource(Res.string.shell_dj_mix_in, formatTime(left)), vibe)
 }
 
@@ -617,96 +651,147 @@ private fun DjTag(text: String, color: Color, filled: Boolean = false) {
     ) { Text(text.uppercase(), style = Shell.type.index, color = if (filled) c.onAccent else color, maxLines = 1) }
 }
 
-/** A crossfader that slides across during each mix and springs back as the decks swap. */
+/** The DJ's voice: what's happening and why, with the move's explanation while it mixes. */
 @Composable
-private fun DjCrossfader(s: DjSession, vibe: Color, modifier: Modifier) {
+private fun DjNarration(s: DjSession, vibe: Color, pulse: DjPulse) {
     val c = Shell.colors
+    val now = s.now
+    val text = djNowText(now)
+    val sub = (now as? DjNow.Mixing)?.let { stringResource(it.style.bodyRes()) }
+    val glyph: ImageVector = when (now) {
+        is DjNow.Mixing -> now.style.glyph()
+        is DjNow.Liked -> Glyphs.Heart
+        is DjNow.Skipped -> Glyphs.Next
+        is DjNow.Remixed -> Glyphs.Sliders
+        is DjNow.Requested -> Glyphs.Search
+        DjNow.SafetyNet -> Glyphs.Crossfader
+        else -> Glyphs.Sparkle
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.surface1)
+            .drawBehind {
+                if (now is DjNow.Mixing) drawRect(vibe.copy(alpha = 0.14f), size = Size(size.width * s.mixProgress, size.height))
+            }
+            .border(1.dp, if (now is DjNow.Mixing) vibe.copy(alpha = 0.6f) else c.hairline, RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(vibe.copy(alpha = 0.18f)).drawBehind {
+                pulse.frame
+                drawCircle(vibe.copy(alpha = 0.25f * pulse.beat), size.minDimension / 2)
+            },
+            contentAlignment = Alignment.Center,
+        ) { Glyph(glyph, vibe, 18.dp) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Crossfade(text, animationSpec = tween(ShellMotion.EMPHASIZED_MS)) { t ->
+                Text(t, style = Shell.type.body.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (sub != null) Text(sub, style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/**
+ * The crossfader. In Auto it shows each mix as it happens. In You DJ it is yours: drag it toward B
+ * and the next track comes in, bass swapping at the middle.
+ */
+@Composable
+private fun DjCrossfader(s: DjSession, controller: PlaybackController, vibe: Color, modifier: Modifier) {
+    val c = Shell.colors
+    val haptics = LocalHapticFeedback.current
     val pos = remember { Animatable(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    val you = s.mode == DjMode.You
     LaunchedEffect(s) {
         snapshotFlow { s.mixProgress }.collect { p ->
+            if (dragging) return@collect
             if (p < pos.value - 0.2f) pos.animateTo(p, tween(700, easing = ShellMotion.Emphasized)) else pos.snapTo(p)
         }
     }
-    Row(modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-        IndexLabel(stringResource(Res.string.shell_dj_side_a), color = vibe)
-        Canvas(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 14.dp)) {
-            val y = size.height / 2
-            val trackH = 6.dp.toPx()
-            drawRoundRect(c.surface3, Offset(0f, y - trackH / 2), Size(size.width, trackH), CornerRadius(trackH / 2))
-            for (k in 0..8) {
-                val x = size.width * k / 8
-                val tall = k % 4 == 0
-                drawLine(c.hairline, Offset(x, y - (if (tall) 14 else 9).dp.toPx()), Offset(x, y - 6.dp.toPx()), 1.dp.toPx())
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+            IndexLabel(stringResource(Res.string.shell_dj_side_a), color = vibe)
+            Box(
+                Modifier.weight(1f).fillMaxHeight().padding(horizontal = 14.dp)
+                    .semantics { contentDescription = "Crossfader" }
+                    .pointerInput(you, s.fxAvailable) {
+                        if (!you || !s.fxAvailable) return@pointerInput
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            dragging = true
+                            haptics.performHapticFeedback(HapticFeedbackType.ToggleOn)
+                            var crossed = pos.value > 0.5f
+                            fun at(x: Float) {
+                                val v = (x / size.width).coerceIn(0f, 1f)
+                                scope.launch { pos.snapTo(v) }
+                                if ((v > 0.5f) != crossed) {
+                                    crossed = v > 0.5f
+                                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                }
+                                ShellDj.fader(controller, v)
+                            }
+                            at(down.position.x)
+                            down.consume()
+                            while (true) {
+                                val e = awaitPointerEvent()
+                                val p = e.changes.firstOrNull() ?: break
+                                if (!p.pressed) break
+                                at(p.position.x)
+                                p.consume()
+                            }
+                            dragging = false
+                        }
+                    },
+            ) {
+                Canvas(Modifier.matchParentSize()) {
+                    val y = size.height / 2
+                    val trackH = 6.dp.toPx()
+                    drawRoundRect(c.surface3, Offset(0f, y - trackH / 2), Size(size.width, trackH), CornerRadius(trackH / 2))
+                    for (k in 0..8) {
+                        val x = size.width * k / 8
+                        val tall = k % 4 == 0
+                        drawLine(c.hairline, Offset(x, y - (if (tall) 14 else 9).dp.toPx()), Offset(x, y - 6.dp.toPx()), 1.dp.toPx())
+                    }
+                    val kx = pos.value * size.width
+                    drawRoundRect(vibe.copy(alpha = 0.55f), Offset(0f, y - trackH / 2), Size(kx, trackH), CornerRadius(trackH / 2))
+                    val knobW = 24.dp.toPx()
+                    val knobH = 38.dp.toPx()
+                    val left = (kx - knobW / 2).coerceIn(0f, size.width - knobW)
+                    drawRoundRect(vibe.copy(alpha = if (you) 0.32f else 0.22f), Offset(left - 6.dp.toPx(), y - knobH / 2 - 6.dp.toPx()), Size(knobW + 12.dp.toPx(), knobH + 12.dp.toPx()), CornerRadius(10.dp.toPx()))
+                    drawRoundRect(if (you) vibe else c.ink, Offset(left, y - knobH / 2), Size(knobW, knobH), CornerRadius(6.dp.toPx()))
+                    drawLine(c.ground, Offset(left + knobW / 2, y - knobH / 2 + 7.dp.toPx()), Offset(left + knobW / 2, y + knobH / 2 - 7.dp.toPx()), 2.dp.toPx(), StrokeCap.Round)
+                }
             }
-            val kx = pos.value * size.width
-            drawRoundRect(vibe.copy(alpha = 0.55f), Offset(0f, y - trackH / 2), Size(kx, trackH), CornerRadius(trackH / 2))
-            val knobW = 22.dp.toPx()
-            val knobH = 36.dp.toPx()
-            val left = (kx - knobW / 2).coerceIn(0f, size.width - knobW)
-            drawRoundRect(vibe.copy(alpha = 0.22f), Offset(left - 6.dp.toPx(), y - knobH / 2 - 6.dp.toPx()), Size(knobW + 12.dp.toPx(), knobH + 12.dp.toPx()), CornerRadius(10.dp.toPx()))
-            drawRoundRect(c.ink, Offset(left, y - knobH / 2), Size(knobW, knobH), CornerRadius(6.dp.toPx()))
-            drawLine(c.ground, Offset(left + knobW / 2, y - knobH / 2 + 7.dp.toPx()), Offset(left + knobW / 2, y + knobH / 2 - 7.dp.toPx()), 2.dp.toPx(), StrokeCap.Round)
+            IndexLabel(stringResource(Res.string.shell_dj_side_b), color = c.ink2)
         }
-        IndexLabel(stringResource(Res.string.shell_dj_side_b), color = c.ink2)
+        if (you && !s.mixing) {
+            Text(stringResource(Res.string.shell_dj_fader_hint), style = Shell.type.bodySmall.copy(fontSize = 11.sp), color = c.ink2, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
-/** Mirrored spectrum bars (bass in the middle), with whether the beat is live audio or estimated. */
 @Composable
-private fun DjVisualizer(pulse: DjPulse, vibe: Color, modifier: Modifier) {
-    val accent = Shell.colors.accent
-    Box(modifier) {
-        Canvas(Modifier.matchParentSize()) {
-            pulse.frame
-            val n = DJ_BANDS * 2
-            val gap = 3.dp.toPx()
-            val w = (size.width - gap * (n - 1)) / n
-            for (i in 0 until n) {
-                val band = if (i < DJ_BANDS) DJ_BANDS - 1 - i else i - DJ_BANDS
-                val v = pulse.bars[band].pow(1.3f)
-                val h = max(3.dp.toPx(), v * size.height)
-                drawRoundRect(
-                    lerp(vibe, accent, v).copy(alpha = 0.45f + 0.55f * v),
-                    Offset(i * (w + gap), size.height - h), Size(w, h), CornerRadius(w / 2),
-                )
-            }
-        }
-        IndexLabel(
-            stringResource(if (pulse.real) Res.string.shell_dj_beat_live else Res.string.shell_dj_beat_estimated),
-            Modifier.align(Alignment.TopEnd), color = Shell.colors.index,
-        )
-    }
-}
-
-@Composable
-private fun DjTransport(
-    s: DjSession,
-    controller: PlaybackController,
-    playing: Boolean,
-    vibe: Color,
-    haptics: HapticFeedback,
-    onToast: (Pair<Int, String>) -> Unit,
-    big: Boolean,
-) {
+private fun DjTransport(s: DjSession, controller: PlaybackController, playing: Boolean, vibe: Color, big: Boolean) {
     val c = Shell.colors
+    val haptics = LocalHapticFeedback.current
     val round = if (big) 60.dp else 52.dp
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(if (big) 14.dp else 8.dp), verticalAlignment = Alignment.Top) {
         DjRoundButton(Glyphs.Chill, stringResource(Res.string.shell_dj_chill), round) {
             haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
             ShellDj.steer(controller, up = false)
-            onToast(TOAST_CHILL to "")
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            PlayPauseButton(
-                playing = playing,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.ToggleOn)
-                    controller.togglePlayPause()
-                },
-                size = round, background = c.ink, contentColor = c.ground,
-                playLabel = stringResource(Res.string.shell_dj_play), pauseLabel = stringResource(Res.string.shell_dj_pause),
-            )
-        }
+        PlayPauseButton(
+            playing = playing,
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.ToggleOn)
+                controller.togglePlayPause()
+            },
+            size = round, background = c.ink, contentColor = c.ground,
+            playLabel = stringResource(Res.string.shell_dj_play), pauseLabel = stringResource(Res.string.shell_dj_pause),
+        )
         DjMixNowButton(s, vibe, round, Modifier.weight(1f)) {
             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             ShellDj.mixNow(controller)
@@ -718,13 +803,12 @@ private fun DjTransport(
         DjRoundButton(Glyphs.Hype, stringResource(Res.string.shell_dj_hype), round, tint = vibe) {
             haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
             ShellDj.steer(controller, up = true)
-            onToast(TOAST_HYPE to "")
         }
     }
 }
 
 @Composable
-private fun DjRoundButton(glyph: androidx.compose.ui.graphics.vector.ImageVector, label: String, size: Dp, tint: Color = Shell.colors.ink, onClick: () -> Unit) {
+private fun DjRoundButton(glyph: ImageVector, label: String, size: Dp, tint: Color = Shell.colors.ink, onClick: () -> Unit) {
     val c = Shell.colors
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -737,18 +821,24 @@ private fun DjRoundButton(glyph: androidx.compose.ui.graphics.vector.ImageVector
     }
 }
 
-/** The big lime button: fills with the mix's progress while a transition runs. */
+/** The big button: fills with the mix's progress while a transition runs; names the move it will do. */
 @Composable
 private fun DjMixNowButton(s: DjSession, vibe: Color, height: Dp, modifier: Modifier, onClick: () -> Unit) {
     val c = Shell.colors
     val mixing = s.mixing
-    val label = stringResource(if (mixing) Res.string.shell_dj_mixing else Res.string.shell_dj_mix_now)
+    val style = when {
+        mixing -> s.mixStyle
+        s.mode == DjMode.You -> s.youStyle ?: s.upcoming.firstOrNull()?.plan?.style
+        else -> s.upcoming.firstOrNull()?.plan?.style
+    }
+    val label = if (mixing) stringResource(Res.string.shell_dj_mixing) else stringResource(Res.string.shell_dj_mix_now)
     Box(
         modifier.height(height).shadow(if (mixing) 0.dp else 14.dp, CircleShape, ambientColor = vibe, spotColor = vibe).clip(CircleShape)
             .drawBehind {
                 if (mixing) {
+                    // A dim track with a soft fill, so the label stays readable at any progress.
                     drawRect(c.surface3)
-                    drawRect(vibe, size = Size(size.width * s.mixProgress, size.height))
+                    drawRect(vibe.copy(alpha = 0.4f), size = Size(size.width * s.mixProgress, size.height))
                 } else {
                     drawRect(vibe)
                 }
@@ -756,100 +846,200 @@ private fun DjMixNowButton(s: DjSession, vibe: Color, height: Dp, modifier: Modi
             .shellPressable(onClick, label = label, focusShape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Glyph(Glyphs.Crossfader, c.onAccent, 22.dp)
+        val fg = if (mixing) c.ink else c.onAccent
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp)) {
+            Glyph(style?.glyph() ?: Glyphs.Crossfader, if (mixing) vibe else fg, 22.dp)
             Spacer(Modifier.width(8.dp))
-            Text(label, style = Shell.type.body.copy(fontWeight = FontWeight.Bold, fontSize = 17.sp), color = c.onAccent, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun DjPads(
-    s: DjSession,
-    controller: PlaybackController,
-    vibe: Color,
-    haptics: HapticFeedback,
-    fxAvailable: Boolean,
-    onRequest: () -> Unit,
-    columns: Int,
-) {
-    val tempoPct = ((s.userTempo - 1f) * 100f).roundToInt()
-    val tempo = stringResource(Res.string.shell_dj_tempo, (if (tempoPct > 0) "+" else "") + "$tempoPct%")
-    fun toggle(on: Boolean) = haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
-    val pads = listOf<@Composable (Modifier) -> Unit>(
-        { m -> FxPad(Glyphs.FilterSweep, stringResource(Res.string.shell_dj_fx_filter), s.filterOn, vibe, m, enabled = fxAvailable) { toggle(!s.filterOn); ShellDj.setFilter(!s.filterOn) } },
-        { m -> FxPad(Glyphs.BassWave, stringResource(Res.string.shell_dj_fx_boost), s.boostOn, vibe, m, enabled = fxAvailable) { toggle(!s.boostOn); ShellDj.setBoost(!s.boostOn) } },
-        { m -> FxPad(Glyphs.BassCut, stringResource(Res.string.shell_dj_fx_kill), s.killOn, vibe, m, enabled = fxAvailable) { toggle(!s.killOn); ShellDj.setKill(!s.killOn) } },
-        { m ->
-            FxPad(Glyphs.TempoDown, stringResource(Res.string.shell_dj_tempo_down), s.userTempo < 1f, vibe, m, value = tempo.takeIf { s.userTempo < 1f }) {
-                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                ShellDj.nudgeTempo(controller, up = false)
-            }
-        },
-        { m ->
-            FxPad(Glyphs.TempoUp, stringResource(Res.string.shell_dj_tempo_up), s.userTempo > 1f, vibe, m, value = tempo.takeIf { s.userTempo > 1f }) {
-                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                ShellDj.nudgeTempo(controller, up = true)
-            }
-        },
-        { m -> FxPad(Glyphs.Search, stringResource(Res.string.shell_dj_request), false, vibe, m) { onRequest() } },
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        IndexLabel(stringResource(Res.string.shell_dj_fx))
-        pads.chunked(columns).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { pad -> pad(Modifier.weight(1f)) }
-                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            Column {
+                Text(label, style = Shell.type.body.copy(fontWeight = FontWeight.Bold, fontSize = 16.sp), color = fg, maxLines = 1)
+                if (style != null) Text(stringResource(style.nameRes()), style = Shell.type.bodySmall.copy(fontSize = 11.sp), color = fg.copy(alpha = 0.75f), maxLines = 1)
             }
         }
     }
 }
 
-/** A performance pad: lit in the vibe colour while its effect is on. */
+// ---- Auto: steer the vibe --------------------------------------------------------------------------
+
 @Composable
-private fun FxPad(
-    glyph: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    on: Boolean,
-    vibe: Color,
-    modifier: Modifier,
-    value: String? = null,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
+private fun DjAutoPanel(s: DjSession, controller: PlaybackController, vibe: Color) {
     val c = Shell.colors
-    val bg by animateColorAsState(if (on) vibe else c.surface2, ShellMotion.emphasized())
-    val fg by animateColorAsState(if (on) c.onAccent else c.ink, ShellMotion.emphasized())
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        modifier.height(72.dp).graphicsLayer { alpha = if (enabled) 1f else 0.4f }
-            .shadow(if (on) 16.dp else 0.dp, shape, ambientColor = vibe, spotColor = vibe)
-            .clip(shape).background(bg).border(1.dp, if (on) Color.Transparent else c.hairline, shape)
-            .shellPressable({ if (enabled) onClick() }, label = label, focusShape = shape)
-            .padding(10.dp),
-    ) {
-        Glyph(glyph, fg, 22.dp, Modifier.align(Alignment.TopStart))
-        if (value != null) {
-            Text(value, style = Shell.type.index, color = fg, modifier = Modifier.align(Alignment.TopEnd), maxLines = 1)
-        } else if (on) {
-            Box(Modifier.align(Alignment.TopEnd).size(8.dp).clip(CircleShape).background(c.onAccent))
+    // Local copy while dragging, so the controls move at finger speed; the DJ re-plans once you settle.
+    var draft by remember(s) { mutableStateOf(s.vibe) }
+    LaunchedEffect(s.vibe) { draft = s.vibe }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        s.upcoming.firstOrNull()?.plan?.takeUnless { s.mixing }?.let { plan ->
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.surface1).border(1.dp, c.hairline, RoundedCornerShape(14.dp)).padding(14.dp),
+            ) {
+                IndexLabel(stringResource(Res.string.shell_dj_next_move))
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Glyph(plan.style.glyph(), vibe, 26.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(plan.style.nameRes()), style = Shell.type.title.copy(fontSize = 17.sp), color = c.ink)
+                        Text(stringResource(plan.style.bodyRes()), style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
         }
-        Text(
-            label, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.BottomStart),
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IndexLabel(stringResource(Res.string.shell_dj_vibe_tune), Modifier.weight(1f))
+            IndexLabel(stringResource(Res.string.shell_dj_energy_pct, "${(SetPlannerTarget.energyNow(s) * 100).roundToInt()}%"), color = vibe)
+            Spacer(Modifier.width(10.dp))
+            IndexLabel(stringResource(Res.string.shell_dj_fresh_pct, "${(draft.fresh * 100).roundToInt()}%"), color = c.ink2)
+        }
+        DjVibePad(
+            draft.energy, draft.fresh, vibe, Modifier.fillMaxWidth().aspectRatio(1.6f).heightIn(max = 280.dp),
+            onChange = { e, f -> draft = draft.copy(energy = e, fresh = f) },
+            onRelease = { ShellDj.setVibe(controller, draft) },
         )
+        // The pad already sets new music (its vertical axis), so the booth leaves that slider out.
+        DjTuning(draft, vibe, showFresh = false, onRelease = { ShellDj.setVibe(controller, draft) }) { draft = it }
     }
 }
 
-/** The set's energy arc with each track as a dot and a playhead at set time. */
+/** Target energy right now, for the vibe readout. */
+private object SetPlannerTarget {
+    fun energyNow(s: DjSession): Double = s.targetAt(s.elapsedMs)
+}
+
+// ---- You DJ: pick the next track and the move ---------------------------------------------------
+
+@Composable
+private fun DjYouPanel(s: DjSession, controller: PlaybackController, vibe: Color) {
+    val c = Shell.colors
+    val haptics = LocalHapticFeedback.current
+    val next = s.upcoming.firstOrNull()
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        IndexLabel(stringResource(Res.string.shell_dj_pick_next))
+        Text(stringResource(Res.string.shell_dj_pick_next_hint), style = Shell.type.bodySmall, color = c.ink2)
+        if (next != null) {
+            // What's cued now, then the alternatives.
+            DjSuggestionRow(
+                app.turtleplayer.mix.Pick(next.track.facts(next.requested), 0.0, next.reasons), next.track.song,
+                s.liveBpm * s.speed, s.liveEnergy, cued = true, vibe = vibe,
+            ) {}
+        }
+        if (s.suggestions.isEmpty()) {
+            Text(stringResource(Res.string.shell_dj_deck_empty), style = Shell.type.bodySmall, color = c.ink2)
+        }
+        s.suggestions.forEach { pick ->
+            key(pick.track.id) {
+                DjSuggestionRow(pick, suggestionSong(pick.track.id), s.liveBpm * s.speed, s.liveEnergy, cued = false, vibe = vibe) {
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    ShellDj.chooseNext(controller, pick)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        IndexLabel(stringResource(Res.string.shell_dj_your_move))
+        DjMovePicker(s.youStyle, next?.plan?.style, vibe, enabled = !s.mixing) { s.youStyle = it }
+        (s.youStyle ?: next?.plan?.style)?.let { st ->
+            Text(stringResource(st.bodyRes()), style = Shell.type.bodySmall, color = c.ink2)
+        }
+    }
+}
+
+/** Songs behind the You-mode suggestions (kept by the controller while they are offered). */
+@Composable
+private fun suggestionSong(id: String) = ShellDj.suggestionSong(id)
+
+// ---- Live effects -----------------------------------------------------------------------------------
+
+@Composable
+private fun DjFxSection(s: DjSession, controller: PlaybackController, vibe: Color, open: Boolean, onToggle: () -> Unit, showToggle: Boolean, columns: Int) {
+    val c = Shell.colors
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (showToggle) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(c.surface1).border(1.dp, c.hairline, RoundedCornerShape(14.dp))
+                    .shellPressable(onToggle, label = stringResource(Res.string.shell_dj_jump_in), focusShape = RoundedCornerShape(14.dp))
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Glyph(Glyphs.XyPad, vibe, 20.dp)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    stringResource(if (open) Res.string.shell_dj_jump_out else Res.string.shell_dj_jump_in),
+                    style = Shell.type.body.copy(fontWeight = FontWeight.SemiBold), color = c.ink, modifier = Modifier.weight(1f),
+                )
+                Glyph(if (open) Glyphs.ChevronDown else Glyphs.Add, c.ink2, 18.dp)
+            }
+        }
+        AnimatedVisibility(open) {
+            Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                val fx = s.fxAvailable
+                if (!fx) Text(stringResource(Res.string.shell_dj_fx_unavailable), style = Shell.type.bodySmall, color = c.danger)
+                DjFxPad(vibe, fx, Modifier.fillMaxWidth())
+                DjEqKnobs(s, vibe, fx)
+                DjPerformancePads(vibe, fx, columns)
+                DjSamplePads(vibe, fx)
+                DjFxFooter(s, controller, vibe)
+            }
+        }
+    }
+}
+
+/** Tempo, snap to beat and reset: the small switches under the pads. */
+@Composable
+private fun DjFxFooter(s: DjSession, controller: PlaybackController, vibe: Color) {
+    val c = Shell.colors
+    val haptics = LocalHapticFeedback.current
+    val tempoPct = ((s.userTempo - 1f) * 100f).roundToInt()
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        DjSmallButton(Glyphs.TempoDown, stringResource(Res.string.shell_dj_tempo_down)) {
+            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+            ShellDj.nudgeTempo(controller, up = false)
+        }
+        Box(
+            Modifier.clip(CircleShape).shellPressable({ ShellDj.resetTempo(controller) }, label = stringResource(Res.string.shell_dj_tempo_reset), focusShape = CircleShape)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
+            IndexLabel(stringResource(Res.string.shell_dj_tempo, (if (tempoPct > 0) "+" else "") + "$tempoPct%"), color = if (tempoPct != 0) vibe else c.ink2)
+        }
+        DjSmallButton(Glyphs.TempoUp, stringResource(Res.string.shell_dj_tempo_up)) {
+            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+            ShellDj.nudgeTempo(controller, up = true)
+        }
+        Spacer(Modifier.weight(1f))
+        val snap = stringResource(Res.string.shell_dj_snap)
+        Row(
+            Modifier.height(36.dp).clip(CircleShape).background(if (s.quantize) vibe.copy(alpha = 0.18f) else c.surface2)
+                .shellPressable({ s.quantize = !s.quantize }, label = snap, focusShape = CircleShape).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (s.quantize) {
+                Glyph(Glyphs.Check, vibe, 14.dp)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(snap, style = Shell.type.label, color = if (s.quantize) vibe else c.ink2)
+        }
+        DjSmallButton(Glyphs.Reset, stringResource(Res.string.shell_dj_reset_fx)) {
+            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            ShellDj.resetFx()
+        }
+    }
+}
+
+@Composable
+private fun DjSmallButton(glyph: ImageVector, label: String, onClick: () -> Unit) {
+    val c = Shell.colors
+    Box(
+        Modifier.size(36.dp).clip(CircleShape).background(c.surface2).border(1.dp, c.hairline, CircleShape)
+            .shellPressable(onClick, label = label, focusShape = CircleShape),
+        contentAlignment = Alignment.Center,
+    ) { Glyph(glyph, c.ink, 18.dp) }
+}
+
+// ---- Energy and up next -----------------------------------------------------------------------------
+
+/** The set's energy arc (as tuned) with each track as a dot and a playhead at set time. */
 @Composable
 private fun DjEnergyPanel(s: DjSession, pulse: DjPulse, vibe: Color, graphHeight: Dp) {
     val c = Shell.colors
     Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IndexLabel(stringResource(Res.string.shell_dj_energy) + " · " + djArcName(s.arc), Modifier.weight(1f))
-        }
+        IndexLabel(stringResource(Res.string.shell_dj_energy) + " · " + djArcName(s.arc))
         Spacer(Modifier.height(8.dp))
         Canvas(Modifier.fillMaxWidth().height(graphHeight).clip(RoundedCornerShape(10.dp)).background(c.surface1)) {
             pulse.frame
@@ -860,27 +1050,32 @@ private fun DjEnergyPanel(s: DjSession, pulse: DjPulse, vibe: Color, graphHeight
             fun x(ms: Long) = ((ms - base).toFloat() / span).coerceIn(0f, 1f) * size.width
             fun y(e: Double) = size.height - pad - e.toFloat().coerceIn(0f, 1f) * (size.height - pad * 2)
             for (k in 1..3) drawLine(c.hairlineSoft, Offset(0f, size.height * k / 4), Offset(size.width, size.height * k / 4), 1f)
-            val path = Path()
             val n = 64
+            // The arc as drawn (faint) and as your vibe bends it (bright).
+            val drawn = Path()
+            val tuned = Path()
             for (i in 0..n) {
                 val px = size.width * i / n
-                val py = y(s.arcAt(i.toDouble() / n))
-                if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+                val t = i.toDouble() / n
+                if (i == 0) drawn.moveTo(px, y(s.arcAt(t))) else drawn.lineTo(px, y(s.arcAt(t)))
+                if (i == 0) tuned.moveTo(px, y(s.targetAtT(t))) else tuned.lineTo(px, y(s.targetAtT(t)))
             }
             val fill = Path().apply {
-                addPath(path)
+                addPath(tuned)
                 lineTo(size.width, size.height)
                 lineTo(0f, size.height)
                 close()
             }
             drawPath(fill, Brush.verticalGradient(listOf(vibe.copy(alpha = 0.3f), Color.Transparent)))
-            drawPath(path, vibe, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(drawn, c.ink2.copy(alpha = 0.35f), style = Stroke(1.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(tuned, vibe, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
             val head = x(elapsed)
             drawRect(c.ground.copy(alpha = 0.35f), size = Size(head, size.height))
             for (p in s.played) if (p.startMs >= base) drawCircle(c.ink2, 3.dp.toPx(), Offset(x(p.startMs), y(p.track.energy)))
             for (u in s.upcoming) drawCircle(vibe, 3.5.dp.toPx(), Offset(x(u.startMs), y(u.track.energy)), style = Stroke(1.5.dp.toPx()))
             s.current?.let { cur ->
-                val at = Offset(x(cur.startMs), y(cur.track.energy))
+                val e = if (s.liveEnergy >= 0f) s.liveEnergy.toDouble() else cur.track.energy
+                val at = Offset(x(cur.startMs), y(e))
                 drawCircle(c.accent.copy(alpha = 0.3f), (7f + 5f * pulse.beat).dp.toPx(), at)
                 drawCircle(c.accent, 4.5.dp.toPx(), at)
             }
@@ -919,38 +1114,27 @@ private fun DjUpNext(s: DjSession, vibe: Color, onRequest: () -> Unit) {
 @Composable
 private fun DjUpNextRow(slot: DjSlot, first: Boolean, vibe: Color, speed: Float) {
     val c = Shell.colors
-    Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         ShellArt(slot.track.song.displayThumbnailUrl, Modifier.size(46.dp), shape = RoundedCornerShape(6.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            if (first || slot.requested) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (first) IndexLabel(stringResource(Res.string.shell_dj_next_badge), color = vibe)
-                    if (slot.requested) IndexLabel(stringResource(Res.string.shell_dj_requested), color = c.accent)
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (first) IndexLabel(stringResource(Res.string.shell_dj_next_badge), color = vibe)
+                if (first) slot.plan?.let { IndexLabel(stringResource(it.style.nameRes()).uppercase(), color = c.ink2) }
             }
             Text(slot.track.song.title, style = Shell.type.body, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(slot.track.song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val why = reasonsText(slot.reasons)
+            Text(
+                if (why.isNotEmpty()) why else slot.track.song.artists.joinToString(", ") { it.name },
+                style = Shell.type.bodySmall, color = if (why.isNotEmpty()) vibe.copy(alpha = 0.9f) else c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.width(8.dp))
         Column(horizontalAlignment = Alignment.End) {
-            IndexLabel("≈ " + stringResource(Res.string.shell_dj_bpm, (slot.track.bpm * speed).roundToInt()), color = c.ink2)
+            val bpm = (slot.track.bpm * speed).roundToInt()
+            IndexLabel(stringResource(if (slot.track.bpmMeasured) Res.string.shell_dj_bpm_live else Res.string.shell_dj_bpm_est, bpm), color = c.ink2)
             Spacer(Modifier.height(5.dp))
-            DjEnergyBars(slot.track.energy, vibe)
-        }
-    }
-}
-
-/** Five rising bars: a track's estimated energy at a glance. */
-@Composable
-private fun DjEnergyBars(energy: Double, vibe: Color) {
-    val off = Shell.colors.surface3
-    Canvas(Modifier.size(30.dp, 12.dp)) {
-        val lit = (energy * 5).roundToInt().coerceIn(1, 5)
-        val w = size.width / 5 - 2.dp.toPx()
-        for (i in 0 until 5) {
-            val h = size.height * (0.4f + 0.15f * i)
-            drawRoundRect(if (i < lit) vibe else off, Offset(i * (w + 2.dp.toPx()), size.height - h), Size(w, h), CornerRadius(1.dp.toPx()))
+            DjEnergyMeter(slot.track.energy, vibe)
         }
     }
 }
@@ -1035,7 +1219,3 @@ private fun BoxScope.DjRequestSheet(visible: Boolean, s: DjSession, controller: 
 
 private const val METER_POLL_MS = 30L
 private const val DEG_PER_SECOND = 200f
-private const val TOAST_SLOTTED = 0
-private const val TOAST_HYPE = 1
-private const val TOAST_CHILL = 2
-

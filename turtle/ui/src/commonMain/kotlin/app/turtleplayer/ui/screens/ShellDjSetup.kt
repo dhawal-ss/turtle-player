@@ -57,45 +57,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.turtleplayer.bridge.DjArc
 import app.turtleplayer.bridge.DjEngine
+import app.turtleplayer.mix.VibeSettings
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.IndexLabel
 import app.turtleplayer.ui.components.shellPressable
-import app.turtleplayer.ui.generated.resources.Res
-import app.turtleplayer.ui.generated.resources.shell_dj_arc
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_club
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_club_body
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_house
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_house_body
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_lounge
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_lounge_body
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_sunrise
-import app.turtleplayer.ui.generated.resources.shell_dj_arc_sunrise_body
-import app.turtleplayer.ui.generated.resources.shell_dj_card_back
-import app.turtleplayer.ui.generated.resources.shell_dj_card_body
-import app.turtleplayer.ui.generated.resources.shell_dj_card_live
-import app.turtleplayer.ui.generated.resources.shell_dj_card_open
-import app.turtleplayer.ui.generated.resources.shell_dj_card_tagline
-import app.turtleplayer.ui.generated.resources.shell_dj_exit
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_amapiano
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_dancehall
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_disco
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_dnb
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_edm
-import app.turtleplayer.ui.generated.resources.shell_dj_genre_trance
-import app.turtleplayer.ui.generated.resources.shell_dj_label
-import app.turtleplayer.ui.generated.resources.shell_dj_length
-import app.turtleplayer.ui.generated.resources.shell_dj_length_endless
-import app.turtleplayer.ui.generated.resources.shell_dj_length_hour
-import app.turtleplayer.ui.generated.resources.shell_dj_length_hours
-import app.turtleplayer.ui.generated.resources.shell_dj_length_minutes
-import app.turtleplayer.ui.generated.resources.shell_dj_nothing
-import app.turtleplayer.ui.generated.resources.shell_dj_queue_title
-import app.turtleplayer.ui.generated.resources.shell_dj_setup_body
-import app.turtleplayer.ui.generated.resources.shell_dj_setup_title
-import app.turtleplayer.ui.generated.resources.shell_dj_start
-import app.turtleplayer.ui.generated.resources.shell_dj_vibe
-import app.turtleplayer.ui.generated.resources.shell_dj_vibe_hint
+import app.turtleplayer.ui.generated.resources.*
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
@@ -103,11 +70,32 @@ import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.model.displayThumbnailUrl
 import com.metrolist.shared.ui.playback.LocalPlaybackController
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
+
+/** Ready-made vibes: the arc, the genres and the tuning a good DJ would bring to that night. */
+internal enum class DjPreset(
+    val arc: DjArc,
+    val genres: List<String>,
+    val vibe: VibeSettings,
+    val color: Color,
+    val title: StringResource,
+    val body: StringResource,
+) {
+    Party(DjArc.HouseParty, listOf("house", "dance", "pop", "hiphop"), VibeSettings(0.5f, 0.4f, 0.55f, 0.35f, 0.5f), Color(0xFFD4F55A), Res.string.shell_dj_preset_party, Res.string.shell_dj_preset_party_body),
+    Pregame(DjArc.Waves, listOf("hiphop", "pop", "reggaeton", "afrobeats"), VibeSettings(0.6f, 0.35f, 0.78f, 0.7f, 0.6f), Color(0xFFFF7A59), Res.string.shell_dj_preset_pregame, Res.string.shell_dj_preset_pregame_body),
+    Club(DjArc.ClubPeak, listOf("techno", "house", "edm"), VibeSettings(0.6f, 0.6f, 0.35f, 0.1f, 0.3f), Color(0xFFFF4FA3), Res.string.shell_dj_preset_club, Res.string.shell_dj_preset_club_body),
+    Workout(DjArc.Workout, listOf("workout", "edm", "hiphop"), VibeSettings(0.65f, 0.4f, 0.5f, 0.55f, 0.4f), Color(0xFFFF5A5F), Res.string.shell_dj_preset_workout, Res.string.shell_dj_preset_workout_body),
+    Chill(DjArc.Lounge, listOf("chill", "rnb", "soul", "lofi"), VibeSettings(0.4f, 0.45f, 0.12f, 0.15f, 0.4f), Color(0xFF6FE3C8), Res.string.shell_dj_preset_chill, Res.string.shell_dj_preset_chill_body),
+    Focus(DjArc.Focus, listOf("lofi", "ambient", "chill"), VibeSettings(0.4f, 0.5f, 0.03f, 0.05f, 0.2f), Color(0xFF7FA7FF), Res.string.shell_dj_preset_focus, Res.string.shell_dj_preset_focus_body),
+    Throwback(DjArc.HouseParty, listOf("throwback", "funk", "disco", "pop"), VibeSettings(0.5f, 0.15f, 0.5f, 0.4f, 0.6f), Color(0xFFFFC94A), Res.string.shell_dj_preset_throwback, Res.string.shell_dj_preset_throwback_body),
+    Sunrise(DjArc.Sunrise, listOf("house", "chill", "ambient"), VibeSettings(0.45f, 0.5f, 0.2f, 0.15f, 0.3f), Color(0xFFFFB347), Res.string.shell_dj_preset_sunrise, Res.string.shell_dj_preset_sunrise_body),
+}
 
 /** Display name for a DJ genre: our club extras, then the shared genre and mood names. */
 @Composable
 internal fun djGenreName(id: String): String = when (id) {
+    DjEngine.YOURS -> stringResource(Res.string.shell_dj_genre_yours)
     "dnb" -> stringResource(Res.string.shell_dj_genre_dnb)
     "edm" -> stringResource(Res.string.shell_dj_genre_edm)
     "disco" -> stringResource(Res.string.shell_dj_genre_disco)
@@ -123,6 +111,9 @@ internal fun djArcName(arc: DjArc): String = stringResource(
         DjArc.Lounge -> Res.string.shell_dj_arc_lounge
         DjArc.HouseParty -> Res.string.shell_dj_arc_house
         DjArc.ClubPeak -> Res.string.shell_dj_arc_club
+        DjArc.Waves -> Res.string.shell_dj_arc_waves
+        DjArc.Workout -> Res.string.shell_dj_arc_workout
+        DjArc.Focus -> Res.string.shell_dj_arc_focus
         DjArc.Sunrise -> Res.string.shell_dj_arc_sunrise
     },
 )
@@ -133,6 +124,9 @@ private fun djArcBody(arc: DjArc): String = stringResource(
         DjArc.Lounge -> Res.string.shell_dj_arc_lounge_body
         DjArc.HouseParty -> Res.string.shell_dj_arc_house_body
         DjArc.ClubPeak -> Res.string.shell_dj_arc_club_body
+        DjArc.Waves -> Res.string.shell_dj_arc_waves_body
+        DjArc.Workout -> Res.string.shell_dj_arc_workout_body
+        DjArc.Focus -> Res.string.shell_dj_arc_focus_body
         DjArc.Sunrise -> Res.string.shell_dj_arc_sunrise_body
     },
 )
@@ -160,19 +154,32 @@ internal fun TurtleDjPage(onClose: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Setup: vibe chips, the energy arc, the set's length, Start. */
+/**
+ * Setup, built so anyone can start in one tap: "Start my mix" (your taste), or a preset and Start.
+ * Customize opens everything a DJ would choose: who mixes, genres, energy arc, tuning, length.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DjSetup(onClose: () -> Unit) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
     val haptics = LocalHapticFeedback.current
-    var picks by remember { mutableStateOf(emptyList<String>()) }
-    var arc by remember { mutableStateOf(DjArc.HouseParty) }
+    var preset by remember { mutableStateOf(DjPreset.Party) }
+    var picks by remember { mutableStateOf(preset.genres) }
+    var arc by remember { mutableStateOf(preset.arc) }
+    var vibe by remember { mutableStateOf(preset.vibe) }
     var length by remember { mutableStateOf(DjLength.M60) }
+    var mode by remember { mutableStateOf(DjMode.Auto) }
+    var customize by remember { mutableStateOf(false) }
     val queueTitle = stringResource(Res.string.shell_dj_queue_title)
-    val vibe = arc.vibe()
-    val glow by animateColorAsState(vibe.copy(alpha = 0.18f), tween(ShellMotion.TINT_MS))
+    val color = preset.color
+    val glow by animateColorAsState(color.copy(alpha = 0.18f), tween(ShellMotion.TINT_MS))
+    fun choose(p: DjPreset) {
+        preset = p
+        picks = p.genres
+        arc = p.arc
+        vibe = p.vibe
+    }
     BoxWithConstraints(
         Modifier.fillMaxSize().drawBehind {
             drawRect(Brush.radialGradient(listOf(glow, Color.Transparent), Offset(size.width / 2, 0f), size.maxDimension * 0.8f))
@@ -188,62 +195,116 @@ private fun DjSetup(onClose: () -> Unit) {
                 Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
                     GlyphButton(Glyphs.ChevronDown, stringResource(Res.string.shell_dj_exit), onClose, c.ink, iconSize = 26.dp)
                     Spacer(Modifier.width(6.dp))
-                    IndexLabel(stringResource(Res.string.shell_dj_label), color = vibe)
+                    IndexLabel(stringResource(Res.string.shell_dj_label), color = color)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    stringResource(Res.string.shell_dj_setup_title),
+                    stringResource(Res.string.shell_dj_setup_title2),
                     style = if (wide) Shell.type.display.copy(fontSize = 44.sp, lineHeight = 46.sp) else Shell.type.display,
                     color = c.ink,
                 )
                 Spacer(Modifier.height(8.dp))
-                Text(stringResource(Res.string.shell_dj_setup_body), style = Shell.type.body, color = c.ink2)
+                Text(stringResource(Res.string.shell_dj_setup_body2), style = Shell.type.body, color = c.ink2)
 
-                Spacer(Modifier.height(24.dp))
-                IndexLabel(stringResource(Res.string.shell_dj_vibe))
-                Spacer(Modifier.height(10.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DjEngine.genreIds.forEach { id ->
-                        val on = id in picks
-                        DjChip(djGenreName(id), on, vibe) {
-                            haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
-                            picks = if (on) picks - id else picks + id
-                        }
-                    }
-                }
-                AnimatedVisibility(picks.isEmpty()) {
-                    Text(stringResource(Res.string.shell_dj_vibe_hint), style = Shell.type.bodySmall, color = c.ink2, modifier = Modifier.padding(top = 10.dp))
+                Spacer(Modifier.height(20.dp))
+                DjYoursCard {
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    ShellDj.start(controller, emptyList(), DjArc.Waves, length, VibeSettings(fresh = 0.35f), mode, queueTitle)
                 }
 
                 Spacer(Modifier.height(24.dp))
-                IndexLabel(stringResource(Res.string.shell_dj_arc))
+                IndexLabel(stringResource(Res.string.shell_dj_presets))
                 Spacer(Modifier.height(10.dp))
-                val arcs = DjArc.entries
-                arcs.chunked(if (wide) 4 else 2).forEach { row ->
+                DjPreset.entries.chunked(if (wide) 4 else 2).forEach { row ->
                     Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        row.forEach { a ->
-                            DjArcCard(a, a == arc, Modifier.weight(1f)) {
+                        row.forEach { p ->
+                            DjPresetCard(p, p == preset, Modifier.weight(1f)) {
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                arc = a
+                                choose(p)
                             }
                         }
                     }
                 }
 
-                Spacer(Modifier.height(14.dp))
-                IndexLabel(stringResource(Res.string.shell_dj_length))
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DjLength.entries.forEach { l ->
-                        val label = when (l) {
-                            DjLength.M30 -> stringResource(Res.string.shell_dj_length_minutes, 30)
-                            DjLength.M60 -> stringResource(Res.string.shell_dj_length_hour)
-                            DjLength.M120 -> stringResource(Res.string.shell_dj_length_hours, 2)
-                            DjLength.Endless -> stringResource(Res.string.shell_dj_length_endless)
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier.clip(CircleShape).shellPressable({ customize = !customize }, label = stringResource(Res.string.shell_dj_customize), focusShape = CircleShape)
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Glyph(Glyphs.Sliders, c.ink, 18.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(if (customize) Res.string.shell_dj_customize_hide else Res.string.shell_dj_customize),
+                        style = Shell.type.body.copy(fontWeight = FontWeight.SemiBold), color = c.ink,
+                    )
+                }
+                AnimatedVisibility(customize) {
+                    Column {
+                        Spacer(Modifier.height(12.dp))
+                        IndexLabel(stringResource(Res.string.shell_dj_mode))
+                        Spacer(Modifier.height(10.dp))
+                        DjSegmented(
+                            listOf(stringResource(Res.string.shell_dj_mode_auto) to Glyphs.Turntable, stringResource(Res.string.shell_dj_mode_you) to Glyphs.Crossfader),
+                            if (mode == DjMode.Auto) 0 else 1, color, Modifier.fillMaxWidth(),
+                        ) { mode = if (it == 0) DjMode.Auto else DjMode.You }
+                        Text(
+                            stringResource(if (mode == DjMode.Auto) Res.string.shell_dj_mode_auto_body else Res.string.shell_dj_mode_you_body),
+                            style = Shell.type.bodySmall, color = c.ink2, modifier = Modifier.padding(top = 6.dp),
+                        )
+
+                        Spacer(Modifier.height(22.dp))
+                        IndexLabel(stringResource(Res.string.shell_dj_genres))
+                        Spacer(Modifier.height(10.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DjEngine.genreIds.forEach { id ->
+                                val on = id in picks
+                                DjChip(djGenreName(id), on, color) {
+                                    haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
+                                    picks = if (on) picks - id else picks + id
+                                }
+                            }
                         }
-                        DjChip(label, l == length, vibe) {
-                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                            length = l
+                        AnimatedVisibility(picks.isEmpty()) {
+                            Text(stringResource(Res.string.shell_dj_genres_hint), style = Shell.type.bodySmall, color = c.ink2, modifier = Modifier.padding(top = 10.dp))
+                        }
+
+                        Spacer(Modifier.height(22.dp))
+                        IndexLabel(stringResource(Res.string.shell_dj_arc))
+                        Spacer(Modifier.height(10.dp))
+                        DjArc.entries.chunked(if (wide) 4 else 2).forEach { row ->
+                            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                row.forEach { a ->
+                                    DjArcCard(a, a == arc, color, Modifier.weight(1f)) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                        arc = a
+                                    }
+                                }
+                                repeat((if (wide) 4 else 2) - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        IndexLabel(stringResource(Res.string.shell_dj_tuning))
+                        Spacer(Modifier.height(10.dp))
+                        DjTuning(vibe, color) { vibe = it }
+
+                        Spacer(Modifier.height(22.dp))
+                        IndexLabel(stringResource(Res.string.shell_dj_length))
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DjLength.entries.forEach { l ->
+                                val label = when (l) {
+                                    DjLength.M30 -> stringResource(Res.string.shell_dj_length_minutes, 30)
+                                    DjLength.M60 -> stringResource(Res.string.shell_dj_length_hour)
+                                    DjLength.M120 -> stringResource(Res.string.shell_dj_length_hours, 2)
+                                    DjLength.Endless -> stringResource(Res.string.shell_dj_length_endless)
+                                }
+                                DjChip(label, l == length, color) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    length = l
+                                }
+                            }
                         }
                     }
                 }
@@ -251,13 +312,13 @@ private fun DjSetup(onClose: () -> Unit) {
                 AnimatedVisibility(ShellDj.failed) {
                     Text(stringResource(Res.string.shell_dj_nothing), style = Shell.type.bodySmall, color = c.danger, modifier = Modifier.padding(top = 16.dp))
                 }
-                Spacer(Modifier.height(28.dp))
-                val start = stringResource(Res.string.shell_dj_start)
+                Spacer(Modifier.height(24.dp))
+                val start = stringResource(Res.string.shell_dj_start) + " · " + stringResource(preset.title)
                 Box(
-                    Modifier.fillMaxWidth().height(64.dp).shadow(18.dp, CircleShape, ambientColor = vibe, spotColor = vibe).clip(CircleShape).background(vibe)
+                    Modifier.fillMaxWidth().height(64.dp).shadow(18.dp, CircleShape, ambientColor = color, spotColor = color).clip(CircleShape).background(color)
                         .shellPressable({
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                            ShellDj.start(controller, DjEngine.genreIds.filter { it in picks }, arc, length, queueTitle)
+                            ShellDj.start(controller, DjEngine.genreIds.filter { it in picks }, arc, length, vibe, mode, queueTitle)
                         }, label = start, focusShape = CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -270,6 +331,105 @@ private fun DjSetup(onClose: () -> Unit) {
                 Spacer(Modifier.height(32.dp))
             }
         }
+    }
+}
+
+/** The vibe tuning sliders, shared by setup and the booth. */
+@Composable
+internal fun DjTuning(vibe: VibeSettings, color: Color, showFresh: Boolean = true, onRelease: () -> Unit = {}, onChange: (VibeSettings) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        DjVibeSlider(
+            stringResource(Res.string.shell_dj_flair), stringResource(Res.string.shell_dj_flair_low), stringResource(Res.string.shell_dj_flair_high),
+            vibe.flair, color, onChange = { onChange(vibe.copy(flair = it)) }, onRelease = onRelease,
+        )
+        DjVibeSlider(
+            stringResource(Res.string.shell_dj_pace), stringResource(Res.string.shell_dj_pace_low), stringResource(Res.string.shell_dj_pace_high),
+            vibe.pace, color, onChange = { onChange(vibe.copy(pace = it)) }, onRelease = onRelease,
+        )
+        DjVibeSlider(
+            stringResource(Res.string.shell_dj_variety), stringResource(Res.string.shell_dj_variety_low), stringResource(Res.string.shell_dj_variety_high),
+            vibe.variety, color, onChange = { onChange(vibe.copy(variety = it)) }, onRelease = onRelease,
+        )
+        if (showFresh) {
+            DjVibeSlider(
+                stringResource(Res.string.shell_dj_vibe_fresh), stringResource(Res.string.shell_dj_vibe_favourites), stringResource(Res.string.shell_dj_vibe_fresh),
+                vibe.fresh, color, onChange = { onChange(vibe.copy(fresh = it)) }, onRelease = onRelease,
+            )
+        }
+    }
+}
+
+/** "Start my mix": the one-tap way in, from the listener's own taste. */
+@Composable
+private fun DjYoursCard(onStart: () -> Unit) {
+    val c = Shell.colors
+    val label = stringResource(Res.string.shell_dj_yours_title)
+    Row(
+        Modifier.fillMaxWidth().clip(ShellShapes.Card).background(c.surface1)
+            .drawBehind {
+                drawRect(Brush.horizontalGradient(listOf(c.accent.copy(alpha = 0.22f), Color(0xFFFF4FA3).copy(alpha = 0.10f), Color.Transparent)))
+            }
+            .border(1.dp, c.accent.copy(alpha = 0.5f), ShellShapes.Card)
+            .shellPressable(onStart, label = label, focusShape = ShellShapes.Card)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DjVinyl(null, spinning = true, size = 64.dp, ringColor = c.accent)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = Shell.type.headline.copy(fontSize = 22.sp), color = c.ink)
+            Text(stringResource(Res.string.shell_dj_yours_body), style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.size(52.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
+            Glyph(Glyphs.Play, c.onAccent, 24.dp)
+        }
+    }
+}
+
+@Composable
+private fun DjPresetCard(p: DjPreset, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = Shell.colors
+    val border by animateColorAsState(if (selected) p.color else c.hairline, ShellMotion.emphasized())
+    val name = stringResource(p.title)
+    Column(
+        modifier.clip(ShellShapes.Card).background(if (selected) p.color.copy(alpha = 0.12f) else c.surface1)
+            .border(if (selected) 2.dp else 1.dp, border, ShellShapes.Card)
+            .shellPressable(onClick, label = name, focusShape = ShellShapes.Card)
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DjArcSpark(p.arc, p.color, selected, Modifier.weight(1f).height(34.dp))
+            if (selected) {
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.size(22.dp).clip(CircleShape).background(p.color), contentAlignment = Alignment.Center) { Glyph(Glyphs.Check, c.onAccent, 12.dp) }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(name, style = Shell.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = c.ink)
+        Text(stringResource(p.body), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(p.genres.take(3).map { djGenreName(it) }.joinToString(" · "), style = Shell.type.bodySmall.copy(fontSize = 11.sp), color = if (selected) p.color else c.index, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun DjArcSpark(arc: DjArc, color: Color, selected: Boolean, modifier: Modifier) {
+    Canvas(modifier) {
+        val path = Path()
+        val n = 40
+        for (i in 0..n) {
+            val x = size.width * i / n
+            val y = size.height - arc.energyAt(i.toDouble() / n).toFloat() * size.height
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        val fill = Path().apply {
+            addPath(path)
+            lineTo(size.width, size.height)
+            lineTo(0f, size.height)
+            close()
+        }
+        drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = if (selected) 0.35f else 0.15f), Color.Transparent)))
+        drawPath(path, if (selected) color else color.copy(alpha = 0.6f), style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
     }
 }
 
@@ -293,11 +453,10 @@ private fun DjChip(label: String, on: Boolean, vibe: Color, onClick: () -> Unit)
     }
 }
 
-/** An arc to pick: its energy curve drawn in its own light, the name and what the night feels like. */
+/** An arc to pick: its energy curve, the name and what the night feels like. */
 @Composable
-private fun DjArcCard(arc: DjArc, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun DjArcCard(arc: DjArc, selected: Boolean, color: Color, modifier: Modifier, onClick: () -> Unit) {
     val c = Shell.colors
-    val color = arc.vibe()
     val border by animateColorAsState(if (selected) color else c.hairline, ShellMotion.emphasized())
     val name = djArcName(arc)
     Column(
@@ -306,23 +465,7 @@ private fun DjArcCard(arc: DjArc, selected: Boolean, modifier: Modifier, onClick
             .shellPressable(onClick, label = name, focusShape = ShellShapes.Card)
             .padding(14.dp),
     ) {
-        Canvas(Modifier.fillMaxWidth().height(44.dp)) {
-            val path = Path()
-            val n = 40
-            for (i in 0..n) {
-                val x = size.width * i / n
-                val y = size.height - arc.energyAt(i.toDouble() / n).toFloat() * size.height
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            val fill = Path().apply {
-                addPath(path)
-                lineTo(size.width, size.height)
-                lineTo(0f, size.height)
-                close()
-            }
-            drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = if (selected) 0.35f else 0.15f), Color.Transparent)))
-            drawPath(path, if (selected) color else color.copy(alpha = 0.6f), style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
-        }
+        DjArcSpark(arc, color, selected, Modifier.fillMaxWidth().height(40.dp))
         Spacer(Modifier.height(10.dp))
         Text(name, style = Shell.type.title.copy(fontSize = 15.sp, lineHeight = 19.sp), color = c.ink)
         Text(djArcBody(arc), style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)

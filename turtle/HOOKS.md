@@ -10,11 +10,11 @@ product owner asked that the whole app, player surfaces and dialogs included, us
 and from 50 the same day because the product owner scrapped Listen Together (20 Nov 2026), which
 needs four lines (#41 to #43) to switch off without deleting upstream's ~200 files, and to 75 the
 same day when the product owner asked for "everything to be Turtle": rebrand (#44 to #47),
-Shell settings and menus (#49 to #53), podcasts (#54) and Turtle DJ effects (#55);
+Shell settings and menus (#49 to #53), podcasts (#54) and Turtle DJ effects (#55 to #58);
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **70** hook lines, plus about 55 lines of behavior patches below.
+Current total: **72** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -68,7 +68,10 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 52 | `shared/ui/components/PlayerMenuComponents.kt` | 2 | First lines of the player menu's action group and primary actions: `menuActionGroup`, `menuPrimaryActions` | Player menus in Shell's look | Product designer |
 | 53 | `shared/ui/menu/DesktopDropdownMenu.kt` | 1 | `if (TurtleUiSlots.menuSurface?.let { it(MenuSurfaceSlot(...)); true } == null) Surface(` | Desktop menu panels drawn as Shell surfaces | Product designer |
 | 54 | `shared/ui/screens/PodcastContent.kt` | 1 | First line of `PodcastContent`: `TurtleUiSlots.podcastPage?.let { return it(PodcastPageSlot(...)) }` | Shell's podcast show page (follow, play latest, episode progress) | Product designer |
-| 55 | `shared/equalizer/EqualizerProfiles.kt` | 1 | `configuration` returns `TurtleAudioFx.equalizerOverride ?:` upstream's value (our `shared/.../turtle/TurtleAudioFx.kt`, one volatile field) | Turtle DJ's live effects (filter sweep, bass boost/cut, bass swap during blends) without rewriting the listener's saved EQ many times a second. Null outside a DJ set, so upstream's EQ is untouched | Recommendations engineer |
+| 55 | `shared/equalizer/EqualizerProfiles.kt` | 0 | Retired (Nov 2026). It returned `TurtleAudioFx.equalizerOverride` for Turtle DJ's master-bus EQ effects | Replaced by the per-deck effects rack behind #56, which never touches the saved EQ. The line is upstream's again | Recommendations engineer |
+| 56 | `shared/equalizer/ParametricEqualizer.kt` | 1 | First line of `processPcm16`: `TurtleAudioFx.processor?.process(this, samples, count, sampleRate, channelCount)`, fully qualified | Turtle DJ's per-deck effects rack (`turtle-mix`): echo-outs, loop rolls, tape stops, backspins, real bass swaps, synthesized samples and tempo measured from the audio. Every platform's PCM goes through this function once per player, so one line covers Android and desktop, and each crossfading player is its own deck. Null outside a DJ set | Recommendations engineer |
+| 57 | `shared/playback/Crossfade.kt` (`playbackCrossfadeGains`) | 1 | First line: `TurtleAudioFx.crossfadeGains?.invoke(progress)?.let { return it }` | While a DJ transition runs, both players play at full and the rack's beat-timed gain automation does the mixing (cuts on the downbeat, drops, bass swaps). Null otherwise | Recommendations engineer |
+| 58 | `shared/playback/Crossfade.kt` (`playbackCrossfadeDurationMs`) | 1 | `coerceIn(0L, 15_000L)` reads `TurtleAudioFx.maxCrossfadeMs` (15 s unless a DJ set raises it) | Long DJ blends (32 beats is ~16 s at 120 BPM) need a window over 15 s; upstream's own settings stay capped at 15 s | Recommendations engineer |
 | 59 | `shared/ui/components/AccountMenu.kt` | 1 | `if (!TurtleUiSlots.hideAccountMenuLicense) Text(` on the "GPL-3.0 MetrolistGroup" line under the account menu | Product owner asked to drop the licence wording from the account menu. GPL-3.0 still requires an Appropriate Legal Notice in the UI: it stays on Settings > About ("Metrolist is licensed under GPL-3.0", kept by #44's credits exception) | Product designer |
 
 ## Behavior patches

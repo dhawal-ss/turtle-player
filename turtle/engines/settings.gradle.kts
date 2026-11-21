@@ -23,8 +23,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "turtle-engines"
 
-include(":turtle-core", ":turtle-events", ":turtle-search", ":turtle-taste")
+include(":turtle-core", ":turtle-events", ":turtle-search", ":turtle-taste", ":turtle-mix")
 project(":turtle-core").projectDir = file("core")
 project(":turtle-events").projectDir = file("events")
 project(":turtle-search").projectDir = file("search")
 project(":turtle-taste").projectDir = file("taste")
+project(":turtle-mix").projectDir = file("mix")

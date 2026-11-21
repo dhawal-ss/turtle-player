@@ -6,26 +6,38 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import app.turtleplayer.bridge.DjArc
 import app.turtleplayer.bridge.DjEngine
+import app.turtleplayer.bridge.DjMemory
+import app.turtleplayer.bridge.DjRack
 import app.turtleplayer.bridge.DjTrack
 import app.turtleplayer.bridge.TurtleBridge
-import com.metrolist.shared.equalizer.EqualizerConfiguration
-import com.metrolist.shared.equalizer.EqualizerProfile
-import com.metrolist.shared.equalizer.EqualizerProfiles
-import com.metrolist.shared.equalizer.FilterType
-import com.metrolist.shared.equalizer.MAX_EQUALIZER_BANDS
-import com.metrolist.shared.equalizer.ParametricEqBand
+import app.turtleplayer.mix.FxParam
+import app.turtleplayer.mix.MixScript
+import app.turtleplayer.mix.Pick
+import app.turtleplayer.mix.PickReason
+import app.turtleplayer.mix.Quantize
+import app.turtleplayer.mix.SampleId
+import app.turtleplayer.mix.TrackFacts
+import app.turtleplayer.mix.TransitionPlan
+import app.turtleplayer.mix.TransitionStyle
+import app.turtleplayer.mix.VibeSettings
+import app.turtleplayer.mix.CueKind
+import app.turtleplayer.mix.brain.MixPoints
+import app.turtleplayer.mix.brain.SetContext
+import app.turtleplayer.mix.brain.SetPlanner
+import app.turtleplayer.mix.brain.TransitionPlanner
+import app.turtleplayer.mix.rack.TransitionPhase
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.settings.Settings
-import com.metrolist.shared.turtle.TurtleAudioFx
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.playback.PlaybackController
 import kotlinx.coroutines.Job
@@ -35,35 +47,64 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
-import kotlin.math.log10
 import kotlin.math.max
-import kotlin.math.pow
+import kotlin.random.Random
 import kotlin.time.TimeSource
 
-/** How long a set runs; [Endless] repeats the arc every hour. */
+/** How a set runs; [Endless] repeats the arc every hour. */
 internal enum class DjLength(val minutes: Int?) { M30(30), M60(60), M120(120), Endless(null) }
 
-/** One track in the set: when it starts in set time, and the energy the arc wanted there. */
+/** Auto: Turtle picks and mixes. You: you pick the next track and the move, Turtle suggests and keeps a safety net. */
+internal enum class DjMode { Auto, You }
+
+/** One track in the set: when it starts in set time, the energy the arc wanted there, and why it was picked. */
 @Immutable
-internal data class DjSlot(val track: DjTrack, val startMs: Long, val target: Double, val requested: Boolean = false)
+internal data class DjSlot(
+    val track: DjTrack,
+    val startMs: Long,
+    val target: Double,
+    val requested: Boolean = false,
+    val reasons: List<PickReason> = emptyList(),
+    /** How the DJ plans to mix into this track (set for the next track). */
+    val plan: TransitionPlan? = null,
+    val chosenByYou: Boolean = false,
+)
+
+/** What the DJ is doing right now, for the booth's narration line. */
+internal sealed interface DjNow {
+    data object Digging : DjNow
+    data class OnAir(val slot: DjSlot) : DjNow
+    data class Mixing(val style: TransitionStyle, val into: DjSlot, val manual: Boolean) : DjNow
+    data class Skipped(val artist: String) : DjNow
+    data class Liked(val artist: String) : DjNow
+    data class Remixed(val vibe: VibeChange) : DjNow
+    data class Requested(val title: String) : DjNow
+    data object SafetyNet : DjNow
+}
+
+internal enum class VibeChange { Energy, Fresh, Flair, Pace, Variety, Several }
 
 /** A running Turtle DJ set. Snapshot state, so the booth redraws as the set moves. */
 @Stable
-internal class DjSession(val genres: List<String>, val arc: DjArc, val length: DjLength) {
+internal class DjSession(val genres: List<String>, val arc: DjArc, val length: DjLength, vibe: VibeSettings, mode: DjMode) {
     val played = mutableStateListOf<DjSlot>()
     var current by mutableStateOf<DjSlot?>(null)
     val upcoming = mutableStateListOf<DjSlot>()
 
-    /** Hype (+) and Chill (-) shift the rest of the arc. */
-    var bias by mutableDoubleStateOf(0.0)
+    var vibe by mutableStateOf(vibe)
+    var mode by mutableStateOf(mode)
+    var now by mutableStateOf<DjNow>(DjNow.Digging)
+
     var loading by mutableStateOf(true)
     var planning by mutableStateOf(false)
     var mixing by mutableStateOf(false)
+    var mixStyle by mutableStateOf<TransitionStyle?>(null)
+    var manualMix by mutableStateOf(false)
 
     /** Crossfader: 0 is deck A (on air), 1 is deck B (the incoming track). Read it in draw. */
     var mixProgress by mutableFloatStateOf(0f)
 
-    /** Media position at which the current track starts mixing out. */
+    /** Media position at which the current track starts mixing out (Auto). */
     var mixPointMs by mutableLongStateOf(Long.MAX_VALUE)
 
     /** Set time: how long the set has been playing (pauses excluded). Read it in draw or a leaf. */
@@ -72,47 +113,76 @@ internal class DjSession(val genres: List<String>, val arc: DjArc, val length: D
     /** Playback rate applied now (tempo nudges keep pitch: both players time-stretch). */
     var speed by mutableFloatStateOf(1f)
 
-    /** The listener's Speed up / Slow down on top of the automatic nudges. */
+    /** The listener's tempo on top of the automatic nudges (±8 %). */
     var userTempo by mutableFloatStateOf(1f)
-    var filterOn by mutableStateOf(false)
-    var boostOn by mutableStateOf(false)
-    var killOn by mutableStateOf(false)
+
+    /** The on-air deck's tempo and energy as the rack measures them (0 until it knows). */
+    var liveBpm by mutableFloatStateOf(0f)
+    var liveBpmMeasured by mutableStateOf(false)
+    var liveEnergy by mutableFloatStateOf(-1f)
+
+    /** Whether the effects rack hears the audio (false: plain crossfades, no FX). */
+    var fxAvailable by mutableStateOf(true)
+
+    /** You mode: the move you picked for the next mix (null: the DJ's suggestion). */
+    var youStyle by mutableStateOf<TransitionStyle?>(null)
+
+    /** You mode: next-track choices, best first. */
+    val suggestions = mutableStateListOf<Pick>()
+
+    /** The listener's live effects layer, as the UI shows it. */
+    val userFx = mutableStateMapOf<FxParam, Float>()
+
+    /** Snap pads and samples to the beat. */
+    var quantize by mutableStateOf(true)
+
+    val skipped = HashSet<String>()
+    val liked = HashSet<String>()
+    val recentStyles = ArrayList<TransitionStyle>()
 
     internal var masterBpm = 0.0
     internal var speedTouched = false
+    internal var remembered: String? = null
 
-    val fadeMs: Long get() = (arc.fadeSeconds * 1000).toLong()
     val spanMs: Long get() = (length.minutes ?: 60) * 60_000L
     val finished: Boolean get() = length.minutes != null && elapsedMs >= spanMs
 
-    /** Target energy at [t] (0..1 of the graph's span), with Hype/Chill applied. */
-    fun arcAt(t: Double): Double = (arc.energyAt(t) + bias).coerceIn(0.05, 1.0)
+    /** The arc as drawn at [t] (0..1 of the graph's span). */
+    fun arcAt(t: Double): Double = arc.energyAt(t)
+
+    /** Target energy at [t] with the listener's vibe applied. */
+    fun targetAtT(t: Double): Double = SetPlanner.target(arc.energyAt(t).toFloat(), vibe).toDouble()
 
     /** Target energy at set time [ms]. */
-    fun targetAt(ms: Long): Double = arcAt(if (length.minutes != null) ms.toDouble() / spanMs else (ms % spanMs).toDouble() / spanMs)
+    fun targetAt(ms: Long): Double = targetAtT(if (length.minutes != null) ms.toDouble() / spanMs else (ms % spanMs).toDouble() / spanMs)
 
-    /** Estimated on-air time of a slot: its length minus the outro the DJ skips. */
+    /** Estimated on-air time of a slot: from its start to where it mixes out. */
     fun airtime(slot: DjSlot): Long {
-        val durationMs = (slot.track.song.duration ?: 210L) * 1000L
-        return (durationMs - slot.track.outroTrimMs).coerceAtLeast(60_000L)
+        val f = slot.track.facts()
+        val point = MixPoints.mixOutAtMs(f, f.bpm, vibe.pace, 8.0)
+        return (point + 12_000L).coerceIn(45_000L, f.durationMs)
     }
 
-    val primaryGenre: String get() = genres.firstOrNull() ?: "party"
+    val primaryGenre: String get() = genres.firstOrNull() ?: DjEngine.YOURS
 }
 
 /**
  * Turtle DJ: builds and plays a continuous set from the listener's vibe. Lives in a MainScope, so the
  * set keeps mixing after the booth closes; it ends when the listener ends it or plays something else,
- * and then gives back their crossfade, tempo and equalizer exactly as they were.
+ * and then gives back their crossfade and tempo exactly as they were.
  *
- * How a mix sounds: at each track's mix point (before its outro) the outgoing track is filtered and
- * its bass cut ([DjFx], live EQ), then it jumps to its last seconds so the players' own crossfade
- * (DJ-length, set here) overlaps it with the next track while the filter opens and the bass swaps in.
+ * How a mix sounds: the brain (turtle-mix) picks the next track and a transition style; at the mix
+ * point the rack plays the style's script on the beat grid it measures from the audio: echo-outs,
+ * loop rolls, spinbacks, risers, EQ blends with a bass swap. At the script's Seek cue the outgoing
+ * track jumps to its crossfade window so the next player starts; the rack masks the jump and does all
+ * the volume work while the players' own crossfade is held at full.
  */
 internal object ShellDj {
     private val scope = MainScope()
     private var sessionJob = SupervisorJob()
     private val clock = TimeSource.Monotonic.markNow()
+    private val random = Random.Default
+    private val rack get() = DjRack.rack
 
     /** Whether the booth overlay is showing; any surface can open it. */
     var open by mutableStateOf(false)
@@ -129,6 +199,8 @@ internal object ShellDj {
     private var title = ""
     private var restore: Restore? = null
     private var tempoJob: Job? = null
+    private var nowJob: Job? = null
+    private var replanJob: Job? = null
     private var recovered = false
 
     private class Restore(val crossfade: Boolean, val duration: Float, val gapless: Boolean, val speed: Float) {
@@ -145,14 +217,15 @@ internal object ShellDj {
 
     private fun now() = clock.elapsedNow().inWholeMilliseconds
 
-    /** True while a set is playing (its queue is still the one on air). */
+    private fun log(message: String) = println("[Turtle] dj: $message")
+
     fun isLive(): Boolean = session != null
 
-    /** Starts a set: digs the first tracks, takes over crossfade, and starts mixing. */
-    fun start(controller: PlaybackController, genres: List<String>, arc: DjArc, length: DjLength, queueTitle: String) {
+    /** Starts a set: digs the first tracks, takes over crossfade, plugs in the rack and starts mixing. */
+    fun start(controller: PlaybackController, genres: List<String>, arc: DjArc, length: DjLength, vibe: VibeSettings, mode: DjMode, queueTitle: String) {
         end(controller)
         failed = false
-        val s = DjSession(genres.ifEmpty { arc.defaultGenres }, arc, length)
+        val s = DjSession(genres.ifEmpty { listOf(DjEngine.YOURS) }, arc, length, vibe, mode)
         session = s
         title = queueTitle
         sessionJob = SupervisorJob()
@@ -168,9 +241,9 @@ internal object ShellDj {
             }
             s.upcoming += first
             pickSlot(s, s.airtime(first), emptySet())?.let { s.upcoming += it }
-            takeOver(controller, arc)
+            takeOver(controller)
+            DjRack.install()
             s.masterBpm = first.track.bpm.toDouble()
-            DjFx.activate()
             ShellQueue.play(controller, s.upcoming.map { it.track.song }, title)
             s.loading = false
             drive(controller, s)
@@ -182,7 +255,9 @@ internal object ShellDj {
         val s = session
         sessionJob.cancel()
         tempoJob?.cancel()
-        DjFx.deactivate()
+        nowJob?.cancel()
+        replanJob?.cancel()
+        DjRack.uninstall()
         restore?.let { r ->
             Settings.shared.crossfadeEnabled = r.crossfade
             Settings.shared.crossfadeDuration = r.duration
@@ -214,14 +289,14 @@ internal object ShellDj {
         }
     }
 
-    private fun takeOver(controller: PlaybackController, arc: DjArc) {
+    private fun takeOver(controller: PlaybackController) {
         if (restore == null) {
             val r = Restore(Settings.shared.crossfadeEnabled, Settings.shared.crossfadeDuration, Settings.shared.crossfadeGapless, Settings.shared.playbackSpeed)
             restore = r
             scope.launch { TurtleBridge.setUiPref(PREF_RESTORE, r.encode()) }
         }
         Settings.shared.crossfadeEnabled = true
-        Settings.shared.crossfadeDuration = arc.fadeSeconds
+        Settings.shared.crossfadeDuration = DEFAULT_WINDOW_S
         Settings.shared.crossfadeGapless = false
         session?.speed = controller.state.value.playbackSpeed.takeIf { it > 0f } ?: 1f
     }
@@ -231,7 +306,12 @@ internal object ShellDj {
     private suspend fun drive(controller: PlaybackController, s: DjSession) {
         var misses = 0
         var last = now()
-        var pendingIntro: Pair<String, Long>? = s.upcoming.firstOrNull()?.let { it.track.song.id to it.track.introSkipMs }
+        var silentSince = now()
+        var awaitingSince = -1L
+        var wasRunning = false
+        var mixFrom: String? = null
+        var lastStatus = 0L
+        var lastPhase = TransitionPhase.Idle
         while (session === s) {
             delay(TICK_MS)
             val st = controller.state.value
@@ -247,26 +327,131 @@ internal object ShellDj {
             val song = st.currentSong ?: continue
             if (song.id != s.current?.track?.song?.id) {
                 if (!onTrackChanged(controller, s, song)) return end(controller)
+                // The incoming track became current without the rack seeing a second deck: settle up.
+                if (rack.transition.running && rack.transition.phase != TransitionPhase.Post) rack.abort()
             }
             val slot = s.current ?: continue
-            pendingIntro?.let { (id, ms) ->
-                if (id == song.id && st.durationMs > 0 && !st.isLoading) {
-                    pendingIntro = null
-                    if (ms > 0 && st.positionMs < 5_000 && ms < st.durationMs - 90_000) controller.seekTo(ms)
+
+            // Does the rack hear us? (Not when the platform has no processing path or audio is offloaded.)
+            if (rack.receivingAudio) silentSince = t
+            val fx = !st.isPlaying || t - silentSince < FX_LOST_MS
+            if (fx != s.fxAvailable) {
+                s.fxAvailable = fx
+                log("effects rack ${if (fx) "hears the audio" else "hears nothing: plain crossfades"}")
+            }
+
+            readDeck(s, slot)
+            if (t - lastStatus >= STATUS_MS) {
+                lastStatus = t
+                val d = rack.onAir
+                log("status: pos ${st.positionMs}/${st.durationMs} mixPoint ${s.mixPointMs} hears=${rack.receivingAudio} deck bpm=${d?.bpm} measured=${d?.bpmMeasured} conf=${d?.confidence} energy=${d?.energy} phase=${rack.transition.phase} next=${s.upcoming.firstOrNull()?.plan?.style}")
+            }
+            handleCues(controller, s)
+
+            // Mirror the transition.
+            val tr = rack.transition
+            val running = tr.running
+            if (tr.phase != lastPhase) {
+                log("phase ${lastPhase} -> ${tr.phase} at ${st.positionMs}/${st.durationMs} beat ${tr.beat}")
+                lastPhase = tr.phase
+            }
+            if (running) {
+                s.mixProgress = tr.progress
+                if (tr.phase == TransitionPhase.AwaitingIncoming) {
+                    if (awaitingSince < 0) awaitingSince = t
+                    if (t - awaitingSince > AWAIT_INCOMING_MS) {
+                        log("incoming deck never started; aborting the mix")
+                        rack.abort()
+                        controller.skipToNext()
+                    }
+                } else {
+                    awaitingSince = -1L
+                }
+            } else {
+                awaitingSince = -1L
+            }
+            if (wasRunning && !running) {
+                DjRack.afterMix = st.currentSong?.id == mixFrom
+                onMixDone(controller, s)
+            }
+            if (!wasRunning && running) mixFrom = song.id
+            wasRunning = running
+
+            ensurePlan(s)
+            s.mixPointMs = mixPoint(s, slot, st.durationMs)
+            val remaining = st.durationMs - st.positionMs
+            // After a mix the old track runs on (muted) to the end of its window: never mix it twice.
+            if (!s.mixing && !DjRack.afterMix && st.isPlaying && s.upcoming.isNotEmpty() && st.durationMs > 0 && st.positionMs > MIN_PLAY_MS) {
+                when (s.mode) {
+                    DjMode.Auto -> if (st.positionMs >= s.mixPointMs) startMix(controller, s, manualStyle = null)
+                    DjMode.You -> if (remaining < SAFETY_NET_MS) {
+                        setNow(s, DjNow.SafetyNet, hold = false)
+                        startMix(controller, s, manualStyle = s.youStyle)
+                    }
                 }
             }
-            s.mixPointMs = mixPoint(s, slot, st.durationMs)
-            // The 15 s floor guards against a stale duration right after a track change.
-            if (!s.mixing && st.isPlaying && s.upcoming.isNotEmpty() && st.positionMs >= max(s.mixPointMs, 15_000L)) {
-                scope.launch(sessionJob) { blend(controller, s, SWEEP_MS) }
-            }
             if (s.upcoming.size < AHEAD && !s.planning && !s.finished) scope.launch(sessionJob) { planMore(controller, s) }
+            if (s.mode == DjMode.You && s.suggestions.isEmpty() && !s.planning && s.upcoming.isNotEmpty()) refreshSuggestions(s)
+        }
+    }
+
+    /** Copies the rack's live readings into the session; remembers a track's measured facts once. */
+    private fun readDeck(s: DjSession, slot: DjSlot) {
+        // Mid-mix and just after it, the rack's on-air deck may already be the next track.
+        if (s.mixing || DjRack.afterMix) return
+        val deck = rack.onAir ?: return
+        if (!deck.active) return
+        val measured = deck.bpmMeasured
+        val native = if (measured) deck.bpm / s.speed.coerceAtLeast(0.5f) else 0f
+        if (measured) {
+            s.liveBpm = native
+            s.liveBpmMeasured = true
+            // Tempo-shifting songs can drop below the tracker's confidence for a while: the last
+            // confident reading stays the deck's tempo, so scripts keep timing on the real beat.
+            rack.setTempoHint(app.turtleplayer.mix.Deck.Out, deck.bpm)
+        } else if (!s.liveBpmMeasured) {
+            s.liveBpm = slot.track.bpm.toFloat()
+        }
+        if (deck.framesAnalyzed > 0) s.liveEnergy = deck.energy
+        val id = slot.track.song.id
+        if (measured && s.remembered != id && deck.framesAnalyzed > REMEMBER_AFTER_FRAMES) {
+            s.remembered = id
+            DjMemory.remember(id, DjMemory.Facts(native, deck.energy, deck.loudnessDb))
+            log("measured \"${slot.track.song.title}\": ${native} BPM (guess ${slot.track.bpm}), energy ${deck.energy}, confidence ${deck.confidence}")
+            // The measured tempo replaces the guess for the rest of this track (mix point, script).
+            if (abs(native - slot.track.bpm) > 1.5f) {
+                val updated = slot.copy(track = slot.track.copy(bpm = native.toInt(), bpmMeasured = true, energy = deck.energy.toDouble(), energyMeasured = true))
+                s.current = updated
+                s.upcoming.firstOrNull()?.let { next -> replaceFirst(s, next.copy(plan = null)) }
+            }
+        }
+    }
+
+    private fun handleCues(controller: PlaybackController, s: DjSession) {
+        for (cue in rack.pollCues()) {
+            when (cue) {
+                CueKind.Seek -> {
+                    val st = controller.state.value
+                    val window = (Settings.shared.crossfadeDuration * 1000).toLong()
+                    if (st.durationMs > 0 && st.durationMs - st.positionMs > window + SEEK_LEAD_MS) {
+                        log("seek cue: ${st.positionMs} -> ${st.durationMs - window - SEEK_LEAD_MS / 2} of ${st.durationMs} (window ${window} ms)")
+                        controller.seekTo(st.durationMs - window - SEEK_LEAD_MS / 2)
+                    }
+                }
+                is CueKind.Sample -> Unit
+            }
         }
     }
 
     /** Moves the decks along. Returns false when the set is over (time's up and autoplay took over). */
     private fun onTrackChanged(controller: PlaybackController, s: DjSession, song: SongItem): Boolean {
         s.current?.let { s.played += it }
+        DjRack.afterMix = false
+        // A fader left mid-way when the old track ran out: finish the move so the new one plays at full.
+        if (s.manualMix) {
+            rack.setFader(1f)
+            s.mixProgress = 1f
+        }
         val i = s.upcoming.indexOfFirst { it.track.song.id == song.id }
         if (i < 0 && s.finished) return false
         val slot = if (i >= 0) {
@@ -277,76 +462,121 @@ internal object ShellDj {
         }
         s.current = slot.copy(startMs = s.elapsedMs)
         s.mixPointMs = Long.MAX_VALUE
+        s.liveBpm = slot.track.bpm.toFloat()
+        s.liveBpmMeasured = slot.track.bpmMeasured
+        s.youStyle = null
+        s.suggestions.clear()
+        rack.setTempoHint(app.turtleplayer.mix.Deck.Out, slot.track.bpm * s.speed)
         val bpm = slot.track.bpm.toDouble()
         s.masterBpm = if (s.masterBpm <= 0.0) bpm else s.masterBpm * 0.6 + nearestOctave(bpm, s.masterBpm) * 0.4
-        if (!s.mixing) glideTempo(controller, s)
+        if (!s.mixing) {
+            glideTempo(controller, s)
+            setNow(s, DjNow.OnAir(s.current!!), hold = false)
+        }
         return true
+    }
+
+    private fun onMixDone(controller: PlaybackController, s: DjSession) {
+        log("mix done: ${s.mixStyle}")
+        s.mixing = false
+        s.manualMix = false
+        s.mixProgress = 0f
+        rack.setFader(null)
+        // Back to a window shorter than any mix point, so the next track never crossfades on its own early.
+        Settings.shared.crossfadeDuration = DEFAULT_WINDOW_S
+        s.mixStyle?.let { st ->
+            s.recentStyles += st
+            while (s.recentStyles.size > 6) s.recentStyles.removeAt(0)
+        }
+        s.mixStyle = null
+        s.current?.let { setNow(s, DjNow.OnAir(it), hold = false) }
+        glideTempo(controller, s)
     }
 
     private fun nearestOctave(bpm: Double, master: Double): Double =
         listOf(bpm, bpm * 2, bpm / 2).minBy { abs(it - master) }
 
-    /** Where the current track starts mixing out: before its outro, earlier when the energy is high. */
+    /** Plans how to mix into the next track (when it has no plan yet). */
+    private fun ensurePlan(s: DjSession) {
+        val cur = s.current ?: return
+        val next = s.upcoming.firstOrNull() ?: return
+        if (next.plan != null || s.mixing) return
+        val plan = TransitionPlanner.plan(facts(s, cur), next.track.facts(next.requested), s.vibe, s.recentStyles, random, s.fxAvailable)
+        replaceFirst(s, next.copy(plan = plan))
+    }
+
+    private fun replaceFirst(s: DjSession, slot: DjSlot) {
+        if (s.upcoming.isNotEmpty() && s.upcoming[0].track.song.id == slot.track.song.id) s.upcoming[0] = slot
+    }
+
+    /** The current track's facts with what the rack has measured. */
+    private fun facts(s: DjSession, slot: DjSlot): TrackFacts {
+        val f = slot.track.facts(slot.requested)
+        return if (s.liveBpmMeasured && s.liveBpm > 0f) f.copy(bpm = s.liveBpm, bpmMeasured = true) else f
+    }
+
+    /** Where the current track starts its transition out: from the brain, by the listener's pace. */
     private fun mixPoint(s: DjSession, slot: DjSlot, durationMs: Long): Long {
         if (durationMs <= 0L) return Long.MAX_VALUE
-        val factor = 0.7 + s.targetAt(s.elapsedMs) * 0.6
-        val trim = (slot.track.outroTrimMs * factor).toLong()
-        val point = durationMs - trim - SWEEP_MS
-        val natural = (durationMs - s.fadeMs - SWEEP_MS - 600).coerceAtLeast(durationMs / 2)
-        return if (trim <= s.fadeMs || point < durationMs / 2) natural else point
+        val f = facts(s, slot).copy(durationMs = durationMs)
+        val preBeats = s.upcoming.firstOrNull()?.plan?.script?.pre?.lengthBeats ?: 8.0
+        return MixPoints.mixOutAtMs(f, f.bpm * s.speed, s.vibe.pace, preBeats)
     }
 
     /**
-     * One DJ mix. The outgoing track is filtered and its bass cut over [sweepMs]; it then jumps to its
-     * last seconds (the players only crossfade at a file's end), and while the players blend the two
-     * the filter opens and the bass swaps back in, so the incoming track arrives whole.
+     * Starts the transition into the next track: [manualStyle] (You mode, or Mix now with a chosen
+     * move) or the planned one. Without the rack it falls back to a plain crossfade.
      */
-    private suspend fun blend(controller: PlaybackController, s: DjSession, sweepMs: Long) {
-        if (s.mixing) return
+    private fun startMix(controller: PlaybackController, s: DjSession, manualStyle: TransitionStyle?, script: MixScript? = null, quantize: Quantize = Quantize.Bar) {
+        if (s.mixing || DjRack.afterMix) return
+        val cur = s.current ?: return
+        val next = s.upcoming.firstOrNull() ?: return
+        val outF = facts(s, cur)
+        val inF = next.track.facts(next.requested)
+        val planned = next.plan ?: TransitionPlanner.plan(outF, inF, s.vibe, s.recentStyles, random, s.fxAvailable)
+        val style = manualStyle ?: planned.style
+        val chosen = script ?: if (manualStyle != null && manualStyle != planned.style) TransitionPlanner.script(manualStyle, outF, inF) else planned.script
+        // At least 8 s: Android needs a moment to start the next player inside the window. The script
+        // silences the old track on time anyway; it just runs on muted until the window closes.
+        val overlap = TransitionPlanner.overlapSeconds(chosen, outF.bpm * s.speed).coerceIn(MIN_WINDOW_S, DjRack.MAX_WINDOW_MS / 1000f)
         s.mixing = true
-        val from = controller.state.value.currentSong?.id
-        try {
-            DjFx.ramp(DjFx.Fx.MixFilter, 0.7f, sweepMs)
-            DjFx.ramp(DjFx.Fx.MixKill, 0.65f, sweepMs * 3 / 4)
-            DjFx.ramp(DjFx.Fx.MixDuck, 0.2f, sweepMs)
-            animateMix(s, 0f, 0.3f, sweepMs)
-            val st = controller.state.value
-            if (st.currentSong?.id == from && st.durationMs - st.positionMs > s.fadeMs + PRELOAD_LEAD_MS) {
-                // Leave room for the next track's player to (re)open before the blend window starts.
-                controller.seekTo(st.durationMs - s.fadeMs - PRELOAD_LEAD_MS + 500)
-            }
-            // Hold the filtered groove until the players' crossfade window opens.
-            withTimeoutOrNull(PRELOAD_LEAD_MS + 1_500) {
-                while (true) {
-                    val now = controller.state.value
-                    if (now.currentSong?.id != from || now.durationMs - now.positionMs <= s.fadeMs + 200) break
-                    delay(80)
-                }
-            }
-            val fade = s.fadeMs
-            DjFx.ramp(DjFx.Fx.MixFilter, 0f, fade * 7 / 10)
-            DjFx.ramp(DjFx.Fx.MixDuck, 0f, fade / 2)
-            scope.launch(sessionJob) {
-                delay(fade * 55 / 100)
-                DjFx.ramp(DjFx.Fx.MixKill, 0f, (fade / 5).coerceAtLeast(400))
-            }
-            animateMix(s, 0.3f, 1f, fade + 400)
-            withTimeoutOrNull(4_000) { while (controller.state.value.currentSong?.id == from) delay(100) }
-        } finally {
-            DjFx.ramp(DjFx.Fx.MixFilter, 0f, 400)
-            DjFx.ramp(DjFx.Fx.MixKill, 0f, 400)
-            DjFx.ramp(DjFx.Fx.MixDuck, 0f, 400)
+        s.mixStyle = style
+        s.manualMix = chosen.manualFader
+        s.mixProgress = 0f
+        setNow(s, DjNow.Mixing(style, next, manual = manualStyle != null || chosen.manualFader), hold = false)
+        if (!s.fxAvailable) {
+            // No rack: a plain crossfade of the arc's length from near the end.
+            Settings.shared.crossfadeDuration = s.arc.fadeSeconds
+            scope.launch(sessionJob) { plainMix(controller, s) }
+            return
+        }
+        Settings.shared.crossfadeDuration = overlap
+        rack.setTempoHint(app.turtleplayer.mix.Deck.Out, outF.bpm * s.speed)
+        rack.setTempoHint(app.turtleplayer.mix.Deck.In, inF.bpm * s.speed)
+        log("mix: ${style} \"${cur.track.song.title}\" -> \"${next.track.song.title}\", pre ${chosen.pre.lengthBeats} + post ${chosen.post.lengthBeats} beats at ${outF.bpm} BPM, window ${overlap} s")
+        if (!rack.run(chosen, quantize)) {
+            log("mix refused: a script is already running")
             s.mixing = false
-            s.mixProgress = 0f
-            if (session === s) glideTempo(controller, s)
+            s.mixStyle = null
         }
     }
 
-    private suspend fun animateMix(s: DjSession, from: Float, to: Float, ms: Long) {
-        val steps = (ms / MIX_STEP_MS).coerceAtLeast(1)
-        for (i in 1..steps) {
-            s.mixProgress = from + (to - from) * i / steps
-            delay(MIX_STEP_MS)
+    /** Fallback when the rack hears nothing: jump near the end and let the players crossfade. */
+    private suspend fun plainMix(controller: PlaybackController, s: DjSession) {
+        val from = controller.state.value.currentSong?.id
+        try {
+            val st = controller.state.value
+            val window = (s.arc.fadeSeconds * 1000).toLong()
+            if (st.durationMs - st.positionMs > window + SEEK_LEAD_MS) controller.seekTo(st.durationMs - window - SEEK_LEAD_MS / 2)
+            val steps = 50
+            for (i in 1..steps) {
+                s.mixProgress = i.toFloat() / steps
+                delay((window + SEEK_LEAD_MS) / steps)
+                if (controller.state.value.currentSong?.id != from) break
+            }
+            withTimeoutOrNull(4_000) { while (controller.state.value.currentSong?.id == from) delay(100) }
+        } finally {
+            onMixDone(controller, s)
         }
     }
 
@@ -368,6 +598,18 @@ internal object ShellDj {
         }
     }
 
+    /** Shows [now] in the narration line; transient news falls back to what is on air after a while. */
+    private fun setNow(s: DjSession, now: DjNow, hold: Boolean) {
+        nowJob?.cancel()
+        s.now = now
+        if (hold) {
+            nowJob = scope.launch(sessionJob) {
+                delay(NEWS_MS)
+                if (session === s) s.now = if (s.mixing) s.now else s.current?.let { DjNow.OnAir(it) } ?: DjNow.Digging
+            }
+        }
+    }
+
     // ---- Planning ---------------------------------------------------------------------------
 
     private fun knownIds(s: DjSession): Set<String> = buildSet {
@@ -376,17 +618,37 @@ internal object ShellDj {
         s.upcoming.forEach { add(it.track.song.id) }
     }
 
+    /** The set so far as the planner sees it: the last planned track is the one the next pick follows. */
+    private fun context(s: DjSession): SetContext {
+        val sequence = (s.played + listOfNotNull(s.current) + s.upcoming).map { it.track.facts(it.requested) }
+        return SetContext(onAir = sequence.lastOrNull(), history = sequence.dropLast(1), skipped = s.skipped, liked = s.liked)
+    }
+
+    /** Candidates, minus other uploads of songs already in the set ("X (Radio Edit)" after "X – Radio Edit"). */
+    private suspend fun candidates(s: DjSession, target: Double, extra: Set<String>): Map<String, DjTrack> {
+        val inSet = (s.played + listOfNotNull(s.current) + s.upcoming).mapTo(HashSet()) { songKey(it.track.song) }
+        return DjEngine.candidates(s.genres, target, knownIds(s) + extra, s.vibe.fresh)
+            .filter { songKey(it.song) !in inSet }
+            .distinctBy { songKey(it.song) }
+            .associateBy { it.song.id }
+    }
+
+    /** A song's identity across uploads: first artist and the title without versions, features or extras. */
+    private fun songKey(song: SongItem): String {
+        val title = song.title.lowercase()
+            .replace(Regex("""\(.*?\)|\[.*?]"""), " ")
+            .substringBefore(" - ").substringBefore(" – ").substringBefore(" feat").substringBefore(" ft.")
+            .filter { it.isLetterOrDigit() }
+        return (song.artists.firstOrNull()?.name?.lowercase()?.filter { it.isLetterOrDigit() }.orEmpty()) + "|" + title
+    }
+
     private suspend fun pickSlot(s: DjSession, startMs: Long, extra: Set<String>): DjSlot? {
-        val recent = (s.played + listOfNotNull(s.current) + s.upcoming)
         val target = s.targetAt(startMs)
-        val track = DjEngine.pick(
-            genres = s.genres,
-            target = target,
-            exclude = knownIds(s) + extra,
-            recentArtists = recent.takeLast(ARTIST_SPACING).mapNotNull { it.track.song.artists.firstOrNull()?.name },
-            recentGenres = recent.takeLast(3).map { it.track.genre },
-        ) ?: return null
-        return DjSlot(track, startMs, target)
+        val pool = candidates(s, target, extra)
+        val pick = SetPlanner.pick(pool.values.map { it.facts() }, context(s), target.toFloat(), s.vibe, random) ?: return null
+        val track = pool[pick.track.id] ?: return null
+        DjEngine.consume(track.song.id, track.genre)
+        return DjSlot(track, startMs, target, reasons = pick.reasons)
     }
 
     private fun plannedStart(s: DjSession): Long {
@@ -412,54 +674,152 @@ internal object ShellDj {
         }
     }
 
-    // ---- Controls ---------------------------------------------------------------------------
-
-    /** Transition to the next track right now (a short filter sweep, then the blend). */
-    fun mixNow(controller: PlaybackController) {
-        val s = session ?: return
-        if (s.mixing || s.upcoming.isEmpty()) return
-        scope.launch(sessionJob) { blend(controller, s, MIX_NOW_SWEEP_MS) }
+    /** Drops planned tracks (requests and the one mixing stay) and plans them again for the new vibe. */
+    private suspend fun replan(controller: PlaybackController, s: DjSession, keepFirst: Boolean) {
+        val remove = ShellInfinity.removeAt ?: { i: Int -> controller.removeQueueItem(i) }
+        val from = if (keepFirst || s.mixing) 1 else 0
+        val drop = s.upcoming.drop(from).filter { !it.requested && !it.chosenByYou }
+        if (drop.isEmpty()) return
+        val st = controller.state.value
+        val indices = drop.mapNotNull { d ->
+            st.queue.indexOfLast { it.id == d.track.song.id }.takeIf { it > st.currentQueueIndex }
+        }.sortedDescending()
+        indices.forEach(remove)
+        val removedIds = indices.map { st.queue[it].id }.toSet()
+        s.upcoming.removeAll { it.track.song.id in removedIds }
+        delay(250)
+        planMore(controller, s)
+        // Plans exist only for the next track; a new one (or a new vibe) needs a new plan.
+        s.upcoming.firstOrNull()?.let { if (!s.mixing) replaceFirst(s, it.copy(plan = null)) }
+        if (s.mode == DjMode.You) refreshSuggestions(s)
     }
 
-    /** A clean cut to the next track: a quick dip, skip, past a long intro, back up. */
-    fun skip(controller: PlaybackController) {
-        val s = session ?: return controller.skipToNext()
+    /** You mode: the best five next tracks for this moment. */
+    private fun refreshSuggestions(s: DjSession) {
         scope.launch(sessionJob) {
-            val from = controller.state.value.currentSong?.id
-            val next = s.upcoming.firstOrNull()
-            DjFx.ramp(DjFx.Fx.MixDuck, 1f, 160).join()
-            controller.skipToNext()
-            withTimeoutOrNull(3_000) { while (controller.state.value.currentSong?.id == from) delay(40) }
-            val intro = next?.track?.introSkipMs ?: 0L
-            if (next != null && intro > 0) {
-                withTimeoutOrNull(2_000) {
-                    while (controller.state.value.durationMs <= 0L || controller.state.value.isLoading) delay(40)
-                }
-                val st = controller.state.value
-                if (st.currentSong?.id == next.track.song.id && intro < st.durationMs - 90_000) controller.seekTo(intro)
+            val cur = s.current ?: return@launch
+            val target = s.targetAt(cur.startMs + s.airtime(cur))
+            val pool = candidates(s, target, emptySet())
+            val ctx = SetContext(onAir = cur.track.facts(), history = s.played.map { it.track.facts() }, skipped = s.skipped, liked = s.liked)
+            val picks = ArrayList<Pick>()
+            var left = pool.values.map { it.facts() }
+            repeat(SUGGESTIONS) {
+                val p = SetPlanner.pick(left, ctx, target.toFloat(), s.vibe, random) ?: return@repeat
+                picks += p
+                left = left.filter { it.id != p.track.id && it.artist != p.track.artist }
             }
-            DjFx.ramp(DjFx.Fx.MixDuck, 0f, 700)
+            suggestionTracks.putAll(pool.filterKeys { id -> picks.any { it.track.id == id } })
+            s.suggestions.clear()
+            s.suggestions.addAll(picks)
         }
     }
 
-    /** Hype (up) or Chill (down): shifts the arc and re-plans everything after the next track. */
+    private val suggestionTracks = HashMap<String, DjTrack>()
+
+    fun suggestionSong(id: String): SongItem? = suggestionTracks[id]?.song
+
+    // ---- Controls ---------------------------------------------------------------------------
+
+    /** Mix into the next track now: the planned move (Auto) or the one you picked (You), on the next bar. */
+    fun mixNow(controller: PlaybackController) {
+        val s = session ?: return
+        if (s.mixing || s.upcoming.isEmpty()) return
+        startMix(controller, s, manualStyle = if (s.mode == DjMode.You) s.youStyle else null)
+    }
+
+    /** Mix now with a specific move (the move picker in either mode). */
+    fun mixWith(controller: PlaybackController, style: TransitionStyle) {
+        val s = session ?: return
+        if (s.mixing || s.upcoming.isEmpty()) return
+        startMix(controller, s, manualStyle = style)
+    }
+
+    /** Skip: the DJ learns (less of this artist and sound this set) and cuts to the next track on the beat. */
+    fun skip(controller: PlaybackController) {
+        val s = session ?: return controller.skipToNext()
+        val cur = s.current
+        if (cur != null && !cur.requested) {
+            s.skipped += cur.track.song.id
+            setNow(s, DjNow.Skipped(cur.track.song.artists.firstOrNull()?.name.orEmpty()), hold = true)
+            // Skips change what fits: pick the rest again without that sound.
+            replanJob?.cancel()
+            replanJob = scope.launch(sessionJob) { replan(controller, s, keepFirst = true) }
+        }
+        if (s.mixing) return
+        if (!s.fxAvailable || s.upcoming.isEmpty()) return controller.skipToNext()
+        val next = s.upcoming.first()
+        val outF = cur?.let { facts(s, it) } ?: return controller.skipToNext()
+        startMix(controller, s, manualStyle = TransitionStyle.Cut, script = TransitionPlanner.script(TransitionStyle.Cut, outF, next.track.facts()), quantize = Quantize.Beat)
+    }
+
+    /** Like the track on air: saved to your likes, and the DJ leans toward this artist for the rest of the set. */
+    fun like(): Boolean {
+        val s = session ?: return false
+        val cur = s.current ?: return false
+        val now = SongLikeState.toggleLike(cur.track.song)
+        if (now) {
+            s.liked += cur.track.song.id
+            setNow(s, DjNow.Liked(cur.track.song.artists.firstOrNull()?.name.orEmpty()), hold = true)
+        } else {
+            s.liked -= cur.track.song.id
+        }
+        return now
+    }
+
+    /** Hype (up) or Chill (down): moves the vibe's energy and re-plans what's next. */
     fun steer(controller: PlaybackController, up: Boolean) {
         val s = session ?: return
-        s.bias = (s.bias + if (up) BIAS_STEP else -BIAS_STEP).coerceIn(-MAX_BIAS, MAX_BIAS)
+        val v = s.vibe
+        setVibe(controller, v.copy(energy = (v.energy + if (up) 0.15f else -0.15f).coerceIn(0f, 1f)))
+    }
+
+    /** The listener retuned the vibe: shown at once, and up next is re-planned after they settle. */
+    fun setVibe(controller: PlaybackController, vibe: VibeSettings) {
+        val s = session ?: return
+        val old = s.vibe
+        if (old == vibe) return
+        s.vibe = vibe
+        val changed = buildList {
+            if (old.energy != vibe.energy) add(VibeChange.Energy)
+            if (old.fresh != vibe.fresh) add(VibeChange.Fresh)
+            if (old.flair != vibe.flair) add(VibeChange.Flair)
+            if (old.pace != vibe.pace) add(VibeChange.Pace)
+            if (old.variety != vibe.variety) add(VibeChange.Variety)
+        }
+        replanJob?.cancel()
+        replanJob = scope.launch(sessionJob) {
+            delay(VIBE_SETTLE_MS)
+            // Flair and pace only change how and when the next mix happens; the rest changes the picks.
+            val picksChange = changed.any { it == VibeChange.Energy || it == VibeChange.Fresh || it == VibeChange.Variety }
+            if (picksChange) replan(controller, s, keepFirst = false)
+            else s.upcoming.firstOrNull()?.let { if (!s.mixing) replaceFirst(s, it.copy(plan = null)) }
+            setNow(s, DjNow.Remixed(changed.singleOrNull() ?: VibeChange.Several), hold = true)
+        }
+    }
+
+    fun setMode(mode: DjMode) {
+        val s = session ?: return
+        s.mode = mode
+        if (mode == DjMode.You) refreshSuggestions(s)
+    }
+
+    /** You mode: play [pick] next instead of what was planned. */
+    fun chooseNext(controller: PlaybackController, pick: Pick) {
+        val s = session ?: return
+        if (s.mixing) return
+        val track = suggestionTracks[pick.track.id] ?: return
         scope.launch(sessionJob) {
-            val remove = ShellInfinity.removeAt
-            if (remove != null && s.upcoming.size > 1) {
-                val drop = s.upcoming.drop(1).filter { !it.requested }
+            val remove = ShellInfinity.removeAt ?: { i: Int -> controller.removeQueueItem(i) }
+            s.upcoming.firstOrNull()?.let { old ->
                 val st = controller.state.value
-                val indices = drop.mapNotNull { d ->
-                    st.queue.indexOfLast { it.id == d.track.song.id }.takeIf { it > st.currentQueueIndex + 1 }
-                }.sortedDescending()
-                indices.forEach(remove)
-                val removedIds = indices.map { st.queue[it].id }.toSet()
-                s.upcoming.removeAll { it.track.song.id in removedIds }
-                delay(300)
+                st.queue.indexOfLast { it.id == old.track.song.id }.takeIf { it > st.currentQueueIndex }?.let(remove)
+                s.upcoming.removeAt(0)
             }
-            planMore(controller, s)
+            DjEngine.consume(track.song.id, track.genre)
+            controller.playNext(listOf(track.song))
+            val start = s.current?.let { it.startMs + s.airtime(it) } ?: s.elapsedMs
+            s.upcoming.add(0, DjSlot(track, start, s.targetAt(start), reasons = pick.reasons, chosenByYou = true))
+            s.suggestions.removeAll { it.track.id == pick.track.id }
         }
     }
 
@@ -468,122 +828,78 @@ internal object ShellDj {
         val s = session ?: return
         controller.playNext(listOf(track.song))
         val start = s.current?.let { it.startMs + s.airtime(it) } ?: s.elapsedMs
-        s.upcoming.add(0, DjSlot(track, start, s.targetAt(start), requested = true))
+        s.upcoming.add(0, DjSlot(track, start, s.targetAt(start), requested = true, reasons = listOf(PickReason.Requested)))
+        setNow(s, DjNow.Requested(track.song.title), hold = true)
     }
 
-    fun setFilter(on: Boolean) {
+    /** You mode: the crossfader. Moving it off A starts a fader transition into the next track. */
+    fun fader(controller: PlaybackController, position: Float) {
         val s = session ?: return
-        s.filterOn = on
-        DjFx.ramp(DjFx.Fx.PadFilter, if (on) 1f else 0f, if (on) 2_400 else 1_200)
+        // A finger at the far end rarely reaches exactly 1: the last 3 % counts as B, so the mix completes.
+        val x = position.coerceIn(0f, 1f).let { if (it > 0.97f) 1f else it }
+        if (!s.mixing) {
+            if (x < FADER_START || s.upcoming.isEmpty() || !s.fxAvailable) return
+            val cur = s.current ?: return
+            val next = s.upcoming.first()
+            startMix(controller, s, manualStyle = TransitionStyle.Blend, script = TransitionPlanner.faderScript(facts(s, cur), next.track.facts()), quantize = Quantize.Beat)
+        }
+        if (s.manualMix) {
+            s.mixProgress = x
+            rack.setFader(x)
+        }
     }
 
-    fun setBoost(on: Boolean) {
+    // ---- Live effects (the listener's layer on the deck on air) -----------------------------
+
+    fun fx(param: FxParam, value: Float, rampMs: Int = 30) {
         val s = session ?: return
-        s.boostOn = on
-        DjFx.ramp(DjFx.Fx.PadBoost, if (on) 1f else 0f, 500)
+        s.userFx[param] = value
+        rack.setUser(param, value, rampMs)
     }
 
-    fun setKill(on: Boolean) {
+    fun resetFx() {
         val s = session ?: return
-        s.killOn = on
-        DjFx.ramp(DjFx.Fx.PadKill, if (on) 1f else 0f, if (on) 250 else 600)
+        s.userFx.clear()
+        rack.resetUser(300)
     }
 
-    /** Speed up (+) or slow down (-) the whole set by 2% per tap, within ±8%. */
+    fun sample(id: SampleId) {
+        val s = session ?: return
+        rack.trigger(id, if (s.quantize) Quantize.Beat else Quantize.None)
+    }
+
+    /** Speed up (+) or slow down (-) the whole set by 2 % per tap, within ±8 %. */
     fun nudgeTempo(controller: PlaybackController, up: Boolean) {
         val s = session ?: return
         s.userTempo = (s.userTempo + if (up) 0.02f else -0.02f).coerceIn(0.92f, 1.08f)
         glideTempo(controller, s)
     }
 
+    fun resetTempo(controller: PlaybackController) {
+        val s = session ?: return
+        s.userTempo = 1f
+        glideTempo(controller, s)
+    }
+
     private const val PREF_RESTORE = "dj_restore"
-    private const val TICK_MS = 200L
-    private const val MISSES_TO_END = 25
-    private const val SWEEP_MS = 4_000L
-    private const val MIX_NOW_SWEEP_MS = 1_400L
-    private const val PRELOAD_LEAD_MS = 2_500L
-    private const val MIX_STEP_MS = 40L
+    private const val TICK_MS = 40L
+    private const val MISSES_TO_END = 125
+    private const val SEEK_LEAD_MS = 600L
     private const val TEMPO_STEPS = 4
     private const val TEMPO_STEP_MS = 450L
     private const val AHEAD = 3
-    private const val ARTIST_SPACING = 4
-    private const val BIAS_STEP = 0.15
-    private const val MAX_BIAS = 0.45
-}
-
-/**
- * Turtle DJ's live effects, played through the app's equalizer stage (Android's
- * EqualizerAudioProcessor, desktop's AudioRenderer) via [TurtleAudioFx]: the listener's own EQ plus
- * three shelves (bass cut, bass boost, high-cut sweep) and a volume ride. The listener's saved
- * equalizer is never written; ending the set drops the override.
- */
-internal object DjFx {
-    enum class Fx { PadFilter, PadBoost, PadKill, MixFilter, MixKill, MixDuck }
-
-    private val scope = MainScope()
-    private val values = FloatArray(Fx.entries.size)
-    private val jobs = arrayOfNulls<Job>(Fx.entries.size)
-    private var active = false
-
-    fun activate() {
-        active = true
-        publish()
-    }
-
-    fun deactivate() {
-        active = false
-        jobs.forEach { it?.cancel() }
-        values.fill(0f)
-        TurtleAudioFx.equalizerOverride = null
-    }
-
-    /** Eases [fx] to [to] (0..1) over [ms]; a new ramp on the same effect replaces the old one. */
-    fun ramp(fx: Fx, to: Float, ms: Long): Job {
-        jobs[fx.ordinal]?.cancel()
-        val from = values[fx.ordinal]
-        return scope.launch {
-            val steps = (ms / STEP_MS).coerceAtLeast(1)
-            for (i in 1..steps) {
-                val u = i.toFloat() / steps
-                values[fx.ordinal] = from + (to - from) * (u * u * (3 - 2 * u))
-                publish()
-                delay(STEP_MS)
-            }
-            values[fx.ordinal] = to
-            publish()
-        }.also { jobs[fx.ordinal] = it }
-    }
-
-    private fun publish() {
-        if (!active) {
-            TurtleAudioFx.equalizerOverride = null
-            return
-        }
-        val filter = max(values[Fx.PadFilter.ordinal] * 0.85f, values[Fx.MixFilter.ordinal])
-        val kill = max(values[Fx.PadKill.ordinal], values[Fx.MixKill.ordinal])
-        val boost = values[Fx.PadBoost.ordinal] * (1f - kill)
-        val duck = values[Fx.MixDuck.ordinal]
-        val base = EqualizerProfiles.selectedConfiguration.takeIf { Settings.shared.equalizerEnabled }
-        // Same band layout every time while the set runs, so the filters keep their state (no clicks).
-        val bands = base?.profile?.bands.orEmpty().take(MAX_EQUALIZER_BANDS - 3) + listOf(
-            ParametricEqBand(KILL_HZ, gain(-24f * kill), 0.707, FilterType.LSC),
-            ParametricEqBand(BOOST_HZ, gain(6f * boost), 0.9, FilterType.LSC),
-            ParametricEqBand(FILTER_TOP_HZ * (FILTER_BOTTOM_HZ / FILTER_TOP_HZ).pow(filter.toDouble()), gain(-26f * filter), 0.707, FilterType.HSC),
-        )
-        val duckDb = if (duck <= 0f) 0.0 else 20.0 * log10(max(1.0 - duck, 0.003))
-        TurtleAudioFx.equalizerOverride = EqualizerConfiguration(
-            EqualizerProfile(id = "turtle_dj", name = "Turtle DJ", bands = bands, preamp = (base?.profile?.preamp ?: 0.0) + duckDb, source = "turtle"),
-            base?.preampDb ?: 0.0,
-        )
-    }
-
-    private fun gain(db: Float): Double = if (abs(db) < 0.05f) 0.0 else db.toDouble()
-
-    private const val STEP_MS = 20L
-    private const val KILL_HZ = 250.0
-    private const val BOOST_HZ = 95.0
-    private const val FILTER_TOP_HZ = 9_000.0
-    private const val FILTER_BOTTOM_HZ = 500.0
+    private const val SUGGESTIONS = 5
+    private const val DEFAULT_WINDOW_S = 12f
+    private const val FX_LOST_MS = 3_000L
+    private const val AWAIT_INCOMING_MS = 7_000L
+    private const val MIN_PLAY_MS = 15_000L
+    private const val SAFETY_NET_MS = 35_000L
+    private const val REMEMBER_AFTER_FRAMES = 44_100L * 40
+    private const val NEWS_MS = 4_500L
+    private const val VIBE_SETTLE_MS = 700L
+    private const val FADER_START = 0.04f
+    private const val STATUS_MS = 30_000L
+    private const val MIN_WINDOW_S = 8f
 }
 
 /** Shows the Turtle DJ booth when it is open; put one in every top-level surface. */

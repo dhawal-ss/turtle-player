@@ -147,7 +147,7 @@ object EqualizerProfiles {
         }
 
     val configuration: EqualizerConfiguration
-        get() = com.metrolist.shared.turtle.TurtleAudioFx.equalizerOverride ?: selectedConfiguration.takeIf { Settings.shared.equalizerEnabled } ?: EqualizerConfiguration(null, 0.0) // Turtle: HOOKS.md #55
+        get() = selectedConfiguration.takeIf { Settings.shared.equalizerEnabled } ?: EqualizerConfiguration(null, 0.0)
 
     val isEnabled: Boolean
         get() = Settings.shared.equalizerEnabled && (activeProfile != null || selectedConfiguration.preampDb != 0.0)

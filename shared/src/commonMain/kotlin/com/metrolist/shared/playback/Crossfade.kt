@@ -107,10 +107,11 @@ fun playbackCrossfadeDurationMs(
     incomingDurationMs: Long,
 ): Long {
     if (!enabled || (preserveSameAlbumGapless && sameAlbum)) return 0L
-    return minOf(configuredDurationMs.coerceIn(0L, 15_000L), outgoingDurationMs.coerceAtLeast(0L), incomingDurationMs.coerceAtLeast(0L))
+    return minOf(configuredDurationMs.coerceIn(0L, com.metrolist.shared.turtle.TurtleAudioFx.maxCrossfadeMs), outgoingDurationMs.coerceAtLeast(0L), incomingDurationMs.coerceAtLeast(0L))
 }
 
 fun playbackCrossfadeGains(progress: Float): Pair<Float, Float> {
+    com.metrolist.shared.turtle.TurtleAudioFx.crossfadeGains?.invoke(progress)?.let { return it }
     if (!progress.isFinite() || progress <= 0f) return 1f to 0f
     if (progress >= 1f) return 0f to 1f
     val t = progress.coerceIn(0f, 1f)
