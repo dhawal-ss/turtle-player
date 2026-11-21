@@ -11,6 +11,7 @@ import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -334,16 +335,19 @@ internal fun BoxScope.ShellChoicePopup(
         DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
             val c = Shell.colors
             val selectedIndex = choices.indexOfFirst { it.id == selectedId }
-            val listState = rememberLazyListState((selectedIndex - 3).coerceAtLeast(0))
+            // A plain scrolling Column, not a LazyColumn: Material's popup measures its content's
+            // intrinsic size, which lazy lists refuse (it crashed the app on desktop).
+            val scroll = androidx.compose.foundation.rememberScrollState()
+            val rowPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+            androidx.compose.runtime.LaunchedEffect(Unit) { scroll.scrollTo((selectedIndex - 3).coerceAtLeast(0) * rowPx) }
             val haptics = rememberMetrolistHaptics()
             val selectedLabel = stringResource(Res.string.shell_set_selected)
-            LazyColumn(
-                state = listState,
+            androidx.compose.foundation.layout.Column(
                 modifier = Modifier.width(300.dp).heightIn(max = 420.dp).shadow(16.dp, RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp)).background(c.surface2).border(1.dp, c.hairline, RoundedCornerShape(12.dp)),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
+                    .clip(RoundedCornerShape(12.dp)).background(c.surface2).border(1.dp, c.hairline, RoundedCornerShape(12.dp))
+                    .then(Modifier.verticalScroll(scroll)).padding(4.dp),
             ) {
-                itemsIndexed(choices, key = { index, choice -> "$index:${choice.id}" }) { _, choice ->
+                choices.forEachIndexed { index, choice -> androidx.compose.runtime.key("$index:${choice.id}") {
                     val selected = choice.id == selectedId
                     val (hover, hovered) = rememberHover()
                     val bg by animateColorAsState(
@@ -376,7 +380,7 @@ internal fun BoxScope.ShellChoicePopup(
                         )
                         if (selected) Glyph(Glyphs.Check, c.accent, 16.dp, contentDescription = selectedLabel)
                     }
-                }
+                } }
             }
         }
     }
