@@ -269,7 +269,7 @@ fun HomeScreen() {
     }
 }
 
-private fun openHomeItem(item: YTItem) {
+internal fun openHomeItem(item: YTItem) {
     when (item) {
         is SongItem -> {
             PlayerState.playTrack(item)

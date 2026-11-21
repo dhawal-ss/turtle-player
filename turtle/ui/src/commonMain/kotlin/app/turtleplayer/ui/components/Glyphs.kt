@@ -53,6 +53,12 @@ object Glyphs {
     val Lyrics = vector("lyrics", "M4 5h16v11H8l-4 4zM8 9h8M8 12h5", filled = false)
     val Fullscreen = vector("fullscreen", "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5", filled = false, stroke = 2f)
     val Volume = vector("volume", "M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11", filled = false)
+    val Heart = vector("heart", "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", filled = true)
+    val ArrowRight = vector("arrow_right", "M5 12h14M13 6l6 6-6 6", filled = false, stroke = 2f)
+    val NowPlayingView = vector("now_playing_view", "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM15 5v14", filled = false)
+    val History = vector("history", "M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4v4.5H8M12 7.5V12l3 2", filled = false)
+    val Stats = vector("stats", "M5 20V11M12 20V4M19 20v-6", filled = false, stroke = 2.2f)
+    val Together = vector("together", "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6M16 4.6a3.5 3.5 0 0 1 0 6.3M18 14.3c2.1.7 3.5 2.9 3.5 5.7", filled = false)
 }
 
 @Composable

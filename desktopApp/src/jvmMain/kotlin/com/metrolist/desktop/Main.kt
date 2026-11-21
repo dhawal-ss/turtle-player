@@ -987,6 +987,7 @@ private fun runDesktopApp(args: Array<String>) {
                     turtleAppModule,
                 )
             }
+            com.metrolist.shared.turtle.TurtleUiSlots.desktopLibrary = com.metrolist.shared.turtle.DesktopLibrarySlot({ com.metrolist.desktop.state.content.LibraryContentState.librarySections.values.flatten() }, { com.metrolist.desktop.ui.screens.openHomeItem(it) })
             val database =
                 try {
                     GlobalContext.get().get<MusicDatabase>()

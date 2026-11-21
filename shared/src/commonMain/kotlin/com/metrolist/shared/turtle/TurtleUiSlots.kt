@@ -2,6 +2,7 @@ package com.metrolist.shared.turtle
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -33,6 +34,15 @@ object TurtleUiSlots {
     var player: (@Composable (PlayerSlot) -> Unit)? = null
     var navigation: (@Composable (NavigationSlot) -> Unit)? = null
     var desktopPlayerBar: (@Composable (DesktopPlayerBarSlot) -> Unit)? = null
+
+    /**
+     * Replaces upstream's generated Material color scheme everywhere (Shell's palette). Called with
+     * `darkTheme`; returning null keeps upstream's scheme (Shell is dark only, so light theme stays upstream's).
+     */
+    var colorScheme: ((Boolean) -> ColorScheme?)? = null
+
+    /** Desktop data Shell's sidebar needs; the desktop app registers it at startup. Non-null means desktop. */
+    var desktopLibrary: DesktopLibrarySlot? = null
 
     /** While true, upstream's full player shows instead of ours (Shell hands over for lyrics, queue, more). */
     var showUpstreamPlayer by mutableStateOf(false)
@@ -127,4 +137,13 @@ class DesktopPlayerBarSlot(
     val onVolumeChange: (Float) -> Unit,
     /** The restored track before playback starts (desktop loads it into the player only on play). */
     val restoredSong: SongItem?,
+)
+
+/**
+ * Desktop's library for Shell's "Your Library" sidebar: the items upstream's Library screen shows
+ * and upstream's own opener (which loads playlists, albums and artists before navigating).
+ */
+class DesktopLibrarySlot(
+    val items: () -> List<YTItem>,
+    val open: (YTItem) -> Unit,
 )

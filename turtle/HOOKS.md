@@ -8,7 +8,7 @@ Budget: **under 40 hook lines in total**, counting the import lines a hook needs
 20 Nov 2026 when we chose to replace upstream's UI with Shell; every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **35** hook lines, plus about 55 lines of behavior patches below.
+Current total: **38** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -36,6 +36,9 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 26 | `shared/ui/player/PlayerScreen.kt` | 1 | `TurtleUiSlots.player?.takeUnless { showUpstreamPlayer && !collapsed }?.let { return it(PlayerSlot(...)) }` | Shell's Now Playing. Lyrics, queue, devices and the More menu hand over to upstream's player (`showUpstreamPlayer`), which shows until the sheet collapses | Product designer |
 | 27 | `shared/ui/navigation/AdaptiveNavigationScaffold.kt` | 1 | `TurtleUiSlots.navigation?.takeUnless { isEditing }?.let { ... return slot(NavigationSlot(...)) }` | Shell's bottom tabs (phones) and rail (desktop, tablets). Keeps upstream's header, footer, floating-bar height reporting and tab-reorder edit mode | Product designer |
 | 28 | `desktop/ui/components/Player.kt` | 1 | First line of `StandardBottomPlayer`: `TurtleUiSlots.desktopPlayerBar?.let { return it(DesktopPlayerBarSlot(...)) }` | Shell's Spotify-layout desktop player bar; queue, lyrics, devices and fullscreen toggle upstream's desktop state | Product designer |
+| 29 | `shared/ui/theme/CommonTheme.kt` | 1 | `baseColorScheme` first asks `TurtleUiSlots.colorScheme?.invoke(darkTheme)`, fully qualified | Shell's palette replaces the generated Material scheme app-wide in dark theme, so upstream's title bar, frame, pages, menus and dialogs match Shell. On desktop `surfaceContainer` is the black frame and `surface` the panel. Light theme keeps upstream's scheme | Product designer |
+| 30 | `desktop/Main.kt` | 1 | After `startKoin`: `TurtleUiSlots.desktopLibrary = DesktopLibrarySlot({ LibraryContentState.librarySections... }, { openHomeItem(it) })`, fully qualified | Feeds Shell's Your Library sidebar with upstream's library list and upstream's own opener (which loads a playlist, album or artist before navigating). Its presence also tells Shell it runs on desktop | Product designer |
+| 31 | `desktop/ui/screens/HomeScreen.kt` | 1 | `private fun openHomeItem` made `internal` | So hook #30 can reuse upstream's opener, including built-in playlists such as Liked Songs | Product designer |
 
 ## Behavior patches
 
@@ -70,6 +73,6 @@ Every hook fails open: if Koin has no Turtle runtime, our code throws, or rankin
 | App identity | `androidApp/build.gradle.kts:255` `applicationId`, `desktopApp/build.gradle.kts:738` `packageName` | Read from `turtle/branding.properties` (2 lines) |
 | Update channel | `android/update/AppUpdateManager.kt:122`, `desktop/update/DesktopUpdateManager.kt:42` | Point at our releases (2 lines) |
 
-The remaining planned hooks need about 4 more lines, which reaches the budget. Prefer
+The remaining planned hooks need about 4 more lines, 2 over the budget: fold the app identity into one shared `turtle/branding.properties` read (1 line per app is the floor), or raise the budget deliberately. Prefer
 consolidating (for example one shared override point that several hooks reuse) over adding new
 call sites.

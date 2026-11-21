@@ -46,6 +46,7 @@ import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.turtle.NavigationSlot
 import com.metrolist.shared.turtle.NavigationSlotItem
+import com.metrolist.shared.turtle.TurtleUiSlots
 
 /** Our glyph for well-known destinations; upstream's own icon for everything else. */
 private fun glyphFor(item: NavigationSlotItem, selected: Boolean): ImageVector {
@@ -116,6 +117,7 @@ private fun BottomTabs(slot: NavigationSlot) {
 
 @Composable
 private fun Rail(slot: NavigationSlot) {
+    TurtleUiSlots.desktopLibrary?.let { return ShellDesktopLayout(slot, it) }
     val c = Shell.colors
     Row(slot.modifier.fillMaxSize()) {
         if (slot.navigationVisible) {

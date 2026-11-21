@@ -16,7 +16,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,11 +36,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import com.metrolist.shared.utils.sizedArtworkUrl
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
@@ -53,6 +59,10 @@ import androidx.compose.ui.unit.dp
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellShapes
+import app.turtleplayer.ui.theme.ShellPlatform
+import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_play
+import org.jetbrains.compose.resources.stringResource
 import coil3.compose.AsyncImage
 
 /** Press feedback shared by every tappable Shell element: scale to 0.96 over the tap duration. */
@@ -71,11 +81,32 @@ fun Modifier.shellPressable(
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
 }
 
-/** Artwork with a tonal placeholder while it loads. */
+private val LetterboxedVideoArt = Regex("""/(hq|sd)default(\.\w+)""")
+
+/**
+ * Candidate URLs for a piece of artwork, best first. YouTube's hqdefault and sddefault video stills
+ * bake letterbox bars into the image, which show once cropped square; mqdefault is the bar-free frame.
+ * With [sizePx], upstream's sizing asks for a larger image (maxres for videos), falling back if absent.
+ */
+internal fun artCandidates(url: String?, sizePx: Int?): List<String> {
+    if (url == null) return emptyList()
+    val barFree = if ("ytimg.com" in url) LetterboxedVideoArt.replace(url) { "/mqdefault${it.groupValues[2]}" } else url
+    val sized = sizePx?.let { runCatching { sizedArtworkUrl(barFree, it) }.getOrNull() } ?: barFree
+    return listOf(sized, barFree).distinct()
+}
+
+/** Artwork with a tonal placeholder while it loads. Pass [sizePx] for large art (Now Playing). */
 @Composable
-fun ShellArt(url: String?, modifier: Modifier = Modifier, shape: Shape = ShellShapes.Art, fallback: Color = Shell.colors.surface3) {
+fun ShellArt(url: String?, modifier: Modifier = Modifier, shape: Shape = ShellShapes.Art, fallback: Color = Shell.colors.surface3, sizePx: Int? = null) {
+    val candidates = remember(url, sizePx) { artCandidates(url, sizePx) }
+    var attempt by remember(candidates) { mutableIntStateOf(0) }
     Box(modifier.clip(shape).background(fallback)) {
-        if (url != null) AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        candidates.getOrNull(attempt)?.let { src ->
+            AsyncImage(
+                model = src, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                onError = { if (attempt < candidates.lastIndex) attempt++ },
+            )
+        }
     }
 }
 
@@ -117,7 +148,35 @@ fun Equalizer(color: Color = Shell.colors.accent, height: Dp = 14.dp, modifier: 
     }
 }
 
-/** Spotify-style shortcut tile: art on the left, bold name, equalizer when it is what's playing. */
+/** Hover state for desktop micro-interactions (always false on touch screens). */
+@Composable
+fun rememberHover(): Pair<MutableInteractionSource, Boolean> {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    return source to hovered
+}
+
+/** Spotify's hover play button: a lime circle that rises into place over artwork or a tile. */
+@Composable
+fun HoverPlayButton(visible: Boolean, size: Dp, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible,
+        enter = fadeIn(ShellMotion.emphasized()) + slideInVertically(ShellMotion.emphasized()) { it / 3 },
+        exit = fadeOut(ShellMotion.exit()) + slideOutVertically(ShellMotion.exit()) { it / 3 },
+        modifier = modifier,
+    ) {
+        Box(
+            Modifier.size(size).shadow(10.dp, CircleShape).clip(CircleShape).background(Shell.colors.accent)
+                .shellPressable(onClick, label = stringResource(Res.string.shell_play)),
+            contentAlignment = Alignment.Center,
+        ) { PlayGlyph(Shell.colors.onAccent, size * 0.45f) }
+    }
+}
+
+/**
+ * Spotify-style shortcut tile: art on the left, bold name, equalizer when it is what's playing. On
+ * hover it lightens and, when it can play directly, shows a play button.
+ */
 @Composable
 fun ShortcutTile(
     title: String,
@@ -125,28 +184,45 @@ fun ShortcutTile(
     playing: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onPlay: (() -> Unit)? = null,
+    onHover: (Boolean) -> Unit = {},
 ) {
+    val c = Shell.colors
+    val (source, hovered) = rememberHover()
+    androidx.compose.runtime.LaunchedEffect(hovered) { onHover(hovered) }
+    val bg by animateColorAsState(if (hovered) c.surface3 else c.surface2, ShellMotion.emphasized())
     Row(
-        modifier.height(56.dp).clip(ShellShapes.Tile).background(Shell.colors.surface2).shellPressable(onClick),
+        modifier.height(56.dp).clip(ShellShapes.Tile).background(bg).hoverable(source).shellPressable(onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         art(Modifier.size(56.dp))
-        Text(title, style = Shell.type.title, color = Shell.colors.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-        AnimatedVisibility(playing, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
+        Text(title, style = Shell.type.title, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+        AnimatedVisibility(playing && !hovered, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
             Equalizer(modifier = Modifier.padding(end = 10.dp))
         }
+        if (onPlay != null) HoverPlayButton(hovered, 32.dp, onPlay, Modifier.padding(end = 10.dp))
     }
+}
+
+/** Padding and hover panel around a desktop card (Spotify's lifted card); plain on phones. */
+@Composable
+fun Modifier.cardHover(hovered: Boolean): Modifier {
+    if (!ShellPlatform.desktop) return this
+    val bg by animateColorAsState(if (hovered) Shell.colors.surface2 else Color.Transparent, ShellMotion.emphasized())
+    return this.clip(RoundedCornerShape(8.dp)).background(bg).padding(10.dp)
 }
 
 /** Square mix card with the name set on the artwork and a "who's in it" line below. */
 @Composable
 fun MixCard(title: String, subtitle: String, artUrl: String?, tint: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.shellPressable(onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val (source, hovered) = rememberHover()
+    Column(modifier.hoverable(source).cardHover(hovered).shellPressable(onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(ShellShapes.Art).background(tint)) {
             if (artUrl != null) {
                 AsyncImage(model = artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.55f })
             }
             Text(title, style = Shell.type.headline.copy(fontSize = Shell.type.headline.fontSize * 0.68f), color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
+            HoverPlayButton(hovered, 44.dp, onClick, Modifier.align(Alignment.BottomEnd).padding(8.dp))
         }
         Text(subtitle, style = Shell.type.bodySmall, color = Shell.colors.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }

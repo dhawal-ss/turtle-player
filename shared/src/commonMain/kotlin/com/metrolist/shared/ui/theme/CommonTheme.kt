@@ -88,7 +88,7 @@ fun MetrolistTheme(
     colorScheme: ColorScheme? = null,
     content: @Composable () -> Unit,
 ) {
-    val baseColorScheme = colorScheme ?: rememberDynamicColorScheme(seedColor, darkTheme)
+    val baseColorScheme = com.metrolist.shared.turtle.TurtleUiSlots.colorScheme?.invoke(darkTheme) ?: colorScheme ?: rememberDynamicColorScheme(seedColor, darkTheme)
 
     val colorScheme =
         remember(baseColorScheme, pureBlack, darkTheme) {

@@ -5,15 +5,19 @@ import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
+import com.metrolist.shared.turtle.TurtleUiSlots
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -33,6 +37,10 @@ import org.jetbrains.compose.resources.FontResource
 @Immutable
 data class ShellColors(
     val ground: Color = Color(0xFF0B0B0C),
+    /** Desktop: the black frame between panels (title bar, gaps, player bar). */
+    val frame: Color = Color(0xFF000000),
+    /** Desktop: the rounded panels (library, content, now playing). */
+    val panel: Color = Color(0xFF121214),
     val surface1: Color = Color(0xFF131315),
     val surface2: Color = Color(0xFF1A1A1D),
     val surface3: Color = Color(0xFF222226),
@@ -45,6 +53,8 @@ data class ShellColors(
     val accent: Color = Color(0xFFD4F55A),
     val onAccent: Color = Color(0xFF0B0B0C),
     val accentSoft: Color = Color(0x24D4F55A),
+    val accentContainer: Color = Color(0xFF2A3310),
+    val danger: Color = Color(0xFFFF8A7A),
 )
 
 @Immutable
@@ -121,24 +131,7 @@ private fun shellType(): ShellType {
  */
 @Composable
 fun ShellTheme(colors: ShellColors = ShellThemes.active, content: @Composable () -> Unit) {
-    val scheme = darkColorScheme(
-        primary = colors.accent,
-        onPrimary = colors.onAccent,
-        secondary = colors.ink2,
-        background = colors.ground,
-        onBackground = colors.ink,
-        surface = colors.ground,
-        onSurface = colors.ink,
-        surfaceVariant = colors.surface2,
-        onSurfaceVariant = colors.ink2,
-        surfaceContainerLowest = colors.ground,
-        surfaceContainerLow = colors.surface1,
-        surfaceContainer = colors.surface2,
-        surfaceContainerHigh = colors.surface3,
-        surfaceContainerHighest = colors.surface3,
-        outline = colors.hairline,
-        outlineVariant = colors.hairlineSoft,
-    )
+    val scheme = remember(colors) { shellMaterialScheme(colors, ShellPlatform.desktop) }
     CompositionLocalProvider(LocalShellColors provides colors, LocalShellType provides shellType()) {
         MaterialTheme(colorScheme = scheme, content = content)
     }
@@ -150,4 +143,62 @@ fun ShellTheme(colors: ShellColors = ShellThemes.active, content: @Composable ()
  */
 object ShellThemes {
     var active: ShellColors by mutableStateOf(ShellColors())
+}
+
+object ShellPlatform {
+    /** True on desktop, where the app shows Shell's three-panel layout (the desktop app registers its library). */
+    val desktop: Boolean get() = TurtleUiSlots.desktopLibrary != null
+}
+
+/**
+ * The background a Shell screen paints. Phones use the ground; on desktop, screens sit inside a
+ * rounded panel, so the layout provides the panel color.
+ */
+val LocalShellGround = compositionLocalOf<Color?> { null }
+
+/**
+ * Shell's palette as a full Material 3 dark scheme, applied to the whole app (turtle/HOOKS.md #29) so
+ * upstream's screens, menus and dialogs share our look. On desktop, `surfaceContainer` is the black
+ * frame (upstream uses it for the title bar, the gaps between panels and menus) and `surface` the panel.
+ */
+fun shellMaterialScheme(colors: ShellColors, desktop: Boolean): ColorScheme {
+    val back = if (desktop) colors.frame else colors.ground
+    return darkColorScheme(
+        primary = colors.accent,
+        onPrimary = colors.onAccent,
+        primaryContainer = colors.accentContainer,
+        onPrimaryContainer = colors.accent,
+        inversePrimary = colors.accent,
+        secondary = colors.ink2,
+        onSecondary = colors.ground,
+        secondaryContainer = colors.surface3,
+        onSecondaryContainer = colors.ink,
+        tertiary = colors.accent,
+        onTertiary = colors.onAccent,
+        tertiaryContainer = colors.surface3,
+        onTertiaryContainer = colors.ink,
+        background = back,
+        onBackground = colors.ink,
+        surface = if (desktop) colors.panel else colors.ground,
+        onSurface = colors.ink,
+        surfaceVariant = colors.surface2,
+        onSurfaceVariant = colors.ink2,
+        surfaceTint = Color.Transparent,
+        inverseSurface = colors.ink,
+        inverseOnSurface = colors.ground,
+        error = colors.danger,
+        onError = colors.ground,
+        errorContainer = Color(0xFF3A1A17),
+        onErrorContainer = Color(0xFFFFB4A8),
+        outline = colors.hairline,
+        outlineVariant = colors.hairlineSoft,
+        scrim = Color.Black,
+        surfaceBright = colors.surface3,
+        surfaceDim = back,
+        surfaceContainerLowest = back,
+        surfaceContainerLow = colors.surface1,
+        surfaceContainer = if (desktop) colors.frame else colors.surface2,
+        surfaceContainerHigh = if (desktop) colors.surface2 else colors.surface3,
+        surfaceContainerHighest = colors.surface3,
+    )
 }

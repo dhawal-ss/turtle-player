@@ -11,6 +11,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -89,6 +90,7 @@ import app.turtleplayer.ui.generated.resources.shell_lyrics
 import app.turtleplayer.ui.generated.resources.shell_more
 import app.turtleplayer.ui.generated.resources.shell_new
 import app.turtleplayer.ui.generated.resources.shell_next
+import app.turtleplayer.ui.generated.resources.shell_now_playing_view
 import app.turtleplayer.ui.generated.resources.shell_pause
 import app.turtleplayer.ui.generated.resources.shell_play
 import app.turtleplayer.ui.generated.resources.shell_playing_from
@@ -123,8 +125,8 @@ import kotlin.math.roundToInt
 
 /** Ground tinted with a share of the artwork's color: every song feels different, chrome stays calm. */
 @Composable
-private fun artworkTint(url: String?, amount: Float): Color {
-    val ground = Shell.colors.ground
+internal fun artworkTint(url: String?, amount: Float, base: Color = Shell.colors.ground): Color {
+    val ground = base
     val seed = rememberArtworkSeedColor(url)
     val target = if (seed == null) Shell.colors.surface2 else lerp(ground, seed, amount)
     val tint by animateColorAsState(target, tween(ShellMotion.TINT_MS, easing = ShellMotion.Emphasized))
@@ -133,7 +135,7 @@ private fun artworkTint(url: String?, amount: Float): Color {
 
 /** Playback position that keeps moving smoothly between controller updates while playing. */
 @Composable
-private fun rememberPositionMs(controller: PlaybackController, playing: Boolean, reported: Long): Long {
+internal fun rememberPositionMs(controller: PlaybackController, playing: Boolean, reported: Long): Long {
     var position by remember { mutableLongStateOf(reported) }
     LaunchedEffect(reported) { position = reported }
     LaunchedEffect(playing) {
@@ -145,13 +147,13 @@ private fun rememberPositionMs(controller: PlaybackController, playing: Boolean,
     return position
 }
 
-private fun formatTime(ms: Long): String {
+internal fun formatTime(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(0)
     return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
 }
 
 @Composable
-private fun GlyphButton(glyph: ImageVector, label: String, onClick: () -> Unit, tint: Color, size: Dp = 44.dp, iconSize: Dp = 22.dp, dot: Boolean = false) {
+internal fun GlyphButton(glyph: ImageVector, label: String, onClick: () -> Unit, tint: Color, size: Dp = 44.dp, iconSize: Dp = 22.dp, dot: Boolean = false) {
     Column(Modifier.size(size).shellPressable(onClick, label = label), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Glyph(glyph, tint, iconSize)
         if (dot) Box(Modifier.padding(top = 3.dp).size(4.dp).clip(CircleShape).background(tint))
@@ -234,7 +236,7 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
 
 /** Spotify's "+" that becomes a lime check, with a spring pop. */
 @Composable
-private fun LikeButton(song: SongItem, liked: Boolean, size: Dp, onToggled: (Boolean) -> Unit = {}) {
+internal fun LikeButton(song: SongItem, liked: Boolean, size: Dp, onToggled: (Boolean) -> Unit = {}) {
     val c = Shell.colors
     var pulse by remember { mutableStateOf(0) }
     val scale = remember { Animatable(1f) }
@@ -304,7 +306,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                 modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
             ) { s ->
                 val artScale by animateFloatAsState(if (state.isPlaying) 1f else 0.92f, ShellMotion.emphasized())
-                ShellArt(s.displayThumbnailUrl, Modifier.fillMaxWidth().aspectRatio(1f).scale(artScale), shape = RoundedCornerShape(8.dp))
+                ShellArt(s.displayThumbnailUrl, Modifier.fillMaxWidth().aspectRatio(1f).scale(artScale), shape = RoundedCornerShape(8.dp), sizePx = 720)
             }
             Spacer(Modifier.weight(0.6f))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -351,13 +353,13 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
 
 /** The Discovery dial: five stops from familiar to all new, snapping with a spring. */
 @Composable
-private fun SteerCard(tint: Color) {
+internal fun SteerCard(tint: Color, modifier: Modifier = Modifier) {
     val c = Shell.colors
     val scope = rememberCoroutineScope()
     var stop by rememberSaveable { mutableStateOf(1) }
     val labels = listOf(Res.string.shell_dial_0, Res.string.shell_dial_1, Res.string.shell_dial_2, Res.string.shell_dial_3, Res.string.shell_dial_4)
     val fill by animateFloatAsState((stop + 1) / 5f, ShellMotion.spring())
-    Column(Modifier.fillMaxWidth().padding(top = 8.dp).clip(ShellShapes.Card).background(lerp(tint, Color.White, 0.06f)).padding(14.dp)) {
+    Column(modifier.fillMaxWidth().padding(top = 8.dp).clip(ShellShapes.Card).background(lerp(tint, Color.White, 0.06f)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(Res.string.shell_steer_title), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f))
             AnimatedContent(stop, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }) { s -> IndexLabel(stringResource(labels[s]), color = c.accent) }
@@ -368,7 +370,7 @@ private fun SteerCard(tint: Color) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 repeat(5) { i ->
                     Box(
-                        Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(9.dp)).background(Color.Transparent)
+                        Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(9.dp)).border(1.dp, c.ink.copy(alpha = 0.18f), RoundedCornerShape(9.dp))
                             .shellPressable({ stop = i; scope.launch { TurtleBridge.setDiscoveryDial(i / 4.0) } }, label = stringResource(labels[i])),
                     )
                 }
@@ -395,7 +397,11 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     val song = state.currentSong ?: slot.restoredSong
     val position = rememberPositionMs(controller, state.isPlaying, state.positionMs)
     var volume by remember { mutableFloatStateOf(slot.volume) }
-    Row(Modifier.fillMaxWidth().height(88.dp).background(c.ground).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Queue and lyrics open on the right, where the Now Playing view lives: one replaces the other, as in Spotify.
+    val openQueue = { ShellDesktop.nowPlayingOpen = false; slot.onToggleQueue() }
+    val openLyrics = { ShellDesktop.nowPlayingOpen = false; slot.onToggleLyrics() }
+    SideEffect { ShellDesktop.openQueue = openQueue; ShellDesktop.restoredSong = slot.restoredSong }
+    Row(Modifier.fillMaxWidth().height(80.dp).background(c.frame).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (song != null) {
                 ShellArt(song.displayThumbnailUrl, Modifier.size(56.dp).shellPressable(slot.onExpand), shape = RoundedCornerShape(4.dp))
@@ -425,8 +431,10 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
             }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            GlyphButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), slot.onToggleLyrics, c.ink2, size = 36.dp, iconSize = 18.dp)
-            GlyphButton(Glyphs.Queue, stringResource(Res.string.shell_queue), slot.onToggleQueue, c.ink2, size = 36.dp, iconSize = 18.dp)
+            val npv = ShellDesktop.nowPlayingOpen
+            GlyphButton(Glyphs.NowPlayingView, stringResource(Res.string.shell_now_playing_view), { ShellDesktop.nowPlayingOpen = !npv }, if (npv) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = npv)
+            GlyphButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), openLyrics, c.ink2, size = 36.dp, iconSize = 18.dp)
+            GlyphButton(Glyphs.Queue, stringResource(Res.string.shell_queue), openQueue, c.ink2, size = 36.dp, iconSize = 18.dp)
             GlyphButton(Glyphs.Devices, stringResource(Res.string.shell_devices), slot.onToggleDevices, c.ink2, size = 36.dp, iconSize = 18.dp)
             Glyph(Glyphs.Volume, c.ink2, 18.dp, contentDescription = stringResource(Res.string.shell_volume))
             Spacer(Modifier.width(6.dp))

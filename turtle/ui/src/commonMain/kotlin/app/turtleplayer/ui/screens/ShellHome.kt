@@ -2,6 +2,7 @@ package app.turtleplayer.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,7 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +46,10 @@ import app.turtleplayer.ui.components.InfinityCube
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.IndexLabel
+import app.turtleplayer.ui.components.HoverPlayButton
 import app.turtleplayer.ui.components.MixCard
+import app.turtleplayer.ui.components.cardHover
+import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.PlayPauseButton
 import app.turtleplayer.ui.components.SectionHeader
 import app.turtleplayer.ui.components.ShellArt
@@ -60,6 +67,9 @@ import app.turtleplayer.ui.generated.resources.shell_infinity_title
 import app.turtleplayer.ui.generated.resources.shell_made_for_you
 import app.turtleplayer.ui.generated.resources.shell_pause_infinity
 import app.turtleplayer.ui.generated.resources.shell_play_infinity
+import app.turtleplayer.ui.theme.LocalShellGround
+import app.turtleplayer.ui.theme.ShellMotion
+import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
@@ -107,7 +117,26 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         }
     }
 
-    BoxWithConstraints(slot.modifier.fillMaxSize().background(c.ground)) {
+    val ground = LocalShellGround.current ?: c.ground
+    val desktop = ShellPlatform.desktop
+    // Spotify's header glow: takes the color of the shortcut under the pointer, calm lime otherwise.
+    var glowArt by remember { mutableStateOf<String?>(null) }
+    var glowInfinity by remember { mutableStateOf(false) }
+    val glowSeed = artworkTint(glowArt, 0.38f, base = ground)
+    val glow by androidx.compose.animation.animateColorAsState(
+        if (glowInfinity || glowArt == null) androidx.compose.ui.graphics.lerp(ground, c.accent, 0.10f) else glowSeed,
+        androidx.compose.animation.core.tween(ShellMotion.TINT_MS, easing = ShellMotion.Emphasized),
+    )
+
+    BoxWithConstraints(slot.modifier.fillMaxSize().background(ground)) {
+        if (desktop) {
+            val scrolled = slot.listState.firstVisibleItemIndex > 0
+            Box(
+                Modifier.fillMaxWidth().height(300.dp)
+                    .graphicsLayer { translationY = if (scrolled) -size.height else -slot.listState.firstVisibleItemScrollOffset.toFloat() }
+                    .background(Brush.verticalGradient(listOf(glow, ground))),
+            )
+        }
         // Desktop passes no cache (upstream builds one inside HomeContent), so keep our own. Not wrapped in
         // remember: the cache memoizes upstream's part, and our shelves are Compose state read in build().
         val cache = slot.shelfCache ?: localCache
@@ -123,7 +152,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         LazyColumn(
             state = slot.listState,
             contentPadding = PaddingValues(top = slot.contentPadding.calculateTopPadding() + 12.dp, bottom = slot.contentPadding.calculateBottomPadding() + 24.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().padding(horizontal = if (desktop) 8.dp else 0.dp),
         ) {
             item(key = "chips") {
                 Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -147,6 +176,8 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                                         playing = infinityPlaying,
                                         onClick = ::playInfinity,
                                         modifier = Modifier.weight(1f),
+                                        onPlay = if (infinityPlaying) null else ::playInfinity,
+                                        onHover = { if (it) { glowInfinity = true; glowArt = null } },
                                     )
                                 } else {
                                     ShortcutTile(
@@ -155,6 +186,8 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                                         playing = state.isPlaying && state.currentSong?.id == item.id,
                                         onClick = { slot.onItemClick(item) },
                                         modifier = Modifier.weight(1f),
+                                        onPlay = (item as? SongItem)?.let { s -> { playback.play(s, shortcuts.filterIsInstance<SongItem>()) } },
+                                        onHover = { if (it) { glowInfinity = false; glowArt = item.displayThumbnailUrl } },
                                     )
                                 }
                             }
@@ -167,7 +200,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             item(key = "infinity") {
                 val artUrls = (ours.flatMap { it.items } + slot.uiState.quickPicks).map { it.displayThumbnailUrl }.distinct().take(9)
                 Row(
-                    Modifier.padding(16.dp, 20.dp, 16.dp, 0.dp).fillMaxWidth().clip(ShellShapes.Card).background(c.surface1).padding(14.dp),
+                    Modifier.padding(16.dp, 20.dp, 16.dp, 0.dp).fillMaxWidth().clip(ShellShapes.Card).background(if (desktop) c.surface2 else c.surface1).padding(if (desktop) 20.dp else 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
@@ -190,7 +223,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                     Spacer(Modifier.height(24.dp))
                     SectionHeader(stringResource(Res.string.shell_made_for_you))
                     Spacer(Modifier.height(12.dp))
-                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    LazyRow(contentPadding = PaddingValues(horizontal = if (desktop) 6.dp else 16.dp), horizontalArrangement = Arrangement.spacedBy(if (desktop) 2.dp else 14.dp)) {
                         items(ours, key = { it.key }) { shelf ->
                             val index = ours.indexOf(shelf)
                             val songs = shelf.items.filterIsInstance<SongItem>()
@@ -228,18 +261,23 @@ private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean) {
     Spacer(Modifier.height(24.dp))
     SectionHeader(shelf.title)
     Spacer(Modifier.height(12.dp))
-    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    val desktop = ShellPlatform.desktop
+    LazyRow(contentPadding = PaddingValues(horizontal = if (desktop) 6.dp else 16.dp), horizontalArrangement = Arrangement.spacedBy(if (desktop) 2.dp else 14.dp)) {
         items(shelf.items, key = { it.id }) { item ->
             val round = item is ArtistItem
+            val (hover, hovered) = rememberHover()
             Column(
-                Modifier.width(if (wide) 168.dp else 136.dp)
+                Modifier.hoverable(hover).cardHover(hovered).width(if (wide) 168.dp else 136.dp)
                     .combinedClickable(
                         onClick = { if (item is SongItem) playback.play(item, songs) else slot.onItemClick(item) },
                         onLongClick = slot.onItemLongClick?.let { { it(item) } },
                     ),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                ShellArt(item.displayThumbnailUrl, Modifier.size(if (wide) 168.dp else 136.dp), shape = if (round) CircleShape else ShellShapes.Art)
+                Box {
+                    ShellArt(item.displayThumbnailUrl, Modifier.size(if (wide) 168.dp else 136.dp), shape = if (round) CircleShape else ShellShapes.Art)
+                    if (item is SongItem) HoverPlayButton(hovered, 44.dp, { playback.play(item, songs) }, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+                }
                 Text(item.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 subtitleOf(item)?.let { Text(it, style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis) }
             }

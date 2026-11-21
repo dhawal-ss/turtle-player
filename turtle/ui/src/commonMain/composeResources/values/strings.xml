@@ -71,4 +71,17 @@
     <string name="shell_dial_4">ALL NEW</string>
     <string name="shell_up_next">Up next</string>
     <string name="shell_seek">Seek</string>
+    <string name="shell_your_library">Your Library</string>
+    <string name="shell_collapse_library">Collapse Your Library</string>
+    <string name="shell_expand_library">Expand Your Library</string>
+    <string name="shell_open_library">Open Your Library</string>
+    <string name="shell_liked_songs">Liked Songs</string>
+    <string name="shell_infinity_meta">Mix · never ends</string>
+    <string name="shell_meta_pair">%1$s · %2$s</string>
+    <string name="shell_library_empty">Save playlists, artists and albums and they’ll show up here.</string>
+    <string name="shell_now_playing_view">Now playing view</string>
+    <string name="shell_hide_now_playing">Hide Now playing view</string>
+    <string name="shell_next_in_queue">Next in queue</string>
+    <string name="shell_open_queue">Open queue</string>
+    <string name="shell_queue_end">Nothing queued. Autoplay picks up from here.</string>
 </resources>

@@ -1,5 +1,6 @@
 package app.turtleplayer.ui
 
+import androidx.compose.material3.ColorScheme
 import app.turtleplayer.bridge.turtleModule
 import app.turtleplayer.ui.screens.ShellDesktopPlayerBar
 import app.turtleplayer.ui.screens.ShellHome
@@ -7,12 +8,18 @@ import app.turtleplayer.ui.screens.ShellMiniPlayer
 import app.turtleplayer.ui.screens.ShellNavigation
 import app.turtleplayer.ui.screens.ShellNowPlaying
 import app.turtleplayer.ui.screens.ShellSearch
+import app.turtleplayer.ui.theme.ShellColors
+import app.turtleplayer.ui.theme.ShellPlatform
+import app.turtleplayer.ui.theme.ShellThemes
+import app.turtleplayer.ui.theme.shellMaterialScheme
 import com.metrolist.shared.turtle.TurtleUiSlots
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
-/** Switches upstream's screens to Shell, the Turtle Player design (see turtle/HOOKS.md #22-#23). */
+/** Switches upstream's screens to Shell, the Turtle Player design (see turtle/HOOKS.md). */
 object TurtleUi {
+    private var cachedScheme: Triple<ShellColors, Boolean, ColorScheme>? = null
+
     fun install() {
         TurtleUiSlots.home = { ShellHome(it) }
         TurtleUiSlots.search = { ShellSearch(it) }
@@ -20,6 +27,15 @@ object TurtleUi {
         TurtleUiSlots.player = { ShellNowPlaying(it) }
         TurtleUiSlots.navigation = { ShellNavigation(it) }
         TurtleUiSlots.desktopPlayerBar = { ShellDesktopPlayerBar(it) }
+        TurtleUiSlots.colorScheme = { dark -> if (dark) appScheme() else null }
+    }
+
+    /** Shell's scheme for the whole app; reading [ShellThemes.active] recomposes the app when the theme changes. */
+    private fun appScheme(): ColorScheme {
+        val colors = ShellThemes.active
+        val desktop = ShellPlatform.desktop
+        cachedScheme?.let { (c, d, scheme) -> if (c == colors && d == desktop) return scheme }
+        return shellMaterialScheme(colors, desktop).also { cachedScheme = Triple(colors, desktop, it) }
     }
 }
 
