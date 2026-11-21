@@ -21,4 +21,8 @@
     <string name="shell_np_devices_searching">Looking for speakers and TVs…</string>
     <string name="shell_np_devices_none">Make sure they are on the same Wi-Fi.</string>
     <string name="shell_np_close">Close</string>
+    <string name="shell_np_never_song">Never play this song</string>
+    <string name="shell_np_never_artist">Never play %1$s</string>
+    <string name="shell_np_never_done">Blocked. Undo it in Settings, Content.</string>
+    <string name="shell_np_queue_left">%1$d SONGS · %2$s</string>
 </resources>

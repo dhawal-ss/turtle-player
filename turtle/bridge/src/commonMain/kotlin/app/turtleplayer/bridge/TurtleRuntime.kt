@@ -38,6 +38,7 @@ class TurtleRuntime(
     private val search: TurtleSearch,
     private val home: TurtleHomeShelves,
     private val store: SqlitePlayEventStore,
+    val infinity: InfinityMix,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -49,9 +50,12 @@ class TurtleRuntime(
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
         scope.launch {
             restoreDiscoveryDial()
+            infinity.restore()
             runCatching { taste.refresh() }
         }
         taste.observe(scope)
+        // Finishes and quick skips of Infinity songs tune their genre without a tap.
+        scope.launch { store.newEvents.collect { runCatching { infinity.onPlayEvent(it) } } }
         libraryContentSearchOverride = ::searchLibrary
         searchSummaryOverride = ::rerankSearch
         homeShelvesOverride = home::mergeInto
@@ -129,7 +133,10 @@ class TurtleRuntime(
             previous = liked
             if (before == null) return@collect
             val current = observer.currentSong()?.id ?: return@collect
-            if (current in liked && current !in before) observer.feedback(FeedbackKind.LIKED)
+            if (current in liked && current !in before) {
+                observer.feedback(FeedbackKind.LIKED)
+                observer.currentSong()?.let { infinity.feedback(it, liked = true) }
+            }
             if (current !in liked && current in before) observer.feedback(FeedbackKind.UNLIKED)
         }
     }
@@ -138,6 +145,7 @@ class TurtleRuntime(
     suspend fun lessLikeThis(song: SongItem) {
         val meta = song.toTrackMeta()
         taste.lessLikeThis(LessLikeThis.Track(meta.key, meta.artistKey))
+        infinity.feedback(song, liked = false)
         if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
     }
 
@@ -161,7 +169,7 @@ class TurtleRuntime(
      */
     suspend fun infinityMix(): List<SongItem> =
         try {
-            taste.startAutoplay().mapNotNull { item -> item.track.youtubeId?.let { cache.get(it) }?.also { observer.tag(it.id, item.surfaceDetail) } }
+            infinity.start()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -62,6 +62,14 @@ object TurtleUiSlots {
     /** True hides upstream's "support the Metrolist developers" launch prompt. */
     var hideSupportPrompt: Boolean = false
 
+    /**
+     * True scraps upstream's Listen Together (product owner, 20 Nov 2026): `Settings.listenTogetherEnabled`
+     * reads false, which stops the manager connecting, auto-joining or notifying and hides upstream's own
+     * gated entry points (tabs, menus, deep links); the Integrations page and the large-screen rail drop it
+     * too. Snapshot state, so a manager already running sees the change and disconnects.
+     */
+    var hideListenTogether by mutableStateOf(false)
+
     /** Shell's dialog card for every upstream `AlertDialog` (title, text, actions are upstream's); null keeps upstream's. */
     var dialog: (@Composable (DialogSlot) -> Unit)? = null
 

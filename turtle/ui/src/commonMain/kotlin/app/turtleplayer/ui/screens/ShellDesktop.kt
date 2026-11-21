@@ -74,6 +74,10 @@ import app.turtleplayer.ui.components.ShellChip
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_inf_tune
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
+import app.turtleplayer.ui.generated.resources.shell_inf_resteered
 import app.turtleplayer.ui.generated.resources.shell_albums
 import app.turtleplayer.ui.generated.resources.shell_artists
 import app.turtleplayer.ui.generated.resources.shell_collapse_library
@@ -315,7 +319,8 @@ private fun LibraryCard(
             })
             add(
                 LibraryRow("infinity", infinityTitle, infinityMeta, null, false, Glyphs.Infinity, c.accent, c.surface2, playing = activeQueue == infinityTitle && state.isPlaying) {
-                    if (activeQueue == infinityTitle) controller.togglePlayPause() else ShellActions.playInfinity(controller, infinityTitle)
+                    // Like Spotify's sidebar, a click opens it: the Infinity sheet (genres, moods, steer, Start).
+                    ShellInfinity.sheetOpen = true
                 },
             )
         }
@@ -537,13 +542,21 @@ private fun NowPlayingContent(song: SongItem, state: com.metrolist.shared.ui.pla
                     Column {
                         Text(s.title, style = Shell.type.body.copy(fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold), color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(s.artists.joinToString(", ") { it.name }, style = Shell.type.body, color = c.ink.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        InfinityWhyLabel(s.id, Modifier.padding(top = 6.dp))
                     }
                 }
             }
-            GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
-                ShellActions.lessLikeThis(controller, song)
-            }, c.ink2, size = 36.dp, iconSize = 20.dp)
-            LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+            com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras?.addToPlaylist?.let { add ->
+                AddToPlaylistButton(song, add, c.ink2, size = 36.dp, iconSize = 20.dp)
+            }
+            if (ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)) {
+                InfinityThumbs(song, controller, c.ink2, size = 36.dp, iconSize = 20.dp)
+            } else {
+                GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
+                    ShellActions.lessLikeThis(controller, song)
+                }, c.ink2, size = 36.dp, iconSize = 20.dp)
+                LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+            }
         }
         SteerCard(tint, captions = false)
         UpNextCard(state.queue, state.currentQueueIndex) { controller.playQueueIndex(it) }

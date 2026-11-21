@@ -193,7 +193,7 @@ fun screenForNavigationId(id: String): Screen? =
         NavigationId.LIBRARY -> Screen.Library
         NavigationId.HISTORY -> Screen.History
         NavigationId.STATISTICS -> Screen.Statistics
-        NavigationId.LISTEN_TOGETHER -> Screen.ListenTogether
+        NavigationId.LISTEN_TOGETHER -> Screen.ListenTogether.takeUnless { com.metrolist.shared.turtle.TurtleUiSlots.hideListenTogether } // Turtle: HOOKS.md #43
         else -> null
     }
 

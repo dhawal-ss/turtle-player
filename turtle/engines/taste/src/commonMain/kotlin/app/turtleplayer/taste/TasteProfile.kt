@@ -20,6 +20,11 @@ data class AffinityWeights(
     val liked: Double = 2.0,
     val replayed: Double = 1.5,
     val addedToPlaylist: Double = 1.5,
+    /**
+     * A new song that held the listener 60 s on its first play but was not finished: a new find, worth
+     * nearly a finish instead of a [lateSkip] (a finish already scores [finished]).
+     */
+    val newFind: Double = 0.7,
     /** Skipped after the first 30 s: mild disinterest. */
     val lateSkip: Double = -0.3,
     /** Skipped within 30 s: the strongest negative implicit signal. */
@@ -51,6 +56,11 @@ data class AffinityWeights(
     fun recentDecay(ageMs: Long): Double = decay(ageMs, recentHalfLifeDays)
 
     private fun decay(ageMs: Long, halfLife: Double) = exp(-ln(2.0) * ageMs.coerceAtLeast(0) / (halfLife * DAY_MS))
+
+    companion object {
+        /** A minute in: past the intro, the listener chose to stay. */
+        const val ENGAGED_MS = 60_000L
+    }
 }
 
 /** Plays and quick skips, with a smoothed rate so three plays do not make a 100% skip rate. */
@@ -77,6 +87,8 @@ data class TrackStats(
      * "finished plays lately": one finish today is 1.0, one finish 28 days ago is 0.25.
      */
     val recentFinishes: Double = 0.0,
+    /** When the listener found this song: its first play held them [AffinityWeights.ENGAGED_MS]. Null if never. */
+    val foundMs: Long? = null,
 ) {
     val key: TrackKey get() = meta.key
     val skips: SkipStats get() = SkipStats(plays, quickSkips)
@@ -202,6 +214,8 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         var replays = 0
         var lessLikeThis = false
         var first = Long.MAX_VALUE
+        // The earliest play, whatever order events arrive in: decides whether the song was a new find.
+        var firstEvent: PlayEvent? = null
         var last = Long.MIN_VALUE
     }
 
@@ -227,6 +241,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
     fun add(e: PlayEvent) {
         val s = weights.signal(e)
         val t = tracks.getOrPut(e.trackKey) { TrackAcc(e.track) }
+        if (t.firstEvent.let { it == null || e.startedAtMs < it.startedAtMs }) t.firstEvent = e
         if (e.startedAtMs >= t.last) t.meta = e.track // keep the freshest metadata
         t.affinity.add(s, e.startedAtMs, weights)
         t.plays++
@@ -275,10 +290,17 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
     fun snapshot(nowMs: Long, representation: TrackRepresentation?, clusters: List<TasteCluster> = emptyList()): TasteProfile {
         val trackStats = LinkedHashMap<TrackKey, TrackStats>(tracks.size * 2)
         for ((k, t) in tracks) {
+            // A first play that held a minute is a new find: it scores nearly a finish (instead of a late
+            // skip) and seeds "More like" picks.
+            val fe = t.firstEvent
+            val found = fe != null && !fe.isQuickSkip && !fe.lessLikeThis && fe.msPlayed >= AffinityWeights.ENGAGED_MS
+            val bonus = if (found && !fe.isFinished) {
+                (weights.newFind - weights.signal(fe.copy(liked = false, replayed = false, addedToPlaylist = false))) * weights.decay(nowMs - fe.startedAtMs)
+            } else 0.0
             trackStats[k] = TrackStats(
-                meta = t.meta, affinity = t.affinity.at(nowMs, weights), plays = t.plays, finishes = t.finishes,
+                meta = t.meta, affinity = t.affinity.at(nowMs, weights) + bonus, plays = t.plays, finishes = t.finishes,
                 quickSkips = t.quickSkips, likes = t.likes, replays = t.replays, lessLikeThis = t.lessLikeThis,
-                firstPlayedMs = t.first, lastPlayedMs = t.last, recentFinishes = t.recentFinishes.at(nowMs, weights),
+                firstPlayedMs = t.first, lastPlayedMs = t.last, recentFinishes = t.recentFinishes.at(nowMs, weights), foundMs = if (found) fe.startedAtMs else null,
             )
         }
         val artistStats = LinkedHashMap<ArtistKey, ArtistStats>(artists.size * 2)

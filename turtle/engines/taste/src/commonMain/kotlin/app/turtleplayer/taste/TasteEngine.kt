@@ -633,6 +633,11 @@ class TasteEngine(
     private fun moreLikePickLocked(): MoreLikePick? {
         val recentCutoff = clock.nowMs() - 30 * DAY_MS
         val eligible = profile.tracks.values.filter { it.lastPlayedMs >= recentCutoff && usable(it) }
+        // Order: replayed, then a song found this week (its first play held a minute), then liked.
+        val foundCutoff = clock.nowMs() - 7 * DAY_MS
+        val found = eligible.filter { it.replays == 0 && it.plays <= 3 && (it.foundMs ?: Long.MIN_VALUE) >= foundCutoff && it.affinity > 0 }
+            .maxWithOrNull(compareBy<TrackStats> { it.foundMs ?: 0L }.thenByDescending { it.key.value })
+        if (eligible.none { it.replays > 0 } && found != null) return MoreLikePick(found, Reason.BecauseYouListened(found.key), representation.vectorFor(found.meta))
         val loved = eligible.filter { it.replays > 0 || it.likes > 0 }
             .maxWithOrNull(compareBy<TrackStats> { if (it.replays > 0) 1 else 0 }.thenBy { it.affinity }.thenByDescending { it.key.value })
         val pick = loved ?: eligible.filter { it.recentFinishes >= recentFinishFloor() }

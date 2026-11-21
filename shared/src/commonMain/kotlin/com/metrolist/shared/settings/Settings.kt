@@ -660,7 +660,8 @@ class Settings(
     var pendingScrobblesJson by preference("[]")
     var corruptPendingScrobblesJson by preference("")
     var systemInDarkTheme by preference(false)
-    var listenTogetherEnabled by preference(ListenTogetherEnabledKey, true)
+    var listenTogetherEnabled: Boolean get() = !com.metrolist.shared.turtle.TurtleUiSlots.hideListenTogether && listenTogetherEnabledStored; set(value) { listenTogetherEnabledStored = value } // Turtle: HOOKS.md #41
+    private var listenTogetherEnabledStored by preference(ListenTogetherEnabledKey, true) // Turtle: HOOKS.md #41
     var listenTogetherDesktopSession by preference("")
     var listenTogetherUsername by preference("")
     var listenTogetherServerUrl by preference(DEFAULT_LISTEN_TOGETHER_SERVER_URL)

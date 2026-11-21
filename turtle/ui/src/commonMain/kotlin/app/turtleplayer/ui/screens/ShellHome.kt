@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,6 +83,11 @@ import app.turtleplayer.ui.components.cardHover
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_inf_tune
+import app.turtleplayer.ui.generated.resources.shell_theme_open
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
+import app.turtleplayer.ui.generated.resources.shell_inf_resteered
 import app.turtleplayer.ui.generated.resources.shell_and_more
 import app.turtleplayer.ui.generated.resources.shell_filter_all
 import app.turtleplayer.ui.generated.resources.shell_filter_mixes
@@ -191,11 +197,19 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
 
     fun playInfinity() {
         if (ShellQueue.activeTitle(playback.state.value) == infinityTitle) return playback.togglePlayPause()
-        scope.launch {
-            val songs = TurtleBridge.infinityMix().ifEmpty { slot.uiState.quickPicks.shuffled() }
-            if (songs.isNotEmpty()) ShellQueue.play(playback, songs, infinityTitle) else notice = emptyMessage
+        // First time: pick genres and moods; the sheet's Start plays.
+        if (!TurtleBridge.infinity.value.configured) {
+            ShellInfinity.sheetOpen = true
+            return
         }
+        ShellInfinity.play(playback, infinityTitle, onEmpty = { slot.uiState.quickPicks.shuffled() }, onNothing = { notice = emptyMessage })
     }
+
+    fun openInfinity() {
+        ShellInfinity.sheetOpen = true
+    }
+    InfinitySheetHost()
+    if (ShellAppearance.open) ShellThemeSheet()
 
     val ground = LocalShellGround.current ?: c.ground
     val desktop = ShellPlatform.desktop
@@ -243,10 +257,12 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             modifier = Modifier.fillMaxSize().padding(horizontal = if (desktop) 8.dp else 0.dp),
         ) {
             item(key = "chips") {
-                Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     ShellChip(stringResource(Res.string.shell_filter_all), current == HomeFilter.ALL.ordinal, { filter = HomeFilter.ALL.ordinal })
                     ShellChip(stringResource(Res.string.shell_filter_music), current == HomeFilter.MUSIC.ordinal, { filter = HomeFilter.MUSIC.ordinal })
                     ShellChip(stringResource(Res.string.shell_filter_mixes), current == HomeFilter.MIXES.ordinal, { filter = HomeFilter.MIXES.ordinal })
+                    Spacer(Modifier.weight(1f))
+                    GlyphButton(Glyphs.Palette, stringResource(Res.string.shell_theme_open), { ShellAppearance.open = true }, c.ink2, size = 36.dp, iconSize = 20.dp)
                 }
                 Spacer(Modifier.height(14.dp))
             }
@@ -272,7 +288,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                                             title = infinityTitle,
                                             art = { m -> Box(m.background(c.accent), contentAlignment = Alignment.Center) { Glyph(Glyphs.Infinity, c.onAccent, 26.dp) } },
                                             playing = playing,
-                                            onClick = ::playInfinity,
+                                            onClick = ::openInfinity,
                                             modifier = Modifier.weight(1f),
                                             onPlay = if (playing) null else ::playInfinity,
                                             onHover = { if (it) { glowInfinity = true; glowArt = null } },
@@ -297,7 +313,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 }
 
                 item(key = "infinity") {
-                    InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 2))
+                    InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 2), onOpen = ::openInfinity)
                 }
             }
 
@@ -374,13 +390,17 @@ private fun LoadMoreNearEnd(slot: HomeSlot, enabled: Boolean) {
 }
 
 @Composable
-private fun InfinityCard(artUrls: List<String?>, playing: Boolean, wide: Boolean, onPlay: () -> Unit, modifier: Modifier = Modifier) {
+private fun InfinityCard(artUrls: List<String?>, playing: Boolean, wide: Boolean, onPlay: () -> Unit, modifier: Modifier = Modifier, onOpen: () -> Unit = onPlay) {
     val c = Shell.colors
     val desktop = ShellPlatform.desktop
+    val genres by TurtleBridge.infinity.collectAsState()
+    val picked = genres.genres.take(4).map { genreName(it) }
     Row(
         modifier.padding(16.dp, 20.dp, 16.dp, 0.dp).fillMaxWidth()
             .clip(if (desktop) RoundedCornerShape(8.dp) else ShellShapes.Card)
             .background(if (desktop) c.surface2 else c.surface1)
+            // The card opens the Infinity sheet (genres, moods, steer); the round button plays.
+            .shellPressable(onOpen, label = stringResource(Res.string.shell_inf_tune))
             .padding(if (desktop) 24.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(if (desktop) 24.dp else 14.dp),
@@ -391,7 +411,11 @@ private fun InfinityCard(artUrls: List<String?>, playing: Boolean, wide: Boolean
         Column(Modifier.weight(1f, fill = !desktop).then(if (desktop) Modifier.widthIn(max = 640.dp) else Modifier)) {
             IndexLabel(stringResource(Res.string.shell_infinity_label))
             Text(stringResource(Res.string.shell_infinity_tagline), style = if (wide) Shell.type.display.copy(fontSize = Shell.type.display.fontSize * 1.5f, lineHeight = Shell.type.display.lineHeight * 1.5f) else Shell.type.headline, color = c.ink)
-            Text(stringResource(Res.string.shell_infinity_subtitle), style = Shell.type.bodySmall, color = c.ink2)
+            Text(
+                if (picked.isEmpty()) stringResource(Res.string.shell_infinity_subtitle) else picked.joinToString(" · ") + if (genres.genres.size > 4) " · +${genres.genres.size - 4}" else "",
+                style = Shell.type.bodySmall, color = if (picked.isEmpty()) c.ink2 else c.accent, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(stringResource(Res.string.shell_inf_tune), style = Shell.type.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = c.ink, modifier = Modifier.padding(top = 6.dp))
         }
         PlayPauseButton(
             playing = playing, onClick = onPlay, size = if (wide) 64.dp else 52.dp,

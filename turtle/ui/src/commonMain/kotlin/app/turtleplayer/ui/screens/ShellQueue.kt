@@ -80,10 +80,12 @@ internal object ShellActions {
 
     /** Starts the Infinity Mix; returns false (via [onEmpty]) when our engine has nothing yet. */
     fun playInfinity(controller: PlaybackController, title: String, onEmpty: () -> Unit = {}) {
-        scope.launch {
-            val songs = app.turtleplayer.bridge.TurtleBridge.infinityMix()
-            if (songs.isNotEmpty()) ShellQueue.play(controller, songs, title) else onEmpty()
+        // First time: let the listener pick genres and moods before anything plays.
+        if (!app.turtleplayer.bridge.TurtleBridge.infinity.value.configured) {
+            ShellInfinity.sheetOpen = true
+            return
         }
+        ShellInfinity.play(controller, title, onNothing = onEmpty)
     }
 
     fun lessLikeThis(controller: PlaybackController, song: SongItem) {

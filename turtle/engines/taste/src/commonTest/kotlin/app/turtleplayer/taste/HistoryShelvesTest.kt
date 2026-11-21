@@ -153,7 +153,10 @@ class HistoryShelvesTest {
         val cutoff = clock.now - 30 * DAY_MS
         val finishes30 = plain.filter { it.startedAtMs >= cutoff && it.isFinished }.groupingBy { it.trackKey }.eachCount()
         val top5 = finishes30.entries.sortedByDescending { it.value }.take(5).map { it.value }
-        assertTrue(finishes30.getValue(reason.track) >= top5.last(), "pick ${finishes30[reason.track]} vs top $top5")
+        // A song found this week (its first play held a minute) comes before the most-finished ones.
+        val stats = engine.profile().track(reason.track)!!
+        val freshFind = (stats.foundMs ?: Long.MIN_VALUE) >= clock.now - 7 * DAY_MS && stats.plays <= 3
+        assertTrue(freshFind || (finishes30[reason.track] ?: 0) >= top5.last(), "pick ${finishes30[reason.track]} vs top $top5")
         assertTrue(shelf.items.none { it.key == reason.track }, "seed excluded")
     }
 

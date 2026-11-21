@@ -22,6 +22,7 @@ object TurtleUi {
     private var cachedScheme: Triple<ShellColors, Boolean, ColorScheme>? = null
 
     fun install() {
+        app.turtleplayer.ui.theme.ShellPalettes.restore()
         TurtleUiSlots.home = { ShellHome(it) }
         TurtleUiSlots.search = { ShellSearch(it) }
         TurtleUiSlots.miniPlayer = { ShellMiniPlayer(it) }
@@ -32,6 +33,7 @@ object TurtleUi {
         TurtleUiSlots.typography = { shellMaterialTypography() }
         TurtleUiSlots.playlistPicker = { app.turtleplayer.ui.screens.ShellPlaylistPicker(it) }
         TurtleUiSlots.hideSupportPrompt = true
+        TurtleUiSlots.hideListenTogether = true // the product owner scrapped Listen Together (20 Nov 2026)
         TurtleUiSlots.dialog = { app.turtleplayer.ui.screens.ShellDialog(it) }
         TurtleUiSlots.artistPage = { app.turtleplayer.ui.screens.ShellArtistPage(it) }
         TurtleUiSlots.playlistPage = { app.turtleplayer.ui.screens.ShellPlaylistPage(it) }

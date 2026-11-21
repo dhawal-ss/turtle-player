@@ -74,6 +74,9 @@ import app.turtleplayer.ui.generated.resources.shell_np_sleep_cancel
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_end_of_song
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_on
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_timer
+import app.turtleplayer.ui.generated.resources.shell_np_never_song
+import app.turtleplayer.ui.generated.resources.shell_np_queue_left
+import app.turtleplayer.ui.generated.resources.shell_np_never_artist
 import app.turtleplayer.ui.generated.resources.shell_np_start_radio
 import app.turtleplayer.ui.generated.resources.shell_np_this_device
 import app.turtleplayer.ui.generated.resources.shell_next_in_queue
@@ -138,7 +141,14 @@ internal fun ShellQueueList(
             item(key = "now-$current") { QueueRow(now, playing = true, isPlaying = state.isPlaying, onClick = controller::togglePlayPause, onRemove = null) }
         }
         val upcoming = if (current >= 0) (current + 1 until queue.size).toList() else queue.indices.toList()
-        item(key = "next-label") { IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.padding(top = 16.dp, bottom = 8.dp)) }
+        item(key = "next-label") {
+            // Spicetify's "queue time": how long what is queued will play.
+            val totalSec = upcoming.sumOf { queue[it].duration ?: 0L }
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.weight(1f))
+                if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, formatQueueLength(totalSec)))
+            }
+        }
         if (upcoming.isEmpty()) {
             item(key = "empty") { Text(stringResource(Res.string.shell_np_queue_empty), style = Shell.type.bodySmall, color = c.ink2) }
         }
@@ -168,6 +178,8 @@ private fun QueueRow(song: SongItem, playing: Boolean, isPlaying: Boolean, onCli
         Column(Modifier.weight(1f)) {
             Text(song.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Infinity Mix songs say why they are queued, so steering is visible in Up next.
+            InfinityWhyLabel(song.id, Modifier.padding(top = 2.dp))
         }
         if (playing && isPlaying) Equalizer(height = 12.dp, modifier = Modifier.padding(horizontal = 12.dp))
         if (onRemove != null) {
@@ -208,6 +220,19 @@ internal fun ShellMoreActions(
     }
     services.share?.let { share -> ActionRow(Glyphs.Share, stringResource(Res.string.shell_np_share)) { onDone(); share(song) } }
     ActionRow(Glyphs.Sleep, stringResource(if (sleepOn) Res.string.shell_np_sleep_on else Res.string.shell_np_sleep_timer), accent = sleepOn) { onShow(PlayerSurface.SLEEP) }
+    // Spicetify's Trash Bin, built in: a hard block that holds everywhere (radio, mixes, search), unlike "less like this".
+    ActionRow(Glyphs.Less, stringResource(Res.string.shell_np_never_song)) {
+        onDone()
+        com.metrolist.shared.state.SongLikeState.dislike(song)
+        ShellActions.lessLikeThis(controller, song)
+    }
+    song.artists.firstOrNull()?.takeIf { !it.id.isNullOrBlank() }?.let { artist ->
+        ActionRow(Glyphs.Close, stringResource(Res.string.shell_np_never_artist, artist.name)) {
+            onDone()
+            com.metrolist.shared.settings.BlockedContent.blockArtist(artist)
+            ShellActions.lessLikeThis(controller, song)
+        }
+    }
 }
 
 @Composable
@@ -358,4 +383,10 @@ internal fun ShellLyricsFor(song: SongItem, services: ShellPlayerServices, live:
         contentPadding = contentPadding,
         compact = compact,
     )
+}
+
+/** "1 h 12 min" or "38 min" for a queue's total length in seconds. */
+internal fun formatQueueLength(seconds: Long): String {
+    val minutes = (seconds + 30) / 60
+    return if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
 }

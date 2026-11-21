@@ -4,13 +4,15 @@ Every line we change in an upstream (Metrolist) file is listed here, with the re
 else we build lives under `turtle/` or in new files. CI (`turtle/scripts/check-hooks.sh`) fails a PR
 that edits an upstream path without also updating this file.
 
-Budget: **under 50 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
-20 Nov 2026 when we chose to replace upstream's UI with Shell, and from 40 the same day when the
-product owner asked that the whole app, player surfaces and dialogs included, use Shell's design;
+Budget: **under 55 hook lines in total**, counting the import lines a hook needs. (Raised from 30 on
+20 Nov 2026 when we chose to replace upstream's UI with Shell, from 40 the same day when the
+product owner asked that the whole app, player surfaces and dialogs included, use Shell's design,
+and from 50 the same day because the product owner scrapped Listen Together (20 Nov 2026), which
+needs four lines (#41 to #43) to switch off without deleting upstream's ~200 files;
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **47** hook lines, plus about 55 lines of behavior patches below.
+Current total: **51** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -50,6 +52,9 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 38 | `shared/ui/screens/SupportPrompt.kt` | 1 | First line: `if (TurtleUiSlots.hideSupportPrompt) return` | Turtle Player doesn't show Metrolist's "support the developers" launch prompt; upstream's credits stay in About | Product designer |
 | 39 | `android/ui/screens/HomeScreen.kt` | 1 | `if (!isTv)` around the floating buttons becomes `if (!isTv && TurtleUiSlots.home == null)` | Shell's Home has no floating buttons (as in Spotify); music recognition stays on a long-press of the Search tab | Product designer |
 | 40 | `shared/ui/components/AlertDialogs.kt` | 1 | First line of `AlertDialog`: `TurtleUiSlots.dialog?.let { return it(DialogSlot(...)) }` | Every upstream dialog (create playlist, duplicates, confirmations, settings prompts) drawn as Shell's dialog card, keeping upstream's title, text and actions | Product designer |
+| 41 | `shared/settings/Settings.kt` | 2 | `listenTogetherEnabled` becomes a getter/setter that reads false while `TurtleUiSlots.hideListenTogether` is set; the stored preference moves to `private var listenTogetherEnabledStored` under the same key | The product owner scrapped Listen Together (20 Nov 2026). Upstream's own off switch already stops the manager connecting, restoring or auto-joining a room, sending, and notifying, and hides its gated entry points (desktop sidebar, Android top-bar button, player and queue menus, Android/mobile/desktop invite deep links, settings search); forcing it off at the source covers them all and a stored `true` from an earlier install. Shell sets the flag in `TurtleUi.install()` | Product designer |
+| 42 | `shared/ui/settings/SharedIntegrationsScreen.kt` | 1 | First line of `SharedIntegrationsScreen`: shadows `host` with `host.copy(listenTogetherManager = null, onOpenListenTogether = null)` while the flag is set | Removes the Listen Together card from Integrations settings on Android, desktop and mobile (upstream shows it even when switched off, leading to its enable toggle) | Product designer |
+| 43 | `shared/ui/navigation/Screen.kt` | 1 | `screenForNavigationId`: `NavigationId.LISTEN_TOGETHER -> Screen.ListenTogether.takeUnless { TurtleUiSlots.hideListenTogether }` | The large-screen Android rail (`visibleSidebarScreens`) ignores upstream's off switch; this drops the tab there and in every other id-to-screen lookup | Product designer |
 
 ## Behavior patches
 
@@ -84,6 +89,6 @@ Every hook fails open: if Koin has no Turtle runtime, our code throws, or rankin
 | App identity | `androidApp/build.gradle.kts:255` `applicationId`, `desktopApp/build.gradle.kts:738` `packageName` | Read from `turtle/branding.properties` (2 lines) |
 | Update channel | `android/update/AppUpdateManager.kt:122`, `desktop/update/DesktopUpdateManager.kt:42` | Point at our releases (2 lines) |
 
-The remaining planned hooks need about 4 more lines, within the budget of 50; still prefer to fold the app identity into one shared `turtle/branding.properties` read (1 line per app is the floor), or raise the budget deliberately. Prefer
+The remaining planned hooks need about 4 more lines, which would reach the budget of 55; prefer to fold the app identity into one shared `turtle/branding.properties` read (1 line per app is the floor), or raise the budget deliberately. Prefer
 consolidating (for example one shared override point that several hooks reuse) over adding new
 call sites.

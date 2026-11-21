@@ -138,6 +138,7 @@ fun SharedIntegrationsScreen(
     host: SharedIntegrationsHost,
     modifier: Modifier = Modifier,
 ) {
+    @Suppress("NAME_SHADOWING") val host = if (com.metrolist.shared.turtle.TurtleUiSlots.hideListenTogether) host.copy(listenTogetherManager = null, onOpenListenTogether = null) else host // Turtle: HOOKS.md #42
     DisposableEffect(host.platform, Settings.shared.enableDiscordIntegration) {
         discordSettingsVisible = Settings.shared.enableDiscordIntegration
         onDispose { discordSettingsVisible = false }

@@ -87,7 +87,8 @@ val turtleModule: Module = module {
     single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get())) }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { InfinityMix(get(), get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -156,6 +157,51 @@ object TurtleBridge {
 
     /** The Infinity Mix's opening queue (empty when our runtime is not available). */
     suspend fun infinityMix(): List<SongItem> = runtime?.infinityMix().orEmpty()
+
+    /** The Infinity Mix's next songs after the ones already [queued] (empty when unavailable). */
+    suspend fun infinityNext(count: Int, queued: Set<String>): List<SongItem> =
+        try {
+            runtime?.infinity?.next(count, queued).orEmpty()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("infinity: could not extend the mix", e)
+            emptyList()
+        }
+
+    /** Forgets the Infinity Mix's tuning and picks (listening history is kept). */
+    suspend fun infinityStartFresh() {
+        runtime?.infinity?.startFresh()
+    }
+
+    /** Saves the genres and moods the Infinity Mix is built from. */
+    suspend fun setInfinityGenres(ids: List<String>) {
+        runtime?.infinity?.setGenres(ids)
+    }
+
+    /** Picks, tuning and the reason behind each mix song, for the Infinity sheet and Now Playing. */
+    val infinity: StateFlow<InfinityState>
+        get() = infinityStateFlow
+
+    /** A saved Shell preference (theme and the like), kept in our database; null when unset. */
+    suspend fun uiPref(key: String): String? {
+        val store = waitForStore() ?: return null
+        return store.pref("ui_$key")
+    }
+
+    suspend fun setUiPref(key: String, value: String) {
+        waitForStore()?.setPref("ui_$key", value)
+    }
+
+    /** Our database, waiting briefly for Koin at startup (the theme is restored before Koin settles). */
+    private suspend fun waitForStore(): SqlitePlayEventStore? = withTimeoutOrNull(STARTUP_WAIT_MS) {
+        var store: SqlitePlayEventStore? = null
+        while (store == null) {
+            store = GlobalContext.getOrNull()?.getOrNull<SqlitePlayEventStore>()
+            if (store == null) delay(KOIN_POLL_MS)
+        }
+        store
+    }
 
     /** "Less like this" on a song (no-op when our runtime is unavailable). */
     suspend fun lessLikeThis(song: SongItem) { runtime?.lessLikeThis(song) }

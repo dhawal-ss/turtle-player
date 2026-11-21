@@ -85,6 +85,12 @@ import app.turtleplayer.ui.components.ShellToast
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_inf_tune
+import app.turtleplayer.ui.generated.resources.shell_inf_up_toast
+import app.turtleplayer.ui.generated.resources.shell_inf_down_toast
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
+import app.turtleplayer.ui.generated.resources.shell_inf_resteered
 import app.turtleplayer.ui.generated.resources.shell_close_player
 import app.turtleplayer.ui.generated.resources.shell_devices
 import app.turtleplayer.ui.generated.resources.shell_dial_0
@@ -263,6 +269,7 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
     val live = rememberLivePosition(controller, state.isPlaying, song.id)
     val duration = durationOf(state.durationMs, song)
     val tint = artworkTint(song.displayThumbnailUrl, 0.45f)
+    app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song.displayThumbnailUrl)
     val drag = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val track = c.ink.copy(alpha = 0.25f)
@@ -299,7 +306,9 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
                     Text(s.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            LikeButton(song, SongLikeState.isLiked(song.id), size = 48.dp, visual = 40.dp)
+            val addToPlaylist = com.metrolist.shared.ui.player.LocalPlayerPlatform.current.rememberPlaylistAdder()
+            AddToPlaylistButton(song, { addToPlaylist(listOf(it)) }, c.ink, size = 44.dp, iconSize = 20.dp)
+            LikeButton(song, SongLikeState.isLiked(song.id), size = 44.dp, visual = 40.dp)
             PlayPauseButton(state.isPlaying, controller::togglePlayPause, 48.dp, Color.Transparent, c.ink, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
         }
     }
@@ -381,11 +390,15 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
     val likedText = stringResource(Res.string.shell_liked_toast)
     val unlikedText = stringResource(Res.string.shell_unliked_toast)
     val lessText = stringResource(Res.string.shell_less_toast)
+    val infUpText = stringResource(Res.string.shell_inf_up_toast)
+    val infDownText = stringResource(Res.string.shell_inf_down_toast)
     LaunchedEffect(toast) { if (toast != null) { delay(2400); toast = null } }
     // Lyrics, queue, more, sleep and devices are Shell's own surfaces: we never hand over to upstream's player.
     var surface by remember { mutableStateOf<PlayerSurface?>(null) }
     val services = rememberPhoneServices(slot)
     val source = (modes.queueTitle ?: ShellQueue.activeTitle(state))?.takeIf { it.isNotBlank() }
+    val infinityOn = ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)
+    SideEffect { services.removeQueueIndex?.let { ShellInfinity.removeAt = it } }
 
     Box(Modifier.fillMaxSize().background(tint)) {
         Column(
@@ -397,7 +410,11 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     // "Playing from" only makes sense with a source; a bare queue says "Now playing".
                     IndexLabel(stringResource(if (source != null) Res.string.shell_playing_from else Res.string.shell_now_playing_label), color = c.ink.copy(alpha = 0.75f))
-                    if (source != null) Text(source, style = Shell.type.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    // Playing the Infinity Mix: tap its name to tune genres, moods and the blend.
+                    if (source != null) Text(
+                        source, style = Shell.type.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                        modifier = if (infinityOn) Modifier.shellPressable({ ShellInfinity.sheetOpen = true }, label = stringResource(Res.string.shell_inf_tune)) else Modifier,
+                    )
                 }
                 GlyphButton(Glyphs.More, stringResource(Res.string.shell_more), { surface = PlayerSurface.MORE }, c.ink)
             }
@@ -422,13 +439,21 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                             s.artists.joinToString(", ") { it.name }, style = Shell.type.body, color = c.ink.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.shellPressable({ s.artists.firstOrNull()?.id?.let(slot.onNavigateToArtist) }),
                         )
+                        if (infinityOn) InfinityWhyLabel(s.id, Modifier.padding(top = 4.dp))
                     }
                 }
-                GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
-                    toast = lessText
-                    ShellActions.lessLikeThis(controller, song)
-                }, c.ink.copy(alpha = 0.85f), iconSize = 24.dp)
-                LikeButton(song, liked, size = 48.dp) { now -> toast = if (now) likedText else unlikedText }
+                // Add to playlist is always one tap away.
+                AddToPlaylistButton(song, services.addToPlaylist, c.ink.copy(alpha = 0.85f))
+                if (infinityOn) {
+                    // The Infinity Mix speaks thumbs: each one retunes what plays next.
+                    InfinityThumbs(song, controller, c.ink.copy(alpha = 0.85f)) { up -> toast = if (up) infUpText else infDownText }
+                } else {
+                    GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
+                        toast = lessText
+                        ShellActions.lessLikeThis(controller, song)
+                    }, c.ink.copy(alpha = 0.85f), iconSize = 24.dp)
+                    LikeButton(song, liked, size = 48.dp) { now -> toast = if (now) likedText else unlikedText }
+                }
             }
             Spacer(Modifier.height(14.dp))
             ShellSeekBar({ live.ms }, duration, { controller.seekTo(it); live.ms = it }, stringResource(Res.string.shell_seek), Modifier.fillMaxWidth(), track = c.ink.copy(alpha = 0.25f), fill = c.ink)
@@ -455,6 +480,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
             Spacer(Modifier.height(12.dp))
         }
         PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint)
+        InfinitySheetHost()
         ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars))
     }
 }
@@ -470,6 +496,11 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
     val stop = (position * 4).roundToInt().coerceIn(0, 4)
     val labels = listOf(Res.string.shell_dial_0, Res.string.shell_dial_1, Res.string.shell_dial_2, Res.string.shell_dial_3, Res.string.shell_dial_4)
     val segment = RoundedCornerShape(8.dp)
+    val controller = LocalPlaybackController.current
+    // "Up next re-mixed" for a moment after a change, when the Infinity Mix is playing.
+    var resteered by remember { mutableStateOf(0) }
+    LaunchedEffect(resteered) { if (resteered > 0) { delay(2200); resteered = 0 } }
+    val familiarPct = (app.turtleplayer.bridge.infinityFamiliarShare(stop / 4.0) * 100).roundToInt()
     Column(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(8.dp)).background(lerp(tint, Color.White, 0.06f)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(Res.string.shell_steer_title), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f))
@@ -486,16 +517,29 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
                     Modifier.weight(1f).fillMaxHeight().scale(pop).clip(segment).background(fill).border(1.dp, c.ink.copy(alpha = if (on) 0f else 0.18f), segment)
                         .shellPressable({
                             if (i != stop) haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.SegmentTick)
-                            scope.launch { TurtleBridge.setDiscoveryDial(i / 4.0) }
+                            scope.launch {
+                                TurtleBridge.setDiscoveryDial(i / 4.0)
+                                // Heard within a song: the mix's queued songs are rebuilt with the new blend.
+                                if (i != stop && ShellInfinity.resteer(controller)) resteered++
+                            }
                         }, label = stringResource(labels[i]), focusShape = segment),
                 )
             }
         }
         if (captions) {
+            // The blend this stop gives the Infinity Mix, so the dial's effect is a number, not a guess.
             Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                Text(stringResource(Res.string.shell_familiar), style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f))
+                AnimatedContent(familiarPct, transitionSpec = { quickFade }) { p ->
+                    Text(stringResource(Res.string.shell_inf_blend_familiar, p), style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f))
+                }
                 Spacer(Modifier.weight(1f))
-                Text(stringResource(Res.string.shell_new), style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f))
+                AnimatedContent(resteered > 0, transitionSpec = { quickFade }) { show ->
+                    if (show) Text(stringResource(Res.string.shell_inf_resteered), style = Shell.type.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = c.accent)
+                }
+                Spacer(Modifier.weight(1f))
+                AnimatedContent(100 - familiarPct, transitionSpec = { quickFade }) { p ->
+                    Text(stringResource(Res.string.shell_inf_blend_new, p), style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f))
+                }
             }
         }
     }
@@ -519,6 +563,9 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     val repeat = slot.repeatMode()
     // Queue, lyrics and devices are Shell's own right-panel surfaces; upstream's drawers stay closed.
     // Any left open from an earlier session are closed once, so they never cover the page.
+    app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song?.displayThumbnailUrl)
+    InfinitySheetHost()
+    SideEffect { com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras?.removeQueueIndex?.let { ShellInfinity.removeAt = it } }
     LaunchedEffect(Unit) {
         if (slot.isQueueOpen()) slot.onToggleQueue()
         if (slot.isLyricsOpen()) slot.onToggleLyrics()
@@ -539,7 +586,14 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+                com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras?.addToPlaylist?.let { add ->
+                    AddToPlaylistButton(song, add, c.ink2, size = 36.dp, iconSize = 18.dp)
+                }
+                if (ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)) {
+                    InfinityThumbs(song, controller, c.ink2, size = 36.dp, iconSize = 18.dp)
+                } else {
+                    LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+                }
             }
         }
         Column(Modifier.weight(1.4f), horizontalAlignment = Alignment.CenterHorizontally) {
