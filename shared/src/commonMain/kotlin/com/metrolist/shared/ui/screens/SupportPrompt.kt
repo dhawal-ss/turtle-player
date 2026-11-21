@@ -75,6 +75,7 @@ internal object SupportPromptSchedule {
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SupportPrompt() {
+    if (com.metrolist.shared.turtle.TurtleUiSlots.hideSupportPrompt) return // Turtle: HOOKS.md #38
     var visible by remember { mutableStateOf(SupportPromptSchedule.claimLaunch()) }
     val uriHandler = LocalUriHandler.current
     val developers =

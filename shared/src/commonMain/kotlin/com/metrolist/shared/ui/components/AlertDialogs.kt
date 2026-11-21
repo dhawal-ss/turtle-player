@@ -52,6 +52,7 @@ fun AlertDialog(
     properties: DialogProperties = DialogProperties(),
     outlineActions: Boolean = true,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.dialog?.let { return it(com.metrolist.shared.turtle.DialogSlot(onDismissRequest, confirmButton, dismissButton, icon, title, text, properties)) } // Turtle: HOOKS.md #40
     val density = LocalDensity.current
     val scaled = { slot: @Composable () -> Unit -> @Composable { WithDensity(density, slot) } }
     // Material buttons only draw a faint focus layer; outline the focused action for remotes and keyboards.

@@ -31,6 +31,12 @@ object TurtleUi {
         TurtleUiSlots.colorScheme = { dark -> if (dark) appScheme() else null }
         TurtleUiSlots.typography = { shellMaterialTypography() }
         TurtleUiSlots.playlistPicker = { app.turtleplayer.ui.screens.ShellPlaylistPicker(it) }
+        TurtleUiSlots.hideSupportPrompt = true
+        TurtleUiSlots.dialog = { app.turtleplayer.ui.screens.ShellDialog(it) }
+        TurtleUiSlots.artistPage = { app.turtleplayer.ui.screens.ShellArtistPage(it) }
+        TurtleUiSlots.playlistPage = { app.turtleplayer.ui.screens.ShellPlaylistPage(it) }
+        TurtleUiSlots.albumPage = { app.turtleplayer.ui.screens.ShellAlbumPage(it) }
+        TurtleUiSlots.libraryPage = { app.turtleplayer.ui.screens.ShellLibraryPage(it) }
     }
 
     /** Shell's scheme for the whole app; reading [ShellThemes.active] recomposes the app when the theme changes. */

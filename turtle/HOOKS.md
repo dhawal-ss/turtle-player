@@ -10,7 +10,7 @@ product owner asked that the whole app, player surfaces and dialogs included, us
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **40** hook lines, plus about 55 lines of behavior patches below.
+Current total: **47** hook lines, plus about 55 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -43,6 +43,13 @@ Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `a
 | 31 | `desktop/ui/screens/HomeScreen.kt` | 1 | `private fun openHomeItem` made `internal` | So hook #30 can reuse upstream's opener, including built-in playlists such as Liked Songs | Product designer |
 | 32 | `shared/ui/theme/CommonTheme.kt` | 1 | `typography = TurtleUiSlots.typography?.invoke() ?: MetrolistTypography()` | Shell's type (Space Grotesk headings, Inter text) for the whole app, so upstream's own screens and dialogs read as Turtle Player | Product designer |
 | 33 | `shared/ui/mobile/MobilePlaylistActions.kt` | 1 | The chooser's `PopupContent(...)` line becomes `if (TurtleUiSlots.playlistPicker?.let { ... } == null) PopupContent(...)` | Shell's add-to-playlist sheet on phones, driven by upstream's workflow (selection, YouTube sync, duplicates, create) | Product designer |
+| 34 | `shared/ui/screens/PlaylistContent.kt` | 1 | First line: `TurtleUiSlots.playlistPage?.let { return it(PlaylistPageSlot(...every argument...)) }` | Shell's playlist page on phone and desktop; upstream's selection, reorder, search, pagination and swipe containers are passed through | Product designer |
+| 35 | `shared/ui/screens/AlbumContent.kt` | 1 | First line: `TurtleUiSlots.albumPage?.let { return it(AlbumPageSlot(...)) }` | Shell's album page on phone and desktop | Product designer |
+| 36 | `shared/ui/screens/ArtistScreen.kt` | 1 | First line: `TurtleUiSlots.artistPage?.let { return it(ArtistPageSlot(...)) }` | Shell's artist page on phone and desktop | Product designer |
+| 37 | `shared/ui/screens/LibraryContent.kt` | 1 | First line: `TurtleUiSlots.libraryPage?.let { return it(LibraryPageSlot(...)) }` | Shell's Library page on phone and desktop; upstream's item containers (menus, swipe), sorting and reorder are passed through | Product designer |
+| 38 | `shared/ui/screens/SupportPrompt.kt` | 1 | First line: `if (TurtleUiSlots.hideSupportPrompt) return` | Turtle Player doesn't show Metrolist's "support the developers" launch prompt; upstream's credits stay in About | Product designer |
+| 39 | `android/ui/screens/HomeScreen.kt` | 1 | `if (!isTv)` around the floating buttons becomes `if (!isTv && TurtleUiSlots.home == null)` | Shell's Home has no floating buttons (as in Spotify); music recognition stays on a long-press of the Search tab | Product designer |
+| 40 | `shared/ui/components/AlertDialogs.kt` | 1 | First line of `AlertDialog`: `TurtleUiSlots.dialog?.let { return it(DialogSlot(...)) }` | Every upstream dialog (create playlist, duplicates, confirmations, settings prompts) drawn as Shell's dialog card, keeping upstream's title, text and actions | Product designer |
 
 ## Behavior patches
 

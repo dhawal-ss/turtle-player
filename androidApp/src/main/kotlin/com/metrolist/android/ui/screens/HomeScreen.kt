@@ -383,7 +383,7 @@ fun HomeScreen(
             homeContent()
         }
 
-        if (!isTv) {
+        if (!isTv && com.metrolist.shared.turtle.TurtleUiSlots.home == null) { // Turtle: HOOKS.md #39
             AnimatedVisibility(
                 visible = (LocalIsTv.current || showFloatingActions),
                 enter = fadeIn() + slideInVertically { it / 2 },

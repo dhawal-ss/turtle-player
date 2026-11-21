@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell Library page (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_lib_title">Your Library</string>
+    <string name="shell_lib_close_search">Close search</string>
+    <string name="shell_lib_clear_search">Clear search</string>
+    <string name="shell_lib_clear_filter">Clear filter</string>
+    <string name="shell_lib_sort_by">Sort by %1$s</string>
+    <string name="shell_lib_sort_ascending">Sort ascending</string>
+    <string name="shell_lib_sort_descending">Sort descending</string>
+    <string name="shell_lib_meta_pair">%1$s · %2$s</string>
+    <string name="shell_lib_kind_playlist">Playlist</string>
+    <string name="shell_lib_kind_album">Album</string>
+    <string name="shell_lib_kind_song">Song</string>
+    <string name="shell_lib_kind_podcast">Podcast</string>
+    <string name="shell_lib_kind_episode">Episode</string>
+    <plurals name="shell_lib_song_count">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
+    <string name="shell_lib_pinned">Pinned</string>
+    <string name="shell_lib_downloaded">Downloaded</string>
+    <string name="shell_lib_songs_in_playlists">Songs in your playlists</string>
+    <string name="shell_lib_show_more">Show more</string>
+    <string name="shell_lib_empty">Save playlists, artists and albums and they’ll show up here.</string>
+    <string name="shell_lib_error">Couldn’t load your library.</string>
+    <string name="shell_lib_error_hint">Check your connection and try again.</string>
+    <string name="shell_lib_retry">Retry</string>
+    <string name="shell_lib_reorder">Reorder %1$s</string>
+    <string name="shell_lib_move_top">Move to top</string>
+    <string name="shell_lib_move_up">Move up</string>
+    <string name="shell_lib_move_down">Move down</string>
+    <string name="shell_lib_move_bottom">Move to bottom</string>
+</resources>

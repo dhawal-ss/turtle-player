@@ -250,6 +250,7 @@ fun ArtistScreen(
     onAppBarVisibleChange: (Boolean) -> Unit = {},
     overlay: @Composable () -> Unit = {},
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.artistPage?.let { return it(com.metrolist.shared.turtle.ArtistPageSlot(artist, artistId, initialArtistName, currentSongId, isPlaying, onItemsVisible, sections, sectionBrowseIds, loadableSections, sectionContinuation, isLoading, errorMessage, onRefresh, onItemClick, onVideoItemClick, onAlbumArtworkClick, onItemLongClick, songContainer, onSectionClick, onVideoSectionClick, onPlayItem, isSongLiked, onLikeSong, onBackClick, onMenuClick, onPlayAllClick, onShuffleClick, onMixClick, onRefreshClick, modifier, listState, contentPadding, headerWindowInsets, isSubscribed, subscribeSuccessCount, showSubscribe, onSubscribeClick, onUnblockClick, description, aboutImageUrl, onAboutClick, headerVideoLayer, onAppBarVisibleChange, overlay)) } // Turtle: HOOKS.md #36
     val initialArtist =
         remember(artistId, initialArtistName) {
             CollectionPreviews.artist(artistId) ?: ArtistItem(artistId, initialArtistName.orEmpty(), null)

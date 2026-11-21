@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shell Artist page (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_artist_popular">Popular</string>
+    <string name="shell_artist_latest_release">Latest release</string>
+    <string name="shell_artist_show_all">Show all</string>
+    <string name="shell_artist_see_more">See more</string>
+    <string name="shell_artist_show_less">Show less</string>
+    <string name="shell_artist_follow">Follow</string>
+    <string name="shell_artist_following">Following</string>
+    <string name="shell_artist_radio">Radio</string>
+    <string name="shell_artist_shuffle">Shuffle</string>
+    <string name="shell_artist_play">Play</string>
+    <string name="shell_artist_play_item">Play %1$s</string>
+    <string name="shell_artist_more">More options</string>
+    <string name="shell_artist_item_more">More options for %1$s</string>
+    <string name="shell_artist_back">Back</string>
+    <string name="shell_artist_refresh">Refresh</string>
+    <string name="shell_artist_blocked">You’ve blocked this artist</string>
+    <string name="shell_artist_unblock">Unblock</string>
+    <string name="shell_artist_about">About</string>
+    <string name="shell_artist_subscribers">%1$s subscribers</string>
+    <string name="shell_artist_monthly_listeners">monthly listeners</string>
+    <string name="shell_artist_meta_pair">%1$s · %2$s</string>
+    <string name="shell_artist_loading">Loading artist</string>
+    <string name="shell_artist_error_title">Couldn’t load this artist</string>
+    <string name="shell_artist_error_body">Check your connection and try again.</string>
+    <string name="shell_artist_retry">Retry</string>
+    <string name="shell_artist_like">Save to Liked Songs</string>
+    <string name="shell_artist_unlike">Remove from Liked Songs</string>
+</resources>

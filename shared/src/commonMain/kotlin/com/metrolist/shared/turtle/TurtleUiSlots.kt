@@ -53,6 +53,18 @@ object TurtleUiSlots {
     /** Shell's add-to-playlist sheet in place of upstream's chooser (phones); null keeps upstream's. */
     var playlistPicker: (@Composable (PlaylistPickerSlot) -> Unit)? = null
 
+    /** Shell pages in place of upstream's shared screens (phone and desktop); null keeps upstream's. */
+    var playlistPage: (@Composable (PlaylistPageSlot) -> Unit)? = null
+    var albumPage: (@Composable (AlbumPageSlot) -> Unit)? = null
+    var artistPage: (@Composable (ArtistPageSlot) -> Unit)? = null
+    var libraryPage: (@Composable (LibraryPageSlot) -> Unit)? = null
+
+    /** True hides upstream's "support the Metrolist developers" launch prompt. */
+    var hideSupportPrompt: Boolean = false
+
+    /** Shell's dialog card for every upstream `AlertDialog` (title, text, actions are upstream's); null keeps upstream's. */
+    var dialog: (@Composable (DialogSlot) -> Unit)? = null
+
     /** While true, upstream's full player shows instead of ours (Shell hands over for lyrics, queue, more). */
     var showUpstreamPlayer by mutableStateOf(false)
 }
@@ -198,4 +210,15 @@ class PlaylistPickerSlot(
     val onAdd: () -> Unit,
     val onCreate: () -> Unit,
     val onDismiss: () -> Unit,
+)
+
+/** Upstream's `AlertDialog` arguments, for Shell's dialog card. */
+class DialogSlot(
+    val onDismissRequest: () -> Unit,
+    val confirmButton: @Composable () -> Unit,
+    val dismissButton: (@Composable () -> Unit)?,
+    val icon: (@Composable () -> Unit)?,
+    val title: (@Composable () -> Unit)?,
+    val text: (@Composable () -> Unit)?,
+    val properties: androidx.compose.ui.window.DialogProperties,
 )

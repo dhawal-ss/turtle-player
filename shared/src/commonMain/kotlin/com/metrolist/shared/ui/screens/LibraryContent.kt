@@ -254,6 +254,7 @@ fun LibraryContent(
     onPlayAlbum: ((AlbumItem) -> Unit)? = null,
     presentation: LibraryPresentation = remember { LibraryPresentation() },
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.libraryPage?.let { return it(com.metrolist.shared.turtle.LibraryPageSlot(text, items, autoPlaylists, hiddenItemKeys, isLoading, error, onRetry, isGridView, selectedFilter, manualOrder, topPadding, compactGrid, useGridItemSize, onFilterChange, onGridViewChange, onManualOrderChange, onItemClick, onPlaySongs, currentSongId, isPlaying, onAutoPlaylistClick, itemContainer, bottomPadding, extraBottomPadding, scrollState, modifier, searchQuery, isSearchOpen, onSearchQueryChange, onSearchToggle, contentMatchedSongs, contentSearchHasMore, onLoadMoreContentMatches, onSearchDescendingChange, onPlayAlbum, presentation)) } // Turtle: HOOKS.md #37
     val currentSongIdState = rememberUpdatedState(currentSongId)
     val isPlayingState = rememberUpdatedState(isPlaying)
     val rootActive = LocalRootContentActive.current

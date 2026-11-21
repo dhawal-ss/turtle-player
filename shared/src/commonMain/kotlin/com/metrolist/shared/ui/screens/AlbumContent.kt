@@ -131,6 +131,7 @@ fun AlbumContent(
     trackTrailingContent: @Composable ((SongItem, Int) -> Unit)? = null,
     isTrackSelected: (SongItem) -> Boolean = { false },
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.albumPage?.let { return it(com.metrolist.shared.turtle.AlbumPageSlot(album, songs, text, paginationContent, onPlayAll, onShuffle, onMoreOptions, isFavorite, onFavorite, onArtistClick, onTrackClick, onTrackMenuClick, onBackClick, modifier, listState, contentPadding, selectionBottomPadding, currentSongId, isPlaying, downloadedSongIds, description, otherVersions, onAlbumClick, onAlbumArtworkClick, header, trackContainer, searchQuery, onSearchQueryChange, searchAvailable, sortAvailable, onTrackLongClick, selectionActive, selectionControls, trackTrailingContent, isTrackSelected)) } // Turtle: HOOKS.md #35
     val currentSongIdState = rememberUpdatedState(currentSongId)
     val isPlayingState = rememberUpdatedState(isPlaying)
     var sort by remember(album.id) { mutableStateOf(PlaylistSongSort.ORIGINAL) }

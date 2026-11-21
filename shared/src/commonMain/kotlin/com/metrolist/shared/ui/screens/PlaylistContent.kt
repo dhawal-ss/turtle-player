@@ -170,6 +170,7 @@ fun PlaylistContent(
     onEdit: (() -> Unit)? = null,
     onAddSong: (() -> Unit)? = null,
 ) {
+    com.metrolist.shared.turtle.TurtleUiSlots.playlistPage?.let { return it(com.metrolist.shared.turtle.PlaylistPageSlot(playlist, songs, artworkSongs, durationSongs, hasMoreSongs, hiddenSongCount, loadedSongCount, isLoading, previewThumbnail, loadingHeader, paginationContent, text, onPlayAll, onShuffle, onTrackClick, onTrackMenuClick, onTrackLongClick, onBackClick, fallbackIcon, cover, isFavorite, onFavorite, modifier, listState, preparedSongKeys, contentPadding, currentSongId, isPlaying, suggestions, downloadedSongIds, onArtistClick, header, orderControls, aboveOrderControls, selectionActive, selectionControls, emptyContent, reorderMode, searchEnabled, trackContainer, isTrackSelected, trackTrailingContent, onReorder, onReorderDragStarted, onReorderFinished, searchQuery, onSearchQueryChange, searchOpen, onSearchOpenChange, onMoreOptions, onEdit, onAddSong)) } // Turtle: HOOKS.md #34
     val currentSongIdState = rememberUpdatedState(currentSongId)
     val isPlayingState = rememberUpdatedState(isPlaying)
     val canEdit = playlist?.canEdit == true
