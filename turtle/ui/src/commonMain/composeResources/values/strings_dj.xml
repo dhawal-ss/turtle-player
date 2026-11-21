@@ -80,4 +80,6 @@
     <string name="shell_dj_genre_trance">Trance</string>
     <string name="shell_dj_genre_amapiano">Amapiano</string>
     <string name="shell_dj_genre_dancehall">Dancehall</string>
+    <string name="shell_dj_nav">Turtle DJ</string>
+    <string name="shell_dj_tab">DJ</string>
 </resources>

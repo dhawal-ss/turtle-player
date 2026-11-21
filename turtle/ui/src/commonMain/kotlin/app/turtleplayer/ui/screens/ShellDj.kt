@@ -596,5 +596,16 @@ internal fun TurtleDjHost() {
         onDispose { ShellDj.hosts.remove(token) }
     }
     LaunchedEffect(Unit) { ShellDj.recover(controller) }
+    if (app.turtleplayer.ui.theme.ShellPlatform.desktop) {
+        // Desktop: any "open Turtle DJ" lands on the sidebar page, never a dialog over the window.
+        LaunchedEffect(ShellDj.open) {
+            if (ShellDj.open) {
+                ShellDesktop.explore = false
+                ShellDesktop.dj = true
+                ShellDj.open = false
+            }
+        }
+        return
+    }
     if (ShellDj.open && ShellDj.hosts.firstOrNull() === token) TurtleDjOverlay()
 }

@@ -341,7 +341,6 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 item(key = "infinity") {
                     InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 2), onOpen = ::openInfinity)
                 }
-                item(key = "turtle_dj") { TurtleDjCard(wide, Modifier.riseIn(rise, "turtle_dj", 3)) }
             }
 
             if (current != HomeFilter.MUSIC.ordinal && lists.mixes.isNotEmpty()) {

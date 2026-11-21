@@ -141,13 +141,21 @@ private fun djArcBody(arc: DjArc): String = stringResource(
 @Composable
 internal fun TurtleDjOverlay() = ShellTheme {
     val close = { ShellDj.open = false }
+    // Phones and tablets: a full-screen booth. Desktop shows Turtle DJ as a page instead (TurtleDjPage
+    // from the sidebar), with no dialog layer over the window.
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         DjKeepScreenOn()
-        Box(Modifier.fillMaxSize().background(Shell.colors.ground)) {
-            val session = ShellDj.session
-            Crossfade(session, animationSpec = tween(ShellMotion.EMPHASIZED_MS)) { s ->
-                if (s == null) DjSetup(onClose = close) else DjBooth(s, onExit = close)
-            }
+        TurtleDjPage(onClose = close, modifier = Modifier.fillMaxSize())
+    }
+}
+
+/** Turtle DJ itself: setup until a set starts, then the booth. */
+@Composable
+internal fun TurtleDjPage(onClose: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier.background(Shell.colors.ground)) {
+        val session = ShellDj.session
+        Crossfade(session, animationSpec = tween(ShellMotion.EMPHASIZED_MS)) { s ->
+            if (s == null) DjSetup(onClose = onClose) else DjBooth(s, onExit = onClose)
         }
     }
 }

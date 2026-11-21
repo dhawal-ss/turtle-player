@@ -83,6 +83,7 @@ import app.turtleplayer.ui.generated.resources.shell_artists
 import app.turtleplayer.ui.generated.resources.shell_collapse_library
 import app.turtleplayer.ui.generated.resources.shell_expand_library
 import app.turtleplayer.ui.generated.resources.shell_explore
+import app.turtleplayer.ui.generated.resources.shell_dj_nav
 import app.turtleplayer.ui.generated.resources.shell_hide_now_playing
 import app.turtleplayer.ui.generated.resources.shell_infinity_meta
 import app.turtleplayer.ui.generated.resources.shell_infinity_title
@@ -134,6 +135,9 @@ object ShellDesktop {
     /** True while Explore covers the page (our own page; any upstream navigation closes it). */
     var explore by mutableStateOf(false)
 
+    /** True while Turtle DJ covers the page (a Shell page like Explore; any upstream navigation closes it). */
+    var dj by mutableStateOf(false)
+
     /** The last Home Shell drew: Explore reads its YouTube Music data and opener. */
     internal var home by mutableStateOf<HomeSlot?>(null)
 
@@ -182,7 +186,7 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
     val route = LocalNavigator.current.state.currentRoute
-    LaunchedEffect(route) { ShellDesktop.explore = false }
+    LaunchedEffect(route) { ShellDesktop.explore = false; ShellDesktop.dj = false }
     BoxWithConstraints(slot.modifier.fillMaxSize().background(c.frame)) {
         val collapsed = ShellDesktop.libraryCollapsed || maxWidth < 960.dp
         val sidebarWidth by animateDpAsState(if (collapsed) SidebarCollapsedWidth else SidebarWidth, ShellMotion.emphasized())
@@ -195,6 +199,7 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
                 // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
                 ExploreOverlay()
+                DjPageOverlay()
             }
             AnimatedVisibility(
                 showNowPlaying,
@@ -231,10 +236,12 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
             val explore = ShellDesktop.explore
             slot.items.forEachIndexed { i, item ->
                 if (i == libraryIndex) return@forEachIndexed
-                val selected = !explore && i == slot.selectedIndex
-                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; slot.onSelect(i) }
+                val selected = !explore && !ShellDesktop.dj && i == slot.selectedIndex
+                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; ShellDesktop.dj = false; slot.onSelect(i) }
                 if (item.key.equals("home", ignoreCase = true)) {
-                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.explore = true }
+                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.dj = false; ShellDesktop.explore = true }
+                    // Turtle DJ is a destination of its own, right under Explore.
+                    NavRow(Glyphs.Turntable, stringResource(Res.string.shell_dj_nav), ShellDesktop.dj, collapsed) { ShellDesktop.explore = false; ShellDesktop.dj = true }
                 }
             }
         }
@@ -242,7 +249,7 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
             library = library,
             collapsed = collapsed,
             librarySelected = libraryIndex >= 0 && libraryIndex == slot.selectedIndex,
-            onOpenLibrary = { ShellDesktop.explore = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
+            onOpenLibrary = { ShellDesktop.explore = false; ShellDesktop.dj = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         slot.footer?.invoke()
@@ -630,5 +637,13 @@ private fun LibrarySearchField() {
 private fun ExploreOverlay() {
     AnimatedVisibility(ShellDesktop.explore, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
         ShellTheme { ShellExplorePage(ShellDesktop.home, Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
+    }
+}
+
+/** Turtle DJ as a desktop page over the content (inside upstream's gutters), like Explore. */
+@Composable
+private fun DjPageOverlay() {
+    AnimatedVisibility(ShellDesktop.dj, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
+        ShellTheme { TurtleDjPage(onClose = { ShellDesktop.dj = false }, modifier = Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
     }
 }
