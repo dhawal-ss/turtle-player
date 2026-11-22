@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlin.time.TimeSource
 
 /**
  * Runs the on-device co-listening graph: feeds it every radio page and finished play, rebuilds the
@@ -38,22 +39,27 @@ class CoListeningSync(
         scope.launch {
             guarded("load") { load() }
             var built = -1L
+            var builtAt = TimeSource.Monotonic.markNow()
             var saved = graph.version()
             while (isActive) {
                 val now = graph.version()
-                if (now != built) {
+                // Rebuilding the vectors is the costly part, so it waits; the first data is used at once.
+                val due = built < 0 || store.artistCount == 0 || builtAt.elapsedNow().inWholeMilliseconds >= REBUILD_INTERVAL_MS
+                if (now != built && due) {
                     guarded("rebuild") {
                         store.rebuild()
                         taste.embeddingsChanged()
                         TurtleLog.info("co-listening: ${store.artistCount} artists, ${store.trackCount} songs")
                     }
                     built = now
+                    builtAt = TimeSource.Monotonic.markNow()
                 }
+                // Saved often: phones kill the app at any time, and what was learned since the last save is lost.
                 if (now != saved) {
                     guarded("save") { save() }
                     saved = now
                 }
-                delay(REBUILD_INTERVAL_MS)
+                delay(SAVE_INTERVAL_MS)
             }
         }
         scope.launch { events.newEvents.collect { guarded("play") { graph.observePlay(it) } } }
@@ -95,5 +101,6 @@ class CoListeningSync(
     private companion object {
         /** Rebuilding re-reads listening history for the profile, so not more often than this. */
         const val REBUILD_INTERVAL_MS = 15 * 60_000L
+        const val SAVE_INTERVAL_MS = 60_000L
     }
 }
