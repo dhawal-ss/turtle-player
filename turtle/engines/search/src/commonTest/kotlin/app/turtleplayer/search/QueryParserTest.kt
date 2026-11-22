@@ -49,6 +49,26 @@ class QueryParserTest {
     }
 
     @Test
+    fun typoArtistWithUnknownSongWordsIsNotSongByArtist() {
+        // A phone library with the artist "SwitchOTR" read "taylor swift" (last word still being typed) as
+        // the song "taylor" by "SwitchOTR", which hid the Taylor Swift artist result.
+        val library = LexicalIndex().apply {
+            upsert(track("so", "SwitchOTR", "Hunnid"))
+            upsert(track("ty", "Tyler, The Creator", "Earfquake"))
+        }
+        val parser = QueryParser(library.lexicons())
+        for (query in listOf("taylor swift", "taylor swift ")) {
+            val q = parser.parse(query)
+            assertTrue(q.intent != Intent.SONG_BY_ARTIST, "'$query' was ${q.intent} at ${q.confidence}: ${q.songTokens} by ${q.artistTokens}")
+        }
+        // An exact artist still splits off song words the library does not know.
+        assertEquals(Intent.SONG_BY_ARTIST, parser.parse("hunnid switchotr").intent)
+        assertEquals(Intent.SONG_BY_ARTIST, parser.parse("switchotr new tune").intent)
+        // A partly typed artist still splits off a known title.
+        assertEquals(Intent.SONG_BY_ARTIST, parser.parse("hunnid switc").intent)
+    }
+
+    @Test
     fun songByArtistDoesNotSplitKnownTitlesContainingBy() {
         val q = parser.parse("stand by me")
         assertEquals(Intent.SONG, q.intent)

@@ -61,4 +61,32 @@ class TurtleSearchTest {
         val artist = assertNotNull(turtle.rerank("queen", page))
         assertEquals("UCqueen", artist.summaries.first().items.single().id)
     }
+
+    @Test
+    fun artistNameQueryTopsWithArtistOnARealisticPage() = runBlocking {
+        val ts = ArtistItem(id = "UCts", title = "Taylor Swift", thumbnail = null)
+        val atv = "MUSIC_VIDEO_TYPE_ATV"
+        val tsPage = SearchSummaryPage(
+            listOf(
+                SearchSummary("", listOf(ts), isTopResult = true),
+                SearchSummary(
+                    "Songs",
+                    listOf(
+                        song("s1", "Patient Zero", "Taylor Swift", atv),
+                        song("s2", "Taylor Swift - You Belong With Me (Taylor's Version) (Music Video 4K)", "Swift Leaks Backup"),
+                        song("s3", "Look What You Made Me Do", "Taylor Swift", atv),
+                        song("s4", "Jump Then Fall (Taylor’s Version)", "Taylor Swift", atv),
+                    ),
+                ),
+                SearchSummary(
+                    "Artists",
+                    listOf(ts, ArtistItem(id = "UCsc", title = "Sabrina Carpenter", thumbnail = null), ArtistItem(id = "UCed", title = "Ed Sheeran", thumbnail = null)),
+                ),
+            ),
+        )
+        // From a phone library: "swift", read as a typo of the artist being typed, once made this "taylor" by SwitchOTR.
+        val library = LocalLibrary().apply { upsert(song("lib-so", "Hunnid", "SwitchOTR").toTrackMeta(), setOf(LocalSource.LIBRARY)) }
+        val result = assertNotNull(search(library).rerank("taylor swift", tsPage))
+        assertEquals("UCts", result.summaries.first().items.single().id, "artist first: ${result.summaries.first().items}")
+    }
 }

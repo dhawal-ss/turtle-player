@@ -367,17 +367,23 @@ class RuleBasedIntentClassifier : IntentClassifier {
         lex.albums.lookup(tokens, prefix)?.let { bump(Intent.ALBUM, if (it.exact) 0.6f else 0.3f + 0.25f * it.quality) }
 
         // Artist name plus song words in either order: "coldplay yellow", "yellow coldplay".
+        // A loose artist match (a typo or a name still being typed) only counts when the other words
+        // are a known title: otherwise "taylor swift" reads as the song "taylor" by "SwitchOTR".
         if (song.isEmpty() && tokens.size >= 2 && wholeArtist?.exact != true) {
             var bestSplit: Triple<List<String>, List<String>, Float>? = null
             for (i in 1 until tokens.size) {
                 val lead = tokens.subList(0, i)
                 val trail = tokens.subList(i, tokens.size)
                 lex.artists.lookup(lead, false)?.let { m ->
-                    val s = m.quality * lead.size / tokens.size.toFloat() + if (lex.titles.lookup(trail, prefix) != null) 0.3f else 0f
+                    val titled = lex.titles.lookup(trail, prefix) != null
+                    if (!m.exact && !titled) return@let
+                    val s = m.quality * lead.size / tokens.size.toFloat() + if (titled) 0.3f else 0f
                     if (bestSplit == null || s > bestSplit.third) bestSplit = Triple(trail, lead, s)
                 }
                 lex.artists.lookup(trail, prefix)?.let { m ->
-                    val s = m.quality * trail.size / tokens.size.toFloat() + if (lex.titles.lookup(lead, false) != null) 0.3f else 0f
+                    val titled = lex.titles.lookup(lead, false) != null
+                    if (!m.exact && !titled) return@let
+                    val s = m.quality * trail.size / tokens.size.toFloat() + if (titled) 0.3f else 0f
                     if (bestSplit == null || s > bestSplit.third) bestSplit = Triple(lead, trail, s)
                 }
             }
