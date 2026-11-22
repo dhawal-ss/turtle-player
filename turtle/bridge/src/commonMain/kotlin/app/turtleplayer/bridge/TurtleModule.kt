@@ -29,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.TimeZone
@@ -170,6 +171,11 @@ object TurtleBridge {
             }
             r.observer.attach(ours, currentSong, isPlaying, onEndOfTrack)
             TurtleLog.info("player observer attached")
+            // Drive log heartbeat: a gap between two beats means the system froze or killed the player.
+            while (isActive) {
+                delay(HEARTBEAT_MS)
+                DriveLog.line("heartbeat", "playing=${isPlaying.value} song=${currentSong.value?.let { "${it.id} ${it.title}" }}")
+            }
         }
     }
 
@@ -289,6 +295,7 @@ object TurtleBridge {
 
     private const val KOIN_POLL_MS = 100L
     private const val STARTUP_WAIT_MS = 60_000L
+    private const val HEARTBEAT_MS = 30_000L
 }
 
 /**

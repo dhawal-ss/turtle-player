@@ -10,10 +10,14 @@ import kotlinx.coroutines.SupervisorJob
  * Fail-open hooks must still leave a trace, or a broken integration looks like upstream behavior.
  */
 internal object TurtleLog {
-    fun info(message: String) = println("[Turtle] $message")
+    fun info(message: String) {
+        println("[Turtle] $message")
+        DriveLog.line("turtle", message)
+    }
 
     fun error(message: String, t: Throwable? = null) {
         println("[Turtle] ERROR $message" + t?.let { "\n" + it.stackTraceToString() }.orEmpty())
+        DriveLog.line("turtle", "ERROR $message" + t?.let { ": $it" }.orEmpty())
     }
 }
 

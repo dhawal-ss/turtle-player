@@ -48,6 +48,7 @@ class TurtleRuntime(
     fun start() {
         if (!started.compareAndSet(expectedValue = false, newValue = true)) return
         val scope = turtleScope.scope
+        DriveLog.start(scope)
         librarySync.start(scope)
         observer.startCheckpoints(scope)
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
