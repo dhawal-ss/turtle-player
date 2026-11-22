@@ -404,7 +404,7 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
                                     onEdit = onEdit,
                                     onAddSong = onAddSong,
                                     onMore = slot.onMoreOptions,
-                                    onSmartShuffle = { ShellSmartShuffle.play(playback, slot.songs, playlist?.title.orEmpty(), playlist?.id) },
+                                    onSmartShuffle = { ShellSmartShuffle.play(playback, slot.songs, playlist?.title.orEmpty(), playlist?.id, hasMore = slot.hasMoreSongs) },
                                 ),
                         )
                     }

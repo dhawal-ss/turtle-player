@@ -29,13 +29,14 @@ internal object ShellSmartShuffle {
     var busy by mutableStateOf(false)
         private set
 
-    fun play(controller: PlaybackController, songs: List<SongItem>, title: String, sourceId: String?) {
+    /** [hasMore]: the page loaded only part of playlist [sourceId]; the bridge fetches the rest. */
+    fun play(controller: PlaybackController, songs: List<SongItem>, title: String, sourceId: String?, hasMore: Boolean = false) {
         val playable = songs.filterNot { it.isUnavailable }
         if (busy || playable.isEmpty()) return
         busy = true
         scope.launch {
             try {
-                val order = TurtleBridge.smartShuffle(playable)
+                val order = TurtleBridge.smartShuffle(playable, morePlaylistId = sourceId?.takeIf { hasMore })
                 if (order.isNotEmpty()) {
                     ShellQueue.play(controller, order, title, sourceId = sourceId)
                     // The page shows pause while its smart-shuffled queue plays, recommendations included.

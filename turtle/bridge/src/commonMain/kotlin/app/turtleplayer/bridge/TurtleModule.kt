@@ -256,14 +256,29 @@ object TurtleBridge {
     /**
      * Smart Shuffle: [songs] shuffled with taste-matched recommendations mixed in (SmartShuffleBridge.kt).
      * Takes at most about 3 s; a plain shuffle when our runtime is unavailable, slow or failing.
+     * [morePlaylistId]: the page showed only the first part of this YouTube playlist; the rest loads
+     * within the same budget, so long playlists are shuffled whole, as upstream's Shuffle does.
      */
-    suspend fun smartShuffle(songs: List<SongItem>): List<SongItem> {
+    suspend fun smartShuffle(songs: List<SongItem>, morePlaylistId: String? = null): List<SongItem> {
         val r = runtime
         val koin = GlobalContext.getOrNull()
         if (r == null || koin == null) return songs.shuffled()
+        val rest: (suspend () -> List<SongItem>?)? = morePlaylistId?.let { id -> { wholePlaylist(id) } }
         // Its radio calls also teach the co-listening graph.
-        return SmartShuffleBridge(koin.get(), koin.get(), r.observer, YouTubeRadioSource(koin.get(), koin.get())).shuffle(songs)
+        return SmartShuffleBridge(koin.get(), koin.get(), r.observer, YouTubeRadioSource(koin.get(), koin.get())).shuffle(songs, rest)
     }
+
+    /** Every playable song of a paged YouTube playlist; null when it fails (the caller bounds the time). */
+    private suspend fun wholePlaylist(playlistId: String): List<SongItem>? =
+        try {
+            val repo = com.metrolist.shared.state.GlobalYouTubeRepository.instance
+            repo.completePlaylistPage(repo.getPlaylistPageData(playlistId)).songs.filterNot { it.isUnavailable }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("smart shuffle: could not load the whole playlist", e)
+            null
+        }
 
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
