@@ -51,6 +51,7 @@ class TurtleRuntime(
         DriveLog.start(scope)
         librarySync.start(scope)
         observer.startCheckpoints(scope)
+        scope.launch { TurtleDefaults.applyOnce(store) }
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
         scope.launch {
             restoreTasteState()
