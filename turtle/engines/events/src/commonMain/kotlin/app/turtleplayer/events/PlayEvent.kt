@@ -32,7 +32,7 @@ enum class EndReason {
     val isSkip: Boolean get() = this == SKIPPED || this == SKIPPED_BACK
 }
 
-enum class EventSource { LOCAL, SPOTIFY_IMPORT, LASTFM_IMPORT, LISTENBRAINZ_IMPORT }
+enum class EventSource { LOCAL, SPOTIFY_IMPORT, LASTFM_IMPORT, LISTENBRAINZ_IMPORT, METROLIST_IMPORT }
 
 enum class DeviceType { PHONE, TABLET, DESKTOP, CAR, TV, SPEAKER, UNKNOWN }
 

@@ -47,6 +47,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -174,6 +177,14 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
     BoxWithConstraints(slot.modifier.fillMaxSize().background(LocalShellGround.current ?: c.ground)) {
         val wide = maxWidth > 840.dp
         val listState = rememberLazyListState()
+        // A new search or filter starts at the top; coming back to the same results keeps the place.
+        val resultsKey = if (s.isQuerySubmitted) "${s.query}\u0000${s.selectedFilter}" else null
+        var scrolledFor by rememberSaveable { mutableStateOf(resultsKey) }
+        LaunchedEffect(resultsKey) {
+            if (resultsKey != null && resultsKey != scrolledFor) listState.scrollToItem(0)
+            scrolledFor = resultsKey
+        }
+        OnTabReselected("search") { listState.animateScrollToItem(0) }
 
         // Results, de-duplicated by id once per page so LazyColumn keys stay unique.
         val filtered = s.filteredResults

@@ -9,7 +9,8 @@ import kotlinx.coroutines.sync.withLock
  * turned back into playable upstream items. Library songs are pinned; everything else is a
  * bounded least-recently-used cache.
  */
-class SongCache(private val capacity: Int = 5_000) {
+// Holds radio pages and the co-listening graph's songs (up to ~12k), so shelves built from them stay playable.
+class SongCache(private val capacity: Int = 20_000) {
     private val mutex = Mutex()
     private val library = HashMap<String, SongItem>()
     private val recent = LinkedHashMap<String, SongItem>()

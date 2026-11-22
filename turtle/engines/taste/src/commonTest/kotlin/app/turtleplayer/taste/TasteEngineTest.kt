@@ -141,6 +141,31 @@ class TasteEngineTest {
     }
 
     @Test
+    fun freshForYouDropsReleasesWithoutAKnownDate() = runTest {
+        val artistTracks = world.tracksOf(user.favoriteArtists.first())
+        fun release(id: String, releasedAtMs: Long?) = artistTracks.first().copy(
+            key = TrackKey("mbid:$id"), title = "Release $id", album = "Release $id", releasedAtMs = releasedAtMs,
+        )
+        val undated = release("undated", null)
+        val old = release("old", clock.now - 400 * DAY_MS)
+        val fresh = release("fresh", clock.now - 2 * DAY_MS)
+        listOf(undated, old, fresh).forEach(world.catalog::put)
+        // A source that leaves the window to the engine, as a year-only catalogue would.
+        val source = object : FreshReleaseSource {
+            override suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int) = listOf(undated, old, fresh)
+        }
+        val shelf = engineWithHistory(fresh = source).freshForYou()
+        assertEquals(listOf(fresh.key), shelf?.items?.map { it.key })
+
+        val onlyUndated = object : FreshReleaseSource {
+            override suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int) = listOf(undated)
+        }
+        val engine = engineWithHistory(fresh = onlyUndated)
+        assertTrue(engine.freshForYou()?.items.isNullOrEmpty())
+        assertTrue(engine.homeShelves().none { it.kind == ShelfKind.FRESH_FOR_YOU })
+    }
+
+    @Test
     fun homeShelvesCarryTypedReasons() = runTest {
         val fresh = world.tracksOf(user.favoriteArtists.first()).first().copy(
             key = TrackKey("mbid:fresh-single"), title = "New single", album = "New single", releasedAtMs = clock.now - 3 * DAY_MS,

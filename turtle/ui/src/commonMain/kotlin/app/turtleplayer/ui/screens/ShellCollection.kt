@@ -103,7 +103,9 @@ import app.turtleplayer.ui.components.Equalizer
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.IndexLabel
-import app.turtleplayer.ui.components.PlayGlyph
+import app.turtleplayer.ui.components.PlayPauseButton
+import com.metrolist.shared.ui.playback.LocalPlaybackController
+import app.turtleplayer.ui.generated.resources.shell_col_pause
 import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.cardHover
 import app.turtleplayer.ui.components.rememberHover
@@ -183,6 +185,7 @@ import com.metrolist.shared.ui.navigation.AlbumArtworkRole
 import com.metrolist.shared.ui.navigation.AlbumArtworkSource
 import com.metrolist.shared.ui.navigation.NavigationBackHandler
 import com.metrolist.shared.ui.navigation.albumArtworkTransition
+import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.screens.playlistOrderControlsText
 import com.metrolist.shared.ui.utils.carouselScroll
 import com.metrolist.shared.ui.utils.desktopArrowScroll
@@ -236,7 +239,7 @@ private object CollectionGlyphs {
     val Edit = line("edit", "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4")
     val AddSong = line("add_song", "M3 6h12M3 11h12M3 16h7M17.5 13v8M13.5 17h8", stroke = 2f)
     val Clock = line("clock", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2")
-    val Drag = line("drag", "M4 9h16M4 15h16", stroke = 2f)
+    val Drag = Glyphs.Drag
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -298,6 +301,7 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
     val songKeys = slot.preparedSongKeys ?: computedKeys
     val suggestions = if (effectiveQuery.isBlank()) slot.suggestions else emptyList()
     val showPlayback = displayedSongs.isNotEmpty()
+    val playback = LocalPlaybackController.current
 
     LaunchedEffect(reorderMode, isSearchOpen) {
         if (reorderMode && isSearchOpen) {
@@ -330,6 +334,9 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
     val tintUrl = playlistTintUrl(headerPlaylist, slot)
     val kind = stringResource(Res.string.shell_col_kind_playlist)
     val findLabel = stringResource(Res.string.shell_col_find_playlist)
+    // Read only in the header, so play/pause and song changes recompose the header alone.
+    val calm = playback.rememberCalmState()
+    val markPlaylist: () -> Unit = { playlist?.id?.let { ShellQueue.markSource(it, slot.songs) } }
 
     CollectionFrame(
         modifier = slot.modifier,
@@ -366,6 +373,8 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
                                 null
                             }
                         val description = playlist?.description?.takeIf { it.isNotBlank() }
+                        val now = calm.value
+                        val active = playlist != null && ShellQueue.isSourceActive(playlist.id, slot.songs, now)
                         CollectionHeader(
                             artKey = playlist?.id,
                             kind = kind,
@@ -377,13 +386,25 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
                             actions =
                                 CollectionActions(
                                     showPlayback = showPlayback,
-                                    onPlay = slot.onPlayAll,
-                                    onShuffle = slot.onShuffle,
+                                    playing = active && now.isPlaying,
+                                    onPlay = {
+                                        if (active) {
+                                            playback.togglePlayPause()
+                                        } else {
+                                            markPlaylist()
+                                            slot.onPlayAll()
+                                        }
+                                    },
+                                    onShuffle = {
+                                        markPlaylist()
+                                        slot.onShuffle()
+                                    },
                                     isFavorite = slot.isFavorite,
                                     onFavorite = onAddToLibrary,
                                     onEdit = onEdit,
                                     onAddSong = onAddSong,
                                     onMore = slot.onMoreOptions,
+                                    onSmartShuffle = { ShellSmartShuffle.play(playback, slot.songs, playlist?.title.orEmpty(), playlist?.id) },
                                 ),
                         )
                     }
@@ -451,7 +472,10 @@ fun ShellPlaylistPage(slot: PlaylistPageSlot) = ShellTheme {
                         downloaded = song.id in slot.downloadedSongIds,
                         selected = slot.isTrackSelected(song),
                         dragging = dragging,
-                        onClick = { slot.onTrackClick(song, sourceIndex) },
+                        onClick = {
+                            markPlaylist()
+                            slot.onTrackClick(song, sourceIndex)
+                        },
                         longClick = longClick,
                         onMenu = onMenu,
                         onArtistClick = onArtistClick,
@@ -617,6 +641,7 @@ private fun AuthorLine(name: String, thumbnail: String?, onClick: (() -> Unit)?)
 @Composable
 fun ShellAlbumPage(slot: AlbumPageSlot) = ShellTheme {
     val desktop = ShellPlatform.desktop
+    val playback = LocalPlaybackController.current
     val album = slot.album
     val header = slot.header
     val paginationContent = slot.paginationContent
@@ -674,6 +699,8 @@ fun ShellAlbumPage(slot: AlbumPageSlot) = ShellTheme {
     val coverUrl = album.thumbnail ?: previewThumbnail
     val findLabel = stringResource(Res.string.shell_col_find_album)
     val numbersAreTracks = sort == PlaylistSongSort.ORIGINAL && effectiveQuery.isBlank()
+    // Read only in the header, so play/pause and song changes recompose the header alone.
+    val calm = playback.rememberCalmState()
 
     CollectionFrame(
         modifier = slot.modifier,
@@ -690,6 +717,8 @@ fun ShellAlbumPage(slot: AlbumPageSlot) = ShellTheme {
         if (header != null) item(key = "custom_header") { Box(itemModifier) { header() } }
 
         item(key = "header") {
+            val albumNow = calm.value
+            val albumActive = ShellQueue.isSourceActive(album.id, slot.songs, albumNow)
             Box(itemModifier) {
                 CollectionHeader(
                     artKey = album.id,
@@ -709,13 +738,25 @@ fun ShellAlbumPage(slot: AlbumPageSlot) = ShellTheme {
                     actions =
                         CollectionActions(
                             showPlayback = displayedSongs.isNotEmpty(),
-                            onPlay = { slot.onPlayAll(displayedSongs) },
-                            onShuffle = { slot.onShuffle(displayedSongs) },
+                            playing = albumActive && albumNow.isPlaying,
+                            onPlay = {
+                                if (albumActive) {
+                                    playback.togglePlayPause()
+                                } else {
+                                    ShellQueue.markSource(album.id, slot.songs)
+                                    slot.onPlayAll(displayedSongs)
+                                }
+                            },
+                            onShuffle = {
+                                ShellQueue.markSource(album.id, slot.songs)
+                                slot.onShuffle(displayedSongs)
+                            },
                             isFavorite = slot.isFavorite,
                             onFavorite = slot.onFavorite,
                             onEdit = null,
                             onAddSong = null,
                             onMore = slot.onMoreOptions,
+                            onSmartShuffle = { ShellSmartShuffle.play(playback, displayedSongs, album.title, album.id) },
                         ),
                 )
             }
@@ -773,7 +814,10 @@ fun ShellAlbumPage(slot: AlbumPageSlot) = ShellTheme {
                             isPlaying = slot.isPlaying,
                             downloaded = song.id in slot.downloadedSongIds,
                             selected = slot.isTrackSelected(song),
-                            onClick = { slot.onTrackClick(song, sortedSongs, sortedSongs.indexOfPlaylistOccurrence(song)) },
+                            onClick = {
+                                ShellQueue.markSource(album.id, slot.songs)
+                                slot.onTrackClick(song, sortedSongs, sortedSongs.indexOfPlaylistOccurrence(song))
+                            },
                             longClick = if (onTrackLongClick != null) ({ onTrackLongClick(song) }) else onMenu,
                             onMenu = onMenu,
                             onArtistClick = slot.onArtistClick,
@@ -961,6 +1005,9 @@ private class CollectionActions(
     val onEdit: (() -> Unit)?,
     val onAddSong: (() -> Unit)?,
     val onMore: (() -> Unit)?,
+    val onSmartShuffle: (() -> Unit)? = null,
+    /** True while this collection is what's playing: the play button shows pause and [onPlay] pauses. */
+    val playing: Boolean = false,
 )
 
 /** Phone: centred cover over a left-aligned title. Desktop: Spotify's horizontal header. */
@@ -1045,9 +1092,10 @@ private fun ActionRow(a: CollectionActions, desktop: Boolean) {
     val c = Shell.colors
     Row(Modifier.fillMaxWidth().heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
         if (desktop && a.showPlayback) {
-            PlayButton(a.onPlay)
+            PlayButton(a.playing, a.onPlay)
             Spacer(Modifier.width(12.dp))
             GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), a.onShuffle, c.ink2, iconSize = 26.dp)
+            a.onSmartShuffle?.let { SmartShuffleButton(it) }
         }
         val onFavorite = a.onFavorite
         if (onFavorite != null) FavoriteButton(a.isFavorite, onFavorite)
@@ -1060,20 +1108,20 @@ private fun ActionRow(a: CollectionActions, desktop: Boolean) {
         Spacer(Modifier.weight(1f))
         if (!desktop && a.showPlayback) {
             GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), a.onShuffle, c.ink2, iconSize = 26.dp)
+            a.onSmartShuffle?.let { SmartShuffleButton(it) }
             Spacer(Modifier.width(8.dp))
-            PlayButton(a.onPlay)
+            PlayButton(a.playing, a.onPlay)
         }
     }
 }
 
 @Composable
-private fun PlayButton(onClick: () -> Unit) {
+private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
     val c = Shell.colors
-    Box(
-        Modifier.size(56.dp).clip(CircleShape).background(c.accent)
-            .shellPressable(onClick, label = stringResource(Res.string.shell_col_play), focusShape = CircleShape),
-        contentAlignment = Alignment.Center,
-    ) { PlayGlyph(c.onAccent, 26.dp) }
+    PlayPauseButton(
+        playing, onClick, 56.dp, c.accent, c.onAccent,
+        playLabel = stringResource(Res.string.shell_col_play), pauseLabel = stringResource(Res.string.shell_col_pause),
+    )
 }
 
 /** Spotify's save control: an outlined plus, or a lime check once it's yours. */
@@ -1427,7 +1475,7 @@ private fun durationText(seconds: Long): String {
 
 /** Drag handle (drag to move) that also opens a move menu on tap, for keyboard and TV users. */
 @Composable
-private fun ReorderHandle(key: Any, reorder: CollectionReorder, index: Int, count: Int, onMove: (Int, Int) -> Unit) {
+internal fun ReorderHandle(key: Any, reorder: CollectionReorder, index: Int, count: Int, onMove: (Int, Int) -> Unit) {
     val c = Shell.colors
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -1465,7 +1513,7 @@ private fun ReorderHandle(key: Any, reorder: CollectionReorder, index: Int, coun
  * started once, [onMove] for every step past a neighbour, finished once on release. The dragged row
  * is drawn at the pointer ([offsetOf]) whatever the list's layout, so the parent can update async.
  */
-private class CollectionReorder(private val listState: LazyListState, private val scope: CoroutineScope) {
+internal class CollectionReorder(private val listState: LazyListState, private val scope: CoroutineScope) {
     var draggingKey by mutableStateOf<Any?>(null)
         private set
     private var top by mutableFloatStateOf(0f)

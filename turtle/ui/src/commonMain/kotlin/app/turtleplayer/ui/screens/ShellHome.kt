@@ -87,6 +87,8 @@ import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_inf_tune
 import app.turtleplayer.ui.generated.resources.shell_inf_more_genres
+import app.turtleplayer.ui.generated.resources.shell_liked_songs
+import app.turtleplayer.ui.generated.resources.shell_home_jump_back_in
 import app.turtleplayer.ui.generated.resources.shell_theme_open
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
@@ -116,6 +118,7 @@ import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
+import com.metrolist.shared.model.BuiltinPlaylist
 import com.metrolist.shared.model.PlaylistItem
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
@@ -133,8 +136,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 
-/** How many of upstream's own rows the calm Home keeps below ours. */
-private const val UPSTREAM_ROWS_ALL = 3
+/** Upstream's "Keep listening" shelf (HomeShelfBuilder), which Home shows as Spotify's "Jump back in" row. */
+private const val KEEP_LISTENING_KEY = "keep_listening"
+
+/** Shortcut tiles after Infinity and Liked Songs, so the grid stays 2×4 (4×2 when wide). */
+private const val SHORTCUT_TILES = 6
 private val MIX_TINTS = listOf(0xFFC4577A, 0xFF3E6FD8, 0xFF2E9E7A, 0xFFE8B04B, 0xFF8A4FD1, 0xFFD9704A, 0xFF2E7E9E).map { Color(it) }
 
 /** "Made for you" turns from a scrolling row into a grid of this many columns on wide desktop windows. */
@@ -153,6 +159,8 @@ private class HomeLists(
     val shortcuts: List<YTItem>,
     val shortcutSongs: List<SongItem>,
     val artUrls: List<String?>,
+    /** Recently played, as its own row under the grid (null when upstream has none or it is hidden). */
+    val jumpBackIn: HomeShelf?,
 ) {
     companion object {
         fun of(shelves: List<HomeShelf>, s: HomeUiState): HomeLists {
@@ -163,15 +171,22 @@ private class HomeLists(
                 MixEntry(shelf, songs, names, MIX_TINTS[i % MIX_TINTS.size])
             }
             val speedDial = shelves.firstOrNull { it.style == HomeShelfStyle.SPEED_DIAL }?.items.orEmpty()
+            val jumpBackIn = shelves.firstOrNull { it.key == KEEP_LISTENING_KEY && it.items.isNotEmpty() }
             val upstreamRows = shelves
-                .filter { !it.key.startsWith("turtle:") && it.style != HomeShelfStyle.SPEED_DIAL && it.items.isNotEmpty() }
+                .filter { !it.key.startsWith("turtle:") && it.style != HomeShelfStyle.SPEED_DIAL && it.items.isNotEmpty() && it !== jumpBackIn }
                 .distinctBy { it.key }
-            val shortcuts = (speedDial + s.keepListening + s.quickPicks).distinctBy { it.id }.take(7)
+            // Recents get their own row; without one (too few, or hidden in Home settings) they stay in the grid.
+            val recentIds = jumpBackIn?.items.orEmpty().mapTo(HashSet()) { it.id }
+            val pool = if (jumpBackIn != null) speedDial + s.quickPicks else speedDial + s.keepListening + s.quickPicks
+            val shortcuts = pool.distinctBy { it.id }.sortedBy { it.id in recentIds }.take(SHORTCUT_TILES)
             val artUrls = (ours.flatMap { it.items } + s.quickPicks).map { it.displayThumbnailUrl }.distinct().take(9)
-            return HomeLists(mixes, upstreamRows, shortcuts, shortcuts.filterIsInstance<SongItem>(), artUrls)
+            return HomeLists(mixes, upstreamRows, shortcuts, shortcuts.filterIsInstance<SongItem>(), artUrls, jumpBackIn)
         }
     }
 }
+
+/** The Liked Songs tile's place in the shortcut grid. */
+private object LikedSongsTile
 
 /**
  * Shell's Home, in Spotify's familiar order: filter chips, a 2×4 grid of shortcuts (Infinity Mix
@@ -232,7 +247,11 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
     // A hidden Podcasts chip (upstream's "hide podcasts" setting) falls back to All.
     val current = filter.takeUnless { it == HomeFilter.PODCASTS.ordinal && Settings.shared.hidePodcasts } ?: HomeFilter.ALL.ordinal
     LaunchedEffect(playback) { ShellSpoken.track(playback) }
-    LoadMoreNearEnd(slot, enabled = current == HomeFilter.MUSIC.ordinal)
+    // All and Music both show every upstream row, so both page in more as you near the end.
+    LoadMoreNearEnd(slot, enabled = current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal)
+    // Android's upstream scrolls Home to the top when its tab is tapped again; desktop's doesn't.
+    if (desktop) OnTabReselected("home") { slot.listState.animateScrollToItem(0) }
+    val likedTitle = stringResource(Res.string.shell_liked_songs)
 
     BoxWithConstraints(slot.modifier.fillMaxSize().background(ground)) {
         if (desktop) {
@@ -251,7 +270,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         val ui = slot.uiState
         val shelves = cache.build(ui, slot.text, maxWidth)
         val lists = remember(shelves, ui) { HomeLists.of(shelves, ui) }
-        val noContent = lists.shortcuts.isEmpty() && lists.upstreamRows.isEmpty()
+        val noContent = lists.shortcuts.isEmpty() && lists.upstreamRows.isEmpty() && lists.jumpBackIn == null
         val failed = noContent && !ui.error.isNullOrBlank()
         val waiting = noContent && !failed &&
             (ui.isLoading || ui.isContentLoading || ui.isAllContentPending || ui.isRestoringCache || (ui.data == null && ui.sections.isEmpty()))
@@ -303,12 +322,23 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             } else {
                 item(key = "shortcuts") {
                     val now = calm.value
-                    val tiles = remember(lists) { listOf<YTItem?>(null) + lists.shortcuts }
+                    // Infinity first, then Liked Songs (as in Spotify's grid), then upstream's shortcuts.
+                    val tiles = remember(lists) { listOf<Any?>(null, LikedSongsTile) + lists.shortcuts }
                     Column(Modifier.riseIn(rise, "shortcuts", 1).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         tiles.chunked(gridColumns).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 row.forEach { item ->
-                                    if (item == null) {
+                                    if (item === LikedSongsTile) {
+                                        ShortcutTile(
+                                            title = likedTitle,
+                                            art = { m -> Box(m.background(c.surface3), contentAlignment = Alignment.Center) { Glyph(Glyphs.Heart, c.accent, 24.dp) } },
+                                            playing = false,
+                                            // Upstream's opener knows its built-in playlists (Android's playlist route, desktop's openHomeItem).
+                                            onClick = { slot.onItemClick(PlaylistItem(id = BuiltinPlaylist.LIKED.id, title = likedTitle, thumbnail = null)) },
+                                            modifier = Modifier.weight(1f),
+                                            onHover = { if (it) { glowInfinity = true; glowArt = null } },
+                                        )
+                                    } else if (item !is YTItem) {
                                         val playing = infinityPlaying
                                         ShortcutTile(
                                             title = infinityTitle,
@@ -343,6 +373,13 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 }
             }
 
+            val jumpBackIn = lists.jumpBackIn
+            if (current != HomeFilter.MIXES.ordinal && jumpBackIn != null) {
+                item(key = "jump_back_in") {
+                    ItemRow(jumpBackIn, slot, wide, Modifier.riseIn(rise, "jump_back_in", 3), title = stringResource(Res.string.shell_home_jump_back_in))
+                }
+            }
+
             if (current != HomeFilter.MUSIC.ordinal && lists.mixes.isNotEmpty()) {
                 item(key = "made_for_you") {
                     Column(Modifier.riseIn(rise, "made_for_you", 3)) {
@@ -368,13 +405,12 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             }
 
             if (current != HomeFilter.MIXES.ordinal) {
-                val rows = if (current == HomeFilter.MUSIC.ordinal) lists.upstreamRows else lists.upstreamRows.take(UPSTREAM_ROWS_ALL)
-                rows.forEachIndexed { i, shelf ->
+                lists.upstreamRows.forEachIndexed { i, shelf ->
                     val key = "row:${shelf.key}"
                     item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, 4 + i)) }
                 }
                 val retry = slot.onLoadMore
-                if (current == HomeFilter.MUSIC.ordinal && ui.loadMoreError && retry != null) {
+                if (ui.loadMoreError && retry != null) {
                     item(key = "load_more_retry") {
                         Box(Modifier.fillMaxWidth().padding(top = 20.dp), contentAlignment = Alignment.Center) {
                             Text(
@@ -479,7 +515,7 @@ private fun HomeSectionTitle(title: String) {
 
 /** One of upstream's rows as Spotify-style cards: songs play in the row's context, the rest navigate. */
 @Composable
-private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean, modifier: Modifier) {
+private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean, modifier: Modifier, title: String = shelf.title) {
     val c = Shell.colors
     val playback = LocalPlaybackController.current
     val unique = remember(shelf.items) { shelf.items.distinctBy { it.id } }
@@ -488,7 +524,7 @@ private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean, modifier: M
     val art = if (wide) 168.dp else 136.dp
     Column(modifier) {
         Spacer(Modifier.height(24.dp))
-        HomeSectionTitle(shelf.title)
+        HomeSectionTitle(title)
         Spacer(Modifier.height(12.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = if (desktop) 6.dp else 16.dp), horizontalArrangement = Arrangement.spacedBy(if (desktop) 2.dp else 14.dp)) {
             items(unique, key = { it.id }) { item ->

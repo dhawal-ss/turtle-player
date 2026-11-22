@@ -196,7 +196,13 @@ class CollaborativeFilteringGenerator(
     }
 }
 
-/** New releases from artists the listener has affinity for (Release Radar style). */
+/**
+ * New releases from artists the listener has affinity for (Release Radar style).
+ *
+ * A release counts as fresh only when its [TrackMeta.releasedAtMs] falls inside the window. Sources
+ * that only know a year pass the time they first saw the release instead; a track with neither is
+ * not fresh, so an artist's back catalogue never fills the shelf.
+ */
 class FreshReleaseGenerator(
     private val releases: FreshReleaseSource,
     private val windowDays: Int = 28,
@@ -214,7 +220,7 @@ class FreshReleaseGenerator(
         val since = request.nowMs - windowDays * DAY_MS
         val maxAff = affinity.values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
         return releases.freshReleases(wanted, since, limit * 2)
-            .filter { request.allowed(it.key) && it.artistKey in wanted && (it.releasedAtMs ?: request.nowMs) >= since }
+            .filter { t -> request.allowed(t.key) && t.artistKey in wanted && t.releasedAtMs.let { it != null && it >= since } }
             .map { Candidate(it, source, Reason.FreshFrom(it.artistKey), (0.3 + 0.7 * (affinity[it.artistKey] ?: 0.0) / maxAff).toFloat()) }
             .distinctBy { it.key }
             .take(limit)

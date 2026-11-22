@@ -5,6 +5,8 @@ import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.imports.ExportFile
 import app.turtleplayer.events.imports.ListenBrainzHistoryImporter
+import app.turtleplayer.events.imports.PastPlay
+import app.turtleplayer.events.imports.PlayerHistoryImporter
 import app.turtleplayer.events.imports.SpotifyHistoryImporter
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -286,5 +288,35 @@ class HistoryImportTest {
         assertEquals(TrackKey.mbid("abc-123"), first.trackKey)
         assertTrue(first.isFinished)
         assertFalse(first.isQuickSkip)
+    }
+}
+
+class PlayerHistoryImportTest {
+    @Test
+    fun importsOnlyPlaysBeforeTurtleStartedAndOnce() = runTest {
+        val store = InMemoryPlayEventStore()
+        val t0 = 1_700_000_000_000L
+        val importer = PlayerHistoryImporter(store, LocalTimeResolver.fixedOffset())
+        val plays = listOf(
+            PastPlay(track("finished"), t0, playedMs = 190_000),
+            PastPlay(track("stopped"), t0 + 200_000, playedMs = 20_000),
+            PastPlay(track("synced"), t0 + 3 * 60 * 60_000L, playedMs = null),
+            // Recorded by Metrolist after Turtle's first play: Turtle has it already.
+            PastPlay(track("afterTurtle"), t0 + 10 * 60 * 60_000L, playedMs = 200_000),
+        )
+        val report = importer.import(plays, before = t0 + 5 * 60 * 60_000L)
+        val events = store.since(0)
+        assertEquals(listOf("yt:finished", "yt:stopped", "yt:synced"), events.map { it.trackKey.value })
+        assertEquals(1, report.rowsIgnored)
+        assertTrue(events[0].isFinished)
+        assertEquals(EndReason.STOPPED, events[1].endReason)
+        assertFalse(events[1].endReason.isSkip)
+        assertTrue(events[2].isListen && !events[2].isFinished)
+        assertEquals(events[0].sessionId, events[1].sessionId)
+        assertTrue(events[1].sessionId != events[2].sessionId)
+        assertTrue(events.all { it.source == EventSource.METROLIST_IMPORT })
+
+        importer.import(plays, before = t0 + 5 * 60 * 60_000L)
+        assertEquals(3, store.count())
     }
 }

@@ -40,6 +40,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.text.font.FontWeight
+import app.turtleplayer.ui.generated.resources.shell_dismiss
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import com.metrolist.shared.utils.sizedArtworkUrl
@@ -57,7 +70,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -280,7 +292,7 @@ fun InfinityCube(artUrls: List<String?>, playing: Boolean, modifier: Modifier = 
     }
 }
 
-/** Snackbar-style confirmation that springs up from the bottom. */
+/** Snackbar-style confirmation that springs up from the bottom; screen readers announce it politely. */
 @Composable
 fun ShellToast(message: String?, modifier: Modifier = Modifier) {
     // Keep the last text while the toast animates away, so it doesn't blank out mid-exit.
@@ -302,6 +314,109 @@ fun ShellToast(message: String?, modifier: Modifier = Modifier) {
                 Spacer(Modifier.width(12.dp))
                 Text(shown, style = Shell.type.label, color = Shell.colors.ground)
             }
+        }
+    }
+}
+
+/** One snackbar: a message and an optional action (Undo). [onDismiss] runs when it goes without its action. */
+@Stable
+class ShellSnack internal constructor(
+    val message: String,
+    val actionLabel: String?,
+    internal val onAction: (() -> Unit)?,
+    internal val onDismiss: (() -> Unit)?,
+)
+
+/**
+ * App-wide snackbar with an action (Spotify's "Removed from queue · Undo"). Any surface can [show]
+ * one; the most recently composed [ShellSnackbarHost] draws it, so it outlives the sheet or panel
+ * that asked. A new snackbar replaces the old one, which counts as dismissed.
+ */
+object ShellSnackbar {
+    var current by mutableStateOf<ShellSnack?>(null)
+        private set
+
+    internal val hosts = mutableStateListOf<Any>()
+
+    fun show(message: String, actionLabel: String? = null, onAction: (() -> Unit)? = null, onDismiss: (() -> Unit)? = null) {
+        dismiss()
+        current = ShellSnack(message, actionLabel.takeIf { onAction != null }, onAction, onDismiss)
+    }
+
+    /** Ends the snackbar showing (if [snack] is given, only when it is still that one) without its action. */
+    fun dismiss(snack: ShellSnack? = null) {
+        val shown = current ?: return
+        if (snack != null && snack !== shown) return
+        current = null
+        shown.onDismiss?.invoke()
+    }
+
+    internal fun act(snack: ShellSnack) {
+        if (current !== snack) return
+        current = null
+        snack.onAction?.invoke()
+    }
+}
+
+private const val SNACK_MS = 4_000L
+private const val SNACK_ACTION_MS = 7_000L
+
+/**
+ * Draws [ShellSnackbar] here when this is the newest host on screen. Times out after a few seconds,
+ * longer with an action and as long as the platform asks when a screen reader is on; the text is a
+ * polite live region, so it is announced without interrupting.
+ */
+@Composable
+fun ShellSnackbarHost(modifier: Modifier = Modifier) {
+    val token = remember { Any() }
+    DisposableEffect(token) {
+        ShellSnackbar.hosts.add(token)
+        onDispose { ShellSnackbar.hosts.remove(token) }
+    }
+    val active = ShellSnackbar.hosts.lastOrNull() === token
+    val snack = ShellSnackbar.current.takeIf { active }
+    val a11y = LocalAccessibilityManager.current
+    val (hover, hovered) = rememberHover()
+    LaunchedEffect(snack, hovered) {
+        if (snack == null || hovered) return@LaunchedEffect
+        val base = if (snack.actionLabel != null) SNACK_ACTION_MS else SNACK_MS
+        val timeout = a11y?.calculateRecommendedTimeoutMillis(base, containsIcons = false, containsText = true, containsControls = snack.actionLabel != null) ?: base
+        if (timeout == Long.MAX_VALUE) return@LaunchedEffect
+        delay(timeout)
+        ShellSnackbar.dismiss(snack)
+    }
+    val last = remember { arrayOf<ShellSnack?>(null) }
+    if (snack != null) last[0] = snack
+    val shown = snack ?: last[0]
+    AnimatedVisibility(
+        snack != null,
+        enter = slideInVertically(ShellMotion.spring()) { it * 2 } + fadeIn(ShellMotion.emphasized()),
+        exit = slideOutVertically(ShellMotion.exit()) { it * 2 } + fadeOut(ShellMotion.exit()),
+        modifier = modifier,
+    ) {
+        if (shown == null) return@AnimatedVisibility
+        val c = Shell.colors
+        Row(
+            Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(12.dp).shadow(8.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)).background(c.ink)
+                .hoverable(hover).padding(start = 14.dp, end = 6.dp).heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                shown.message, style = Shell.type.label, color = c.ground, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(vertical = 12.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            val action = shown.actionLabel
+            if (action != null) {
+                Text(
+                    action, style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.onAccent,
+                    modifier = Modifier.padding(start = 8.dp).clip(CircleShape).background(c.accent)
+                        .shellPressable({ ShellSnackbar.act(shown) }, focusShape = CircleShape).padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+            Box(
+                Modifier.size(40.dp).shellPressable({ ShellSnackbar.dismiss(shown) }, label = stringResource(Res.string.shell_dismiss), focusShape = CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { Glyph(Glyphs.Close, c.ground.copy(alpha = 0.7f), 12.dp) }
         }
     }
 }

@@ -6,6 +6,7 @@ import app.turtleplayer.core.HOUR_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.events.PlayContext
 import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.tanh
 
 /**
@@ -64,6 +65,13 @@ enum class Feature {
     LESS_LIKE_THIS_MARKS,
     /** Cosine to the radio seed, -1..1; 0 outside radio. */
     SEED_SIM,
+    /**
+     * How much more the listener enjoys this artist at the current time of day and day type than at
+     * other times, -1..1: tanh of the summed log lifts of [ArtistStats.context] over the listener's
+     * own [TasteProfile.context], shrunk toward 0 for artists with few (or only old) plays. 0 when the context is
+     * unknown or the artist was never enjoyed with a known context.
+     */
+    CONTEXT_AFFINITY,
 }
 
 /** Dense feature vector indexed by [Feature.ordinal]. */
@@ -95,6 +103,7 @@ class FeatureExtractor(
     private val albumHour = HashMap<String, Int>()
     private val albumDay = HashMap<String, Int>()
     private val trackDay = HashMap<TrackKey, Int>()
+    private val weekend = context?.let { it.weekday in profile.weekendDays } ?: false
 
     init {
         for (p in profile.recentPlays) {
@@ -168,6 +177,35 @@ class FeatureExtractor(
         f[Feature.RETRIEVAL] = candidate.retrieval
         f[Feature.USER_BOOST] = if (artist in controls.boostedArtists || controls.isInBoostedCluster(vector)) 1f else 0f
         f[Feature.LESS_LIKE_THIS_MARKS] = (controls.lessLikeThisArtists[artist] ?: 0).toFloat()
+        f[Feature.CONTEXT_AFFINITY] = ars?.let { contextAffinity(it.context) } ?: 0f
         return f
+    }
+
+    private fun contextAffinity(artist: ContextMix): Float {
+        val ctx = context ?: return 0f
+        val base = profile.context
+        if (artist.total <= 0.0) return 0f
+        val hour = lift(artist.hourBucket(ctx.hourBucket), artist.total, base.hourBucket(ctx.hourBucket), base.total, ContextMix.HOUR_BUCKETS)
+        val day = lift(artist.dayType(weekend), artist.total, base.dayType(weekend), base.total, 2)
+        // A single play in a bucket the listener rarely uses is a big ratio but little evidence.
+        val confidence = artist.total / (artist.total + CONTEXT_PRIOR)
+        return tanh(confidence * (hour + day)).toFloat()
+    }
+
+    /**
+     * ln(artist's share of its listening in this bucket / the listener's overall share in it).
+     * Comparing against the listener's own share keeps an evening listener's artists from all looking
+     * like evening artists. The artist share is shrunk toward the listener's by [CONTEXT_PRIOR]
+     * pseudo-plays, so an empty bucket gives a finite lift.
+     */
+    private fun lift(part: Double, whole: Double, basePart: Double, baseWhole: Double, buckets: Int): Double {
+        val baseShare = (basePart + 1.0 / buckets) / (baseWhole + 1.0)
+        val share = (part + CONTEXT_PRIOR * baseShare) / (whole + CONTEXT_PRIOR)
+        return ln(share / baseShare)
+    }
+
+    private companion object {
+        /** Pseudo-plays (in finished-play units of positive affinity) at the listener's own mix. */
+        const val CONTEXT_PRIOR = 8.0
     }
 }

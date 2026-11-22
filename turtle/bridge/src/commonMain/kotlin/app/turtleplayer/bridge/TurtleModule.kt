@@ -3,15 +3,19 @@ package app.turtleplayer.bridge
 import androidx.sqlite.SQLiteDriver
 import app.turtleplayer.core.Clock
 import app.turtleplayer.events.ListeningSessionTracker
+import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.LocalTimeResolver
 import app.turtleplayer.events.PlayEventStore
 import app.turtleplayer.events.imports.ListenBrainzHistoryImporter
+import app.turtleplayer.events.imports.PlayerHistoryImporter
 import app.turtleplayer.events.imports.SpotifyHistoryImporter
 import app.turtleplayer.search.HistoryAffinityProvider
 import app.turtleplayer.search.LocalLibrary
 import app.turtleplayer.search.SearchEngine
+import app.turtleplayer.taste.CatalogWithObserved
+import app.turtleplayer.taste.CoListeningGraph
+import app.turtleplayer.taste.CoListeningStore
 import app.turtleplayer.taste.EmbeddingStore
-import app.turtleplayer.taste.InMemoryEmbeddingStore
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
@@ -82,6 +86,7 @@ val turtleModule: Module = module {
     single { PlayerObserver(get()) }
     single { SpotifyHistoryImporter(get(), deviceTime) }
     single { ListenBrainzHistoryImporter(get(), deviceTime) }
+    single { MetrolistHistoryImport({ get<MusicDatabase>() }, get(), PlayerHistoryImporter(get(), deviceTime)) }
 
     single { SongCache() }
     single { LocalLibrary() }
@@ -89,13 +94,23 @@ val turtleModule: Module = module {
 
     single { SearchEngine(library = get(), online = YouTubeOnlineSearch(get()), affinity = HistoryAffinityProvider(get())) }
 
-    // Co-listening packs are not trained yet; until then the engine ranks on listening history alone.
-    single<EmbeddingStore> { InMemoryEmbeddingStore() }
-    single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get()), localDay = deviceDay) }
+    // Co-listening learned on device from radio pages and back-to-back plays (no downloaded packs yet).
+    single { CoListeningGraph() }
+    single { CoListeningStore(get()) }
+    single<EmbeddingStore> { get<CoListeningStore>() }
+    single { CoListeningSync(get(), get(), get(), get(), get()) }
+    single {
+        TasteEngine(
+            events = get(), store = get(), catalog = CatalogWithObserved(get<LibrarySync>(), get()),
+            freshReleases = YouTubeFreshReleases(get(), get(), get()) { get<MusicDatabase>() },
+            upstream = YouTubeRadioSource(get(), get()), localDay = deviceDay,
+            contextAt = { ms -> deviceTime.hourAndWeekday(ms).let { (hour, weekday) -> PlayContext(hour, weekday) } },
+        )
+    }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get()) }
     single { InfinityMix(get(), get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -237,6 +252,18 @@ object TurtleBridge {
 
     /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
     val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()
+
+    /**
+     * Smart Shuffle: [songs] shuffled with taste-matched recommendations mixed in (SmartShuffleBridge.kt).
+     * Takes at most about 3 s; a plain shuffle when our runtime is unavailable, slow or failing.
+     */
+    suspend fun smartShuffle(songs: List<SongItem>): List<SongItem> {
+        val r = runtime
+        val koin = GlobalContext.getOrNull()
+        if (r == null || koin == null) return songs.shuffled()
+        // Its radio calls also teach the co-listening graph.
+        return SmartShuffleBridge(koin.get(), koin.get(), r.observer, YouTubeRadioSource(koin.get(), koin.get())).shuffle(songs)
+    }
 
     /** Hook: re-rank upstream's filtered radio page with the taste engine. */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page

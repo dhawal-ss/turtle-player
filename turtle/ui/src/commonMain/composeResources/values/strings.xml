@@ -100,4 +100,9 @@
     <string name="shell_charts">Top albums</string>
     <string name="shell_community">Community playlists</string>
     <string name="shell_search_library">Search in Your Library</string>
+    <!-- Snackbars, desktop volume (Turtle Player). -->
+    <string name="shell_undo">Undo</string>
+    <string name="shell_dismiss">Dismiss</string>
+    <string name="shell_mute">Mute</string>
+    <string name="shell_unmute">Unmute</string>
 </resources>

@@ -2,6 +2,7 @@ package app.turtleplayer.taste
 
 import app.turtleplayer.core.DAY_MS
 import app.turtleplayer.core.HOUR_MS
+import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
 import kotlinx.coroutines.test.runTest
@@ -28,6 +29,15 @@ class TasteProfileTest {
         assertTrue(aff(b) > aff(a) && aff(a) > 0)
         assertTrue(aff(c) < 0 && aff(d) < aff(c))
         assertTrue(p.track(d.key)!!.lessLikeThis)
+    }
+
+    @Test
+    fun hearingOneUploadOfASongMeansHearingTheOther() {
+        val video = TrackMeta(TrackKey.youtube("vid"), "Song Name (Official Music Video)", listOf("Some Artist"))
+        val audio = TrackMeta(TrackKey.youtube("aud"), "Song Name", listOf("Some Artist"))
+        val p = TasteProfileBuilder().apply { add(play(video, now - HOUR_MS)) }.snapshot(now, null)
+        assertTrue(p.hasHeard(audio))
+        assertFalse(p.hasHeard(audio.key))
     }
 
     @Test

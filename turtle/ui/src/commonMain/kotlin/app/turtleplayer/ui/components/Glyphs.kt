@@ -84,6 +84,8 @@ object Glyphs {
     val Share = vector("share", "M12 15V4M8 8l4-4 4 4M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6", filled = false)
     val Sleep = vector("sleep", "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z", filled = false)
     val Speaker = vector("speaker", "M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM12 11a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 6.5v.5", filled = false)
+    val VolumeMuted = vector("volume_muted", "M4 9v6h4l5 4V5L8 9zM16.5 9.5l5 5M21.5 9.5l-5 5", filled = false)
+    val Drag = vector("drag", "M4 9h16M4 15h16", filled = false, stroke = 2f)
     val Together = vector("together", "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6M16 4.6a3.5 3.5 0 0 1 0 6.3M18 14.3c2.1.7 3.5 2.9 3.5 5.7", filled = false)
 }
 

@@ -81,10 +81,17 @@ class TasteEngine(
     recentlyRecommended: List<TrackKey> = emptyList(),
     /** Local calendar day (days since 1970-01-01 in the listener's time zone) of an epoch time, for shelf cadence. */
     private val localDay: (Long) -> Long = { it.floorDiv(DAY_MS) },
+    /**
+     * The listening context (local hour, weekday, device) at an epoch time, so rankings use the time
+     * now rather than the last play's. Null: the last play's context is used.
+     */
+    private val contextAt: ((Long) -> PlayContext)? = null,
 ) {
     private val mutex = Mutex()
     private val policy = ExplorationPolicy(random)
-    private val assembler = QueueAssembler(config.queueRules)
+    /** Song identities across uploads (one cache for the profile, queues and shelves). */
+    private val songs = SongKeys()
+    private val assembler = QueueAssembler(config.queueRules, songs)
 
     private val sessionGen = SessionNeighborsGenerator(store, catalog)
     private val clusterGen = TasteClusterGenerator(store, catalog)
@@ -103,7 +110,7 @@ class TasteEngine(
     /** Shelves kept for their cadence ([ShelfCadence]): the period they were built in, and the shelves. */
     private val stable = HashMap<ShelfCadence, Pair<Long, List<Shelf>>>()
 
-    private var builder = TasteProfileBuilder(config.affinity)
+    private var builder = TasteProfileBuilder(config.affinity, songs)
     private var saved: List<SavedTrack> = emptyList()
     private var clusters: List<TasteCluster> = emptyList()
     private var profile: TasteProfile = TasteProfile.empty()
@@ -139,6 +146,15 @@ class TasteEngine(
     suspend fun setSavedTracks(tracks: List<SavedTrack>) = mutex.withLock {
         if (tracks == saved) return@withLock
         saved = tracks
+        if (loaded) refreshLocked()
+    }
+
+    /**
+     * The [EmbeddingStore] changed (for example the co-listening graph was rebuilt): forgets cached
+     * vectors and recomputes the profile's taste clusters and long-term direction.
+     */
+    suspend fun embeddingsChanged() = mutex.withLock {
+        representation.clearCache()
         if (loaded) refreshLocked()
     }
 
@@ -226,13 +242,16 @@ class TasteEngine(
         source: CandidateSource = CandidateSource.UPSTREAM_RADIO,
     ): List<QueueItem> = mutex.withLock {
         ensureLoaded()
-        val unique = tracks.distinctBy { it.key }
+        // One upload per song, and never another upload of the seed itself.
+        val seedSong = songs.of(seed)
+        val unique = tracks.distinctBy { songs.of(it) }
+            .filter { songs.of(it) != seedSong }
             .filter { it.artistKey !in controls.mutedArtists && it.key !in controls.lessLikeThisTracks }
         if (unique.isEmpty()) return@withLock emptyList()
         val now = clock.nowMs()
         val skippedNow = sessionSkippedArtistsLocked(now)
         val seedVector = representation.vectorFor(seed)
-        val extractor = FeatureExtractor(profile, controls, session.vector(), now, context, seedVector)
+        val extractor = FeatureExtractor(profile, controls, session.vector(), now, contextLocked(now), seedVector)
         val reason = Reason.UpstreamRadio(seed.key)
         val scored = unique.mapIndexedNotNull { i, t ->
             val v = representation.vectorFor(t)
@@ -471,7 +490,7 @@ class TasteEngine(
     suspend fun recommendations(limit: Int, includeHeard: Boolean = true): List<ScoredCandidate> = mutex.withLock {
         ensureLoaded()
         val request = GenerationRequest(profile, controls, clock.nowMs(), sessionVector = profile.longTermVector)
-        rankLocked(autoplayCollector, request).filter { includeHeard || !profile.hasHeard(it.candidate.key) }.take(limit)
+        rankLocked(autoplayCollector, request).filter { includeHeard || !profile.hasHeard(it.candidate.track) }.take(limit)
     }
 
     // ---- Persistence ---------------------------------------------------------------------------
@@ -491,6 +510,13 @@ class TasteEngine(
 
     // ---- Internals -----------------------------------------------------------------------------
 
+    /** Context at [nowMs]: the hour and weekday now, keeping the device and network of the last play. */
+    private fun contextLocked(nowMs: Long): PlayContext? {
+        val fresh = contextAt?.invoke(nowMs) ?: return context
+        val last = context ?: return fresh
+        return fresh.copy(device = last.device, network = last.network)
+    }
+
     /** Artists quick-skipped at least twice in the last [SESSION_WINDOW_MS]: not wanted right now. */
     private fun sessionSkippedArtistsLocked(now: Long): Set<ArtistKey> =
         profile.recentPlays.asSequence()
@@ -505,7 +531,7 @@ class TasteEngine(
     private suspend fun refreshLocked() {
         val now = clock.nowMs()
         val history = events.since(now - config.historyDays * DAY_MS)
-        builder = TasteProfileBuilder(config.affinity).also { b ->
+        builder = TasteProfileBuilder(config.affinity, songs).also { b ->
             b.addAll(history)
             saved.forEach(b::addSaved)
         }
@@ -592,7 +618,7 @@ class TasteEngine(
 
     private suspend fun rankLocked(collector: CandidateCollector, request: GenerationRequest): List<ScoredCandidate> {
         val candidates = collector.collect(request)
-        val extractor = FeatureExtractor(request.profile, controls, request.sessionVector, request.nowMs, context, request.seedVector)
+        val extractor = FeatureExtractor(request.profile, controls, request.sessionVector, request.nowMs, contextLocked(request.nowMs), request.seedVector)
         return candidates.mapNotNull { c ->
             val v = representation.vectorFor(c.track)
             if (controls.isInMutedCluster(v)) return@mapNotNull null
@@ -616,7 +642,7 @@ class TasteEngine(
         head: List<QueueItem> = emptyList(),
     ): List<QueueItem> {
         val rules = config.queueRules.copy(maxPerArtist = maxPerArtist, minRepeatGapMs = 0, artistSpacing = artistSpacing)
-        return QueueAssembler(rules).assemble(
+        return QueueAssembler(rules, songs).assemble(
             head, ranked, policy.planSlots((size - head.size).coerceAtLeast(0), 1.0 - familiarShare), emptyList(), null, RecentlyRecommended(1), nowMs,
         )
     }
@@ -780,7 +806,7 @@ class TasteEngine(
     /** Never-heard candidates from the vector generators (empty without vectors or onboarding). */
     private suspend fun vectorWeeklyRankedLocked(): List<ScoredCandidate> {
         val request = GenerationRequest(profile, controls, clock.nowMs(), sessionVector = profile.longTermVector)
-        return rankLocked(discoveryCollector, request).filter { !profile.hasHeard(it.candidate.key) }
+        return rankLocked(discoveryCollector, request).filter { !profile.hasHeard(it.candidate.track) }
     }
 
     /**
@@ -794,7 +820,7 @@ class TasteEngine(
             return Shelf(id, ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, compose(vectorRanked, 0.0, 2, now))
         }
         val request = GenerationRequest(profile, controls, now, sessionVector = profile.longTermVector)
-        val ranked = rankLocked(collector(listOf(CachedRadiosGenerator(radios))), request).filter { !profile.hasHeard(it.candidate.key) }
+        val ranked = rankLocked(collector(listOf(CachedRadiosGenerator(radios))), request).filter { !profile.hasHeard(it.candidate.track) }
         val (newArtists, knownArtists) = ranked.partition { !profile.hasHeardArtist(it.track.artistKey) }
         val items = compose(newArtists + knownArtists, 0.0, 2, now, size = config.weeklyDiscoveryFallbackSize)
             .takeIf { it.size >= config.minFallbackShelfSize }.orEmpty()
@@ -820,7 +846,7 @@ class TasteEngine(
             val idx = picks.indexOfFirst { it.meta.artistKey != last }.coerceAtLeast(0)
             ordered += picks.removeAt(idx)
         }
-        val extractor = FeatureExtractor(profile, controls, profile.longTermVector, now, context)
+        val extractor = FeatureExtractor(profile, controls, profile.longTermVector, now, contextLocked(now))
         val items = ordered.map { s ->
             val c = Candidate(s.meta, CandidateSource.LIBRARY, Reason.OnRepeat, tanh(s.affinity / 3).toFloat())
             QueueItem(s.meta, c.source, c.reason, SlotKind.FAMILIAR, ranker.score(extractor.extract(c, representation.vectorFor(s.meta))))

@@ -4,6 +4,7 @@ import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.DAY_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
+import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import kotlin.math.exp
 import kotlin.math.ln
@@ -37,6 +38,11 @@ data class AffinityWeights(
     val halfLifeDays: Double = 90.0,
     /** Half-life of [TrackStats.recentFinishes], which ranks "On repeat". */
     val recentHalfLifeDays: Double = 14.0,
+    /**
+     * ISO weekdays (1 = Monday .. 7 = Sunday) that count as the weekend in [ContextMix]. Defaults to
+     * the ISO 8601 weekend; the bridge passes the listener's own weekend where it differs.
+     */
+    val weekendDays: Set<Int> = setOf(6, 7),
 ) {
     fun signal(e: PlayEvent): Double {
         var s = when {
@@ -112,6 +118,8 @@ data class ArtistStats(
     val lastPlayedMs: Long,
     /** Songs of theirs the listener saved ([SavedTrack]). */
     val savedTracks: Int = 0,
+    /** When the listener enjoys this artist: positive affinity by time of day and weekday vs weekend. */
+    val context: ContextMix = ContextMix.EMPTY,
 ) {
     val skips: SkipStats get() = SkipStats(plays, quickSkips)
 }
@@ -124,6 +132,36 @@ enum class SavedKind { LIKED, LIBRARY }
  */
 data class SavedTrack(val meta: TrackMeta, val kind: SavedKind, val atMs: Long)
 
+/**
+ * Decayed positive affinity split by when it was earned: the four [PlayContext.hourBucket]s, and
+ * weekday vs weekend ([AffinityWeights.weekendDays]). Each play counts once in each split, so both
+ * sum to [total]. Plays without a known context do not count, so [total] can be below affinity.
+ */
+class ContextMix internal constructor(private val values: DoubleArray) {
+    fun hourBucket(bucket: Int): Double = values[bucket]
+
+    val weekday: Double get() = values[WEEKDAY]
+    val weekend: Double get() = values[WEEKEND]
+    val total: Double get() = weekday + weekend
+
+    fun dayType(weekend: Boolean): Double = if (weekend) this.weekend else weekday
+
+    override fun equals(other: Any?): Boolean = other is ContextMix && values.contentEquals(other.values)
+
+    override fun hashCode(): Int = values.contentHashCode()
+
+    override fun toString(): String = "ContextMix(hours=${values.take(HOUR_BUCKETS)}, weekday=$weekday, weekend=$weekend)"
+
+    companion object {
+        const val HOUR_BUCKETS = 4
+        internal const val WEEKDAY = HOUR_BUCKETS
+        internal const val WEEKEND = HOUR_BUCKETS + 1
+        internal const val SIZE = HOUR_BUCKETS + 2
+
+        val EMPTY = ContextMix(DoubleArray(SIZE))
+    }
+}
+
 /** One recent play, kept for fatigue features and album caps. */
 data class RecentPlay(
     val track: TrackKey,
@@ -131,6 +169,8 @@ data class RecentPlay(
     val album: String?,
     val startedAtMs: Long,
     val quickSkip: Boolean,
+    /** Song identity ([SongKeys]), so another upload of a just-played song is not queued either. */
+    val song: TrackKey? = null,
 )
 
 /** One long-term taste cluster. [id] is the rank by weight (0 = biggest) and may change between rebuilds. */
@@ -160,6 +200,13 @@ class TasteProfile(
     val dislikeVector: FloatArray?,
     /** Undecayed count of finished plays; drives cold-start blending. */
     val finishedPlays: Int,
+    /** The listener's whole [ContextMix]: the baseline an artist's own mix is compared against. */
+    val context: ContextMix = ContextMix.EMPTY,
+    /** ISO weekdays that count as the weekend, from [AffinityWeights.weekendDays]. */
+    val weekendDays: Set<Int> = AffinityWeights().weekendDays,
+    /** Song identities ([SongKeys]) of every track played or saved, whichever upload it was. */
+    val heardSongs: Set<TrackKey> = emptySet(),
+    private val songKey: (TrackMeta) -> TrackKey = { it.key },
 ) {
     fun track(key: TrackKey): TrackStats? = tracks[key]
 
@@ -167,6 +214,9 @@ class TasteProfile(
 
     /** Played here, or saved: either way not news to the listener. */
     fun hasHeard(key: TrackKey): Boolean = tracks[key]?.let { it.plays > 0 || it.saved } ?: false
+
+    /** [hasHeard], also when they heard the same song as another upload (video vs. audio). */
+    fun hasHeard(track: TrackMeta): Boolean = hasHeard(track.key) || songKey(track) in heardSongs
 
     fun hasHeardArtist(key: ArtistKey): Boolean = artists[key]?.let { it.plays > 0 || it.savedTracks > 0 } ?: false
 
@@ -179,7 +229,7 @@ class TasteProfile(
         artists.values.filter { it.affinity > 0 }.sortedWith(compareByDescending<ArtistStats> { it.affinity }.thenBy { it.artist.value }).take(limit)
 
     fun copy(clusters: List<TasteCluster> = this.clusters, longTermVector: FloatArray? = this.longTermVector): TasteProfile =
-        TasteProfile(asOfMs, tracks, artists, sources, recentPlays, clusters, longTermVector, dislikeVector, finishedPlays)
+        TasteProfile(asOfMs, tracks, artists, sources, recentPlays, clusters, longTermVector, dislikeVector, finishedPlays, context, weekendDays, heardSongs, songKey)
 
     companion object {
         fun empty(nowMs: Long = 0) = TasteProfile(nowMs, emptyMap(), emptyMap(), emptyMap(), emptyList(), emptyList(), null, null, 0)
@@ -198,7 +248,10 @@ data class ClusteringConfig(
  * land after live plays): each accumulator stores its value at a reference time and decays toward
  * whichever time is later.
  */
-class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
+class TasteProfileBuilder(
+    val weights: AffinityWeights = AffinityWeights(),
+    private val songs: SongKeys = SongKeys(),
+) {
     /** [recent] decays with [AffinityWeights.recentHalfLifeDays] instead of [AffinityWeights.halfLifeDays]. */
     private class Decayed(private val recent: Boolean = false) {
         var value = 0.0
@@ -221,6 +274,33 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         fun at(nowMs: Long, w: AffinityWeights) = if (refMs == Long.MIN_VALUE) 0.0 else value * decay(nowMs - refMs, w)
     }
 
+    /** [ContextMix] counterpart of [Decayed]: one reference time for all its values. */
+    private class DecayedMix {
+        val values = DoubleArray(ContextMix.SIZE)
+        var refMs = Long.MIN_VALUE
+
+        fun add(s: Double, atMs: Long, context: PlayContext, w: AffinityWeights) {
+            var scale = 1.0
+            if (refMs == Long.MIN_VALUE) {
+                refMs = atMs
+            } else if (atMs >= refMs) {
+                val d = w.decay(atMs - refMs)
+                for (i in values.indices) values[i] *= d
+                refMs = atMs
+            } else {
+                scale = w.decay(refMs - atMs)
+            }
+            values[context.hourBucket] += s * scale
+            values[if (context.weekday in w.weekendDays) ContextMix.WEEKEND else ContextMix.WEEKDAY] += s * scale
+        }
+
+        fun at(nowMs: Long, w: AffinityWeights): ContextMix {
+            if (refMs == Long.MIN_VALUE) return ContextMix.EMPTY
+            val d = w.decay(nowMs - refMs)
+            return ContextMix(DoubleArray(values.size) { values[it] * d })
+        }
+    }
+
     private class TrackAcc(var meta: TrackMeta) {
         val affinity = Decayed()
         val recentFinishes = Decayed(recent = true)
@@ -239,6 +319,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
 
     private class ArtistAcc {
         val affinity = Decayed()
+        var context: DecayedMix? = null
         var plays = 0
         var finishes = 0
         var quickSkips = 0
@@ -250,6 +331,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
     private val artists = LinkedHashMap<ArtistKey, ArtistAcc>()
     private val sources = HashMap<CandidateSource, SkipStats>()
     private val recent = ArrayList<RecentPlay>()
+    private val context = DecayedMix()
     private var finished = 0
     private var latestMs = Long.MIN_VALUE
 
@@ -299,6 +381,12 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         if (e.isFinished) a.finishes++
         if (e.isQuickSkip) a.quickSkips++
         a.last = maxOf(a.last, e.startedAtMs)
+        // Only enjoyment counts: a skip says nothing about when the listener likes the artist.
+        val ctx = e.context
+        if (ctx != null && s > 0) {
+            (a.context ?: DecayedMix().also { a.context = it }).add(s, e.startedAtMs, ctx, weights)
+            context.add(s, e.startedAtMs, ctx, weights)
+        }
 
         SurfaceTag.parse(e.surfaceDetail)?.let { (source, _) ->
             sources[source] = (sources[source] ?: SkipStats()) + SkipStats(1, if (e.isQuickSkip) 1 else 0)
@@ -306,7 +394,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         if (e.isFinished) finished++
 
         latestMs = maxOf(latestMs, e.startedAtMs)
-        recent += RecentPlay(e.trackKey, e.artistKey, e.track.albumKey, e.startedAtMs, e.isQuickSkip)
+        recent += RecentPlay(e.trackKey, e.artistKey, e.track.albumKey, e.startedAtMs, e.isQuickSkip, songs.of(e.track))
         if (recent.size > 2 * RECENT_CAP) pruneRecent()
     }
 
@@ -347,7 +435,10 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         }
         val artistStats = LinkedHashMap<ArtistKey, ArtistStats>(artists.size * 2)
         for ((k, a) in artists) {
-            artistStats[k] = ArtistStats(k, a.affinity.at(nowMs, weights), a.plays, a.finishes, a.quickSkips, a.last, a.saved)
+            artistStats[k] = ArtistStats(
+                k, a.affinity.at(nowMs, weights), a.plays, a.finishes, a.quickSkips, a.last, a.saved,
+                a.context?.at(nowMs, weights) ?: ContextMix.EMPTY,
+            )
         }
         val recentPlays = recent.filter { it.startedAtMs in (nowMs - DAY_MS)..nowMs }.sortedBy { it.startedAtMs }
 
@@ -361,7 +452,11 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
             val negVecs = negative.mapNotNull { s -> representation.vectorFor(s.meta)?.let { it to -s.affinity } }
             dislike = weightedMeanDirection(negVecs.map { it.first }, negVecs.map { it.second }, representation.dim)
         }
-        return TasteProfile(nowMs, trackStats, artistStats, sources.toMap(), recentPlays, clusters, longTerm, dislike, finished)
+        return TasteProfile(
+            nowMs, trackStats, artistStats, sources.toMap(), recentPlays, clusters, longTerm, dislike, finished,
+            context.at(nowMs, weights), weights.weekendDays,
+            tracks.values.filter { it.plays > 0 || it.savedAt != null }.mapTo(HashSet()) { songs.of(it.meta) }, songs::of,
+        )
     }
 
     /** Full rebuild: snapshot plus 1..8 taste clusters over affinity-weighted track vectors. */
@@ -370,7 +465,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         val clusters = computeClusters(base, representation, config)
         return TasteProfile(
             base.asOfMs, base.tracks, base.artists, base.sources, base.recentPlays, clusters,
-            base.longTermVector, base.dislikeVector, base.finishedPlays,
+            base.longTermVector, base.dislikeVector, base.finishedPlays, base.context, base.weekendDays, base.heardSongs, songs::of,
         )
     }
 

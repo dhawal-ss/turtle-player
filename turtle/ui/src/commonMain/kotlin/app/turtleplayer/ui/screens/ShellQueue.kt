@@ -8,6 +8,7 @@ import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.playback.PlaybackUiState
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -26,6 +27,7 @@ object ShellQueue {
     fun play(controller: PlaybackController, songs: List<SongItem>, title: String, startIndex: Int = 0, sourceId: String? = null) {
         val first = songs.getOrNull(startIndex) ?: return
         anchor = Anchor(first.id, title, sourceId)
+        source = null
         controller.playQueue(songs, startIndex, queueTitle = title)
     }
 
@@ -36,6 +38,66 @@ object ShellQueue {
 
     /** The id of the library item the Shell-started queue came from, while it is still playing. */
     fun activeSourceId(state: PlaybackUiState): String? = active(state)?.sourceId
+
+    private class Source(val id: String, val songIds: Set<String>)
+
+    private var source by mutableStateOf<Source?>(null)
+
+    /** Remembers that a playlist or album page started (or shuffled) [songs], for its play/pause button. */
+    fun markSource(id: String, songs: List<SongItem>) {
+        source = Source(id, songs.mapTo(HashSet()) { it.id })
+    }
+
+    /**
+     * True while the queue playing came from the collection [id] holding [songs]: the page started it
+     * and one of its songs is on, or (started elsewhere) the queue opens with that collection's songs.
+     */
+    fun isSourceActive(id: String, songs: List<SongItem>, state: PlaybackUiState): Boolean {
+        val currentId = state.currentSong?.id ?: return false
+        source?.let { s -> if (s.id == id) return currentId in s.songIds }
+        if (songs.none { it.id == currentId }) return false
+        val ids = songs.mapTo(HashSet()) { it.id }
+        val head = state.queue.take(songs.size)
+        return head.isNotEmpty() && head.count { it.id in ids } * 10 >= head.size * 9
+    }
+}
+
+/** How to take back a queue removal: [restore] puts the songs back, [discard] lets the undo go. */
+internal class QueueUndo(val restore: () -> Unit, val discard: () -> Unit = {})
+
+/** Queue edits Shell's queue surfaces make on this platform; a null [reorder] hides drag to reorder. */
+internal class ShellQueueEditor(
+    /** Removes these queue indices; null when nothing was removed. */
+    val remove: (Set<Int>) -> QueueUndo?,
+    /** The whole queue in a new order (old index at each position); false when the platform refused. */
+    val reorder: ((List<Int>) -> Boolean)?,
+)
+
+/**
+ * Desktop's undo for a queue removal: upstream exposes no restore there, so the songs go back on the
+ * end of the queue and are then moved to where they were.
+ */
+internal object ShellQueueRestore {
+    private val scope = kotlinx.coroutines.MainScope()
+
+    fun reinsert(controller: PlaybackController, original: List<SongItem>, removed: List<Pair<Int, SongItem>>) {
+        scope.launch {
+            val before = controller.state.value.queue
+            // Only songs actually gone: the platform may have refused the removal (locked queue).
+            val missing = removed.filter { (_, song) -> before.count { it.id == song.id } < original.count { it.id == song.id } }
+            if (missing.isEmpty()) return@launch
+            controller.addToQueue(missing.map { it.second })
+            val after = kotlinx.coroutines.withTimeoutOrNull(RESTORE_WAIT_MS) {
+                controller.state.first { it.queue.size >= before.size + missing.size }
+            }?.queue ?: return@launch
+            if (after.size != before.size + missing.size) return@launch
+            val order = before.indices.toMutableList()
+            missing.forEachIndexed { k, (index, _) -> order.add(index.coerceIn(0, order.size), before.size + k) }
+            controller.reorderQueue(order)
+        }
+    }
+
+    private const val RESTORE_WAIT_MS = 2_000L
 }
 
 private fun PlaybackUiState.calm() = copy(

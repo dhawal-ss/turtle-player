@@ -45,6 +45,7 @@ kotlin {
             api("app.turtleplayer:turtle-taste")
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
+            implementation(libs.kotlinx.serialization.json)
             implementation(libs.koin.core)
             // androidx.sqlite connection API for our own database (no Room code generation needed).
             implementation(libs.room.runtime)

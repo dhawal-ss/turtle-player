@@ -47,12 +47,14 @@ class YouTubeOnlineSearch(
 /** YouTube's radio for a track: one candidate source for the taste engine, never the ranker. */
 class YouTubeRadioSource(
     private val cache: SongCache,
+    private val coListening: CoListeningSync? = null,
     private val repository: () -> YouTubeRepository = { GlobalYouTubeRepository.instance },
 ) : RecommendationSource {
     override suspend fun related(seed: TrackMeta, limit: Int): List<TrackMeta> {
         val videoId = seed.youtubeId ?: return emptyList()
         val songs = repository().startRadio(videoId).filter { it.id != videoId }
         cache.putAll(songs)
+        coListening?.observeRadio(seed, songs)
         return songs.take(limit).map { it.toTrackMeta() }
     }
 }

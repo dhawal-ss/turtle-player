@@ -71,7 +71,7 @@ class RecentlyRecommended(val capacity: Int = 500) {
  * spacing, album caps and no-repeat rules. Rules are never relaxed: when nothing fits, the queue
  * is shorter rather than repetitive.
  */
-class QueueAssembler(val rules: QueueRules = QueueRules()) {
+class QueueAssembler(val rules: QueueRules = QueueRules(), private val songs: SongKeys = SongKeys()) {
     /**
      * @param frozen items kept as-is at the head (already validated when they were chosen).
      * @param ranked candidates, best first.
@@ -94,7 +94,13 @@ class QueueAssembler(val rules: QueueRules = QueueRules()) {
         val used = HashSet<TrackKey>()
         frozen.forEach { used += it.key }
         nowPlaying?.let { used += it.key }
-        val playedRecently = history.filter { nowMs - it.startedAtMs < rules.minRepeatGapMs }.map { it.track }.toSet()
+        // The same song under another upload id counts as the same song for every rule below.
+        val usedSongs = HashSet<TrackKey>()
+        frozen.forEach { usedSongs += songs.of(it.track) }
+        nowPlaying?.let { usedSongs += songs.of(it) }
+        val recentPlays = history.filter { nowMs - it.startedAtMs < rules.minRepeatGapMs }
+        val playedRecently = recentPlays.map { it.track }.toSet()
+        val playedRecentlySongs = recentPlays.mapNotNull { it.song }.toSet()
 
         // Artists of the last plays (within an hour, so yesterday's last track does not count), then now playing.
         val leadArtists = ArrayList<ArtistKey>()
@@ -120,6 +126,8 @@ class QueueAssembler(val rules: QueueRules = QueueRules()) {
         fun fits(c: ScoredCandidate, start: Long): Boolean {
             val key = c.candidate.key
             if (key in used || key in taken || key in playedRecently) return false
+            val song = songs.of(c.track)
+            if (song in usedSongs || song in playedRecentlySongs) return false
             if (key in recent && key !in allowAgain) return false
             val artist = c.track.artistKey
             val tail = (leadArtists + queue.map { it.track.artistKey }).takeLast(rules.artistSpacing)
@@ -141,6 +149,7 @@ class QueueAssembler(val rules: QueueRules = QueueRules()) {
             val item = QueueItem.of(pick)
             queue += item
             taken += item.key
+            usedSongs += songs.of(item.track)
             item.track.albumKey?.let { albumTimes += cursor to it }
             cursor += item.track.durationMs ?: rules.defaultDurationMs
         }

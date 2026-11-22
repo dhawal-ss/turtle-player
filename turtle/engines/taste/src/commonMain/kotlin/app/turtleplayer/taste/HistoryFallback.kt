@@ -77,7 +77,7 @@ class LibraryGenerator(
         val out = ArrayList<Candidate>()
         for (s in liked) if (s.meta.artistKey == artist) out += Candidate(s.meta, source, reasonFor(s), tanh(s.affinity / 3).toFloat())
         catalog.tracksByArtist(artist, catalogTracks)
-            .filter { request.allowed(it.key) && !profile.hasHeard(it.key) }
+            .filter { request.allowed(it.key) && !profile.hasHeard(it) }
             .forEachIndexed { i, t -> out += Candidate(t, source, reason, 0.5f - 0.01f * i) }
         val related = radios.cached(seed.key).mapTo(HashSet()) { it.artistKey } - artist
         for (s in liked) if (s.meta.artistKey in related) out += Candidate(s.meta, source, reasonFor(s), 0.8f * tanh(s.affinity / 3).toFloat())

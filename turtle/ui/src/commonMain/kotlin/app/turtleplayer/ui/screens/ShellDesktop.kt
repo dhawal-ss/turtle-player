@@ -71,6 +71,7 @@ import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.ShellChip
+import app.turtleplayer.ui.components.ShellSnackbarHost
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.ShellToast
 import app.turtleplayer.ui.components.shellPressable
@@ -197,6 +198,8 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
                 // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
                 ExploreOverlay()
+                // Snackbars (queue undo, likes) rise over the bottom of the page, above the player bar.
+                ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
             }
             AnimatedVisibility(
                 showNowPlaying,
@@ -234,7 +237,10 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
             slot.items.forEachIndexed { i, item ->
                 if (i == libraryIndex) return@forEachIndexed
                 val selected = !explore && i == slot.selectedIndex
-                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; slot.onSelect(i) }
+                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) {
+                    if (selected) ShellReselect.fire(item.key)
+                    ShellDesktop.explore = false; slot.onSelect(i)
+                }
                 if (item.key.equals("home", ignoreCase = true)) {
                     NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.explore = true }
                 }
@@ -455,7 +461,19 @@ private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, playing: Boolean
 @Composable
 private fun rememberDesktopServices(library: DesktopLibrarySlot): ShellPlayerServices? {
     val extras = TurtleUiSlots.desktopExtras ?: return null
-    return remember(extras, library) {
+    val controller = LocalPlaybackController.current
+    return remember(extras, library, controller) {
+        // Removal goes through hook #30 (the controller's index removal is a no-op on desktop); undo re-adds.
+        val editor = ShellQueueEditor(
+            remove = remove@{ indices ->
+                val original = controller.state.value.queue
+                val removed = indices.filter { it in original.indices }.sorted().map { it to original[it] }
+                if (removed.isEmpty()) return@remove null
+                removed.asReversed().forEach { (index, _) -> extras.removeQueueIndex(index) }
+                QueueUndo(restore = { ShellQueueRestore.reinsert(controller, original, removed) })
+            },
+            reorder = controller::reorderQueue,
+        )
         ShellPlayerServices(
             lyrics = extras.lyrics,
             lyricsLoading = extras.lyricsLoading,
@@ -471,6 +489,7 @@ private fun rememberDesktopServices(library: DesktopLibrarySlot): ShellPlayerSer
             startSleepTimer = extras.startSleepTimer,
             cancelSleepTimer = extras.cancelSleepTimer,
             sleepTimerActive = extras.sleepTimerActive,
+            queueEditor = editor,
         )
     }
 }
@@ -576,7 +595,7 @@ private fun NowPlayingContent(song: SongItem, state: com.metrolist.shared.ui.pla
                 GlyphButton(Glyphs.Less, stringResource(Res.string.shell_less_like_this), {
                     ShellActions.lessLikeThis(controller, song)
                 }, c.ink2, size = 36.dp, iconSize = 20.dp)
-                LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+                LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp, onToggled = rememberLikeSnackbar(song))
             }
         }
         SpokenWordControls(song = song, controller = controller, modifier = Modifier.fillMaxWidth())

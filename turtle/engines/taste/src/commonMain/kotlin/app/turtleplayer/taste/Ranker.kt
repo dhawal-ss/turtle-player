@@ -19,8 +19,9 @@ interface Ranker {
  * and to long-term taste dominates; heard-before affinity rewards favourites; skip history,
  * fatigue and "less like this" push down; popularity is a small tie-breaker (personal over popular).
  *
- * Context features (hour, weekday, device) carry weight 0: they only help through interactions
- * with taste, which a linear model cannot express. The tree model will use them.
+ * Raw context features (hour, weekday, device) carry weight 0: they only help through interactions
+ * with taste, which a linear model cannot express. The tree model will use them. CONTEXT_AFFINITY
+ * is that interaction precomputed per artist, so it gets a modest weight here.
  */
 class HandTunedRanker(
     private val weights: Map<Feature, Float> = DEFAULT_WEIGHTS,
@@ -75,6 +76,9 @@ class HandTunedRanker(
             Feature.LESS_LIKE_THIS_MARKS to -0.7f,
             // Radio: the listener asked for this seed, so closeness to it outweighs general taste.
             Feature.SEED_SIM to 3.5f,
+            // When the listener plays this artist: reorders within taste (at most +-0.3), never above
+            // a clear affinity gap, skip history or a "less like this" mark (-0.7).
+            Feature.CONTEXT_AFFINITY to 0.3f,
             // Context, categorical and missing-value sentinels: tree model only.
             Feature.HOUR_BUCKET to 0f,
             Feature.WEEKDAY to 0f,

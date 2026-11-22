@@ -7,4 +7,5 @@
     <string name="shell_home_infinity_empty">Infinity needs a few plays first. Search for something you love.</string>
     <string name="shell_explore_loading">Loading Explore</string>
     <string name="shell_explore_offline">Explore needs a connection. It fills in when you’re back online.</string>
+    <string name="shell_home_jump_back_in">Jump back in</string>
 </resources>

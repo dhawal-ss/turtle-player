@@ -39,6 +39,8 @@ class TurtleRuntime(
     private val home: TurtleHomeShelves,
     private val store: SqlitePlayEventStore,
     val infinity: InfinityMix,
+    private val coListening: CoListeningSync,
+    private val history: MetrolistHistoryImport,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -53,9 +55,12 @@ class TurtleRuntime(
             restoreTasteState()
             restoreDiscoveryDial()
             infinity.restore()
+            // Before the first profile build, so a listener coming from Metrolist is not cold.
+            runCatching { history.runOnce() }.onFailure { if (it is CancellationException) throw it else TurtleLog.error("history import failed", it) }
             runCatching { taste.refresh() }
         }
         taste.observe(scope)
+        coListening.start(scope, taste)
         // Finishes and quick skips of Infinity songs tune their genre without a tap; every play also
         // moves the exploration state, which is saved with the listener's controls.
         scope.launch {
@@ -110,6 +115,7 @@ class TurtleRuntime(
             val seed = observer.currentSong() ?: page.songs.first()
             val result = withTimeoutOrNull(RANK_TIMEOUT_MS) {
                 cache.putAll(page.songs)
+                coListening.observeRadio(seed.toTrackMeta(), page.songs)
                 val byId = page.songs.associateBy { it.id }
                 val ranked = taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() })
                 val ordered = ranked.mapNotNull { item ->

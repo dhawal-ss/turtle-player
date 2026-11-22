@@ -39,6 +39,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.shellPressable
+import app.turtleplayer.ui.components.ShellSnackbarHost
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellTheme
@@ -87,6 +96,7 @@ private fun BottomTabs(slot: NavigationSlot) {
     InfinitySheetHost()
     val density = LocalDensity.current
     LaunchedEffect(slot.navigationVisible) { if (!slot.navigationVisible) slot.onOccupiedHeightChanged(0.dp) }
+    var barHeight by remember { mutableStateOf<Dp>(0.dp) }
     val bar: @Composable (Modifier) -> Unit = { modifier ->
         AnimatedVisibility(
             slot.navigationVisible,
@@ -96,7 +106,7 @@ private fun BottomTabs(slot: NavigationSlot) {
         ) {
             // Report the full height, system navigation bar included, so the mini player sits above the tabs.
             Row(
-                Modifier.fillMaxWidth().onSizeChanged { with(density) { slot.onOccupiedHeightChanged(it.height.toDp()) } }
+                Modifier.fillMaxWidth().onSizeChanged { with(density) { barHeight = it.height.toDp(); slot.onOccupiedHeightChanged(barHeight) } }
                     // Content fades out behind the mini player above the tabs, as in Spotify.
                     .drawBehind {
                         val fade = 88.dp.toPx()
@@ -114,7 +124,7 @@ private fun BottomTabs(slot: NavigationSlot) {
                     // A soft pill grows behind the selected glyph (H-Motion 07); lime stays for "yours / now".
                     val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label, selected = selected),
+                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ selectTab(slot, i) }, Role.Tab, item.label, selected = selected),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -132,20 +142,69 @@ private fun BottomTabs(slot: NavigationSlot) {
             }
         }
     }
+    // Snackbars sit above the mini player and the tabs (or the gesture area where the tabs are hidden).
+    val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val mini = if (rememberHasSong()) MiniPlayerClearance else 0.dp
     if (slot.floating) {
         Box(slot.modifier.fillMaxSize()) {
             SlotContent(slot)
             HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
             bar(Modifier.align(Alignment.BottomCenter))
+            ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = (if (slot.navigationVisible) barHeight else navInset) + mini))
         }
     } else {
         Column(slot.modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
                 SlotContent(slot)
                 HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
+                ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = (if (slot.navigationVisible) 0.dp else navInset) + mini))
             }
             bar(Modifier)
         }
+    }
+}
+
+/** Room the mini player takes above the tabs, so a snackbar never covers it. */
+private val MiniPlayerClearance = 72.dp
+
+@Composable
+private fun rememberHasSong(): Boolean {
+    val controller = com.metrolist.shared.ui.playback.LocalPlaybackController.current
+    val list by controller.listState.collectAsState(null)
+    return list?.currentSongId != null
+}
+
+/** Selects a tab; tapping the tab already showing also asks its page to scroll back to the top. */
+private fun selectTab(slot: NavigationSlot, index: Int) {
+    if (index == slot.selectedIndex) slot.items.getOrNull(index)?.let { ShellReselect.fire(it.key) }
+    slot.onSelect(index)
+}
+
+/**
+ * "Tab tapped again". Upstream scrolls Home and Library to the top on Android itself; pages that own
+ * their scroll elsewhere (Search, desktop Home) listen with [OnTabReselected].
+ */
+internal object ShellReselect {
+    class Event(val seq: Long, val key: String)
+
+    var event by mutableStateOf(Event(0L, ""))
+        private set
+
+    fun fire(key: String) {
+        event = Event(event.seq + 1, key.substringAfterLast('.').lowercase())
+    }
+}
+
+/** Runs [onReselect] when the tab whose key starts with [keyPrefix] is tapped again while showing. */
+@Composable
+internal fun OnTabReselected(keyPrefix: String, onReselect: suspend () -> Unit) {
+    var seen by rememberSaveable { mutableLongStateOf(ShellReselect.event.seq) }
+    val event = ShellReselect.event
+    val action by rememberUpdatedState(onReselect)
+    LaunchedEffect(event) {
+        if (event.seq <= seen) return@LaunchedEffect
+        seen = event.seq
+        if (event.key.startsWith(keyPrefix)) action()
     }
 }
 
@@ -163,7 +222,7 @@ private fun Rail(slot: NavigationSlot) {
                     val bg by animateColorAsState(if (selected) c.accent else c.ground, ShellMotion.emphasized())
                     val fg by animateColorAsState(if (selected) c.onAccent else c.ink2, ShellMotion.emphasized())
                     Column(
-                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label, selected = selected),
+                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ selectTab(slot, i) }, Role.Tab, item.label, selected = selected),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -176,7 +235,13 @@ private fun Rail(slot: NavigationSlot) {
                 slot.footer?.invoke()
             }
         }
-        Box(Modifier.weight(1f).fillMaxHeight()) { SlotContent(slot) }
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            SlotContent(slot)
+            ShellSnackbarHost(
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (rememberHasSong()) MiniPlayerClearance else 0.dp),
+            )
+        }
     }
 }
 

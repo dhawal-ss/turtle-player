@@ -117,4 +117,20 @@ class QueueAssemblerTest {
         assertEquals(8, q.size)
         assertSpacing(q)
     }
+
+    @Test
+    fun anotherUploadOfTheSameSongIsNeverQueuedTwiceOrAfterItself() {
+        val video = TrackMeta(TrackKey.youtube("vid"), "Blinding Lights (Official Video)", listOf("The Weeknd"), durationMs = 200_000)
+        val audio = TrackMeta(TrackKey.youtube("aud"), "Blinding Lights", listOf("The Weeknd"), durationMs = 200_000)
+        val live = TrackMeta(TrackKey.youtube("live"), "Blinding Lights (Live)", listOf("The Weeknd"), durationMs = 200_000)
+        val others = world.artists.take(6).map { scored(world.tracksOf(it)[0], 0.4f) }
+        val rules = QueueRules(artistSpacing = 0)
+
+        val q = QueueAssembler(rules).assemble(emptyList(), listOf(scored(video, 0.9f), scored(audio, 0.8f), scored(live, 0.7f)) + others, familiarSlots(8), emptyList(), null, RecentlyRecommended(), now)
+        assertEquals(1, q.count { it.key == video.key || it.key == audio.key }, "one upload of the song: ${q.map { it.track.title }}")
+        assertTrue(q.any { it.key == live.key }, "a live version is a different song")
+
+        val afterItself = QueueAssembler(rules).assemble(emptyList(), listOf(scored(audio, 0.9f)) + others, familiarSlots(4), emptyList(), video, RecentlyRecommended(), now)
+        assertTrue(afterItself.none { it.key == audio.key })
+    }
 }

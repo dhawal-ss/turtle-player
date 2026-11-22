@@ -63,6 +63,12 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             connection.execSQL(eventTable("open_play"))
             connection.execSQL("PRAGMA user_version = 3")
         }
+        if (version < 4) {
+            // The co-listening graph: artist links and the songs seen per artist (as upstream's SongItem JSON).
+            connection.execSQL("CREATE TABLE IF NOT EXISTS artist_link (a TEXT NOT NULL, b TEXT NOT NULL, w REAL NOT NULL, PRIMARY KEY (a, b))")
+            connection.execSQL("CREATE TABLE IF NOT EXISTS observed_song (id TEXT PRIMARY KEY, json TEXT NOT NULL)")
+            connection.execSQL("PRAGMA user_version = 4")
+        }
     }
 
     private fun eventTable(name: String) =
@@ -117,6 +123,57 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             it.step()
         }
         Unit
+    }
+
+    /** Replaces the saved co-listening graph: artist links (a, b, weight) and songs (id, JSON). */
+    suspend fun saveCoListening(links: List<Triple<String, String, Float>>, songs: List<Pair<String, String>>) = db {
+        transaction {
+            connection.execSQL("DELETE FROM artist_link")
+            connection.execSQL("DELETE FROM observed_song")
+            connection.prepare("INSERT OR REPLACE INTO artist_link (a, b, w) VALUES (?, ?, ?)").use { s ->
+                for ((a, b, w) in links) {
+                    s.bindText(1, a)
+                    s.bindText(2, b)
+                    s.bindDouble(3, w.toDouble())
+                    s.step()
+                    s.reset()
+                }
+            }
+            connection.prepare("INSERT OR REPLACE INTO observed_song (id, json) VALUES (?, ?)").use { s ->
+                for ((id, json) in songs) {
+                    s.bindText(1, id)
+                    s.bindText(2, json)
+                    s.step()
+                    s.reset()
+                }
+            }
+        }
+    }
+
+    /** The saved co-listening graph: artist links and song JSON. */
+    suspend fun loadCoListening(): Pair<List<Triple<String, String, Float>>, List<String>> = db {
+        val links = connection.prepare("SELECT a, b, w FROM artist_link").use { s ->
+            val out = ArrayList<Triple<String, String, Float>>()
+            while (s.step()) out += Triple(s.getText(0), s.getText(1), s.getDouble(2).toFloat())
+            out
+        }
+        val songs = connection.prepare("SELECT json FROM observed_song").use { s ->
+            val out = ArrayList<String>()
+            while (s.step()) out += s.getText(0)
+            out
+        }
+        links to songs
+    }
+
+    private fun transaction(block: () -> Unit) {
+        connection.execSQL("BEGIN")
+        try {
+            block()
+            connection.execSQL("COMMIT")
+        } catch (t: Throwable) {
+            connection.execSQL("ROLLBACK")
+            throw t
+        }
     }
 
     override suspend fun save(play: PlayEvent?) = db {
@@ -180,6 +237,14 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             it.step()
         }
         Unit
+    }
+
+    /** When the first play from [source] started, or null without any. */
+    suspend fun firstStartedAt(source: EventSource): Long? = db {
+        connection.prepare("SELECT MIN(started_at_ms) FROM play_event WHERE source = ?").use {
+            it.bindText(1, source.name)
+            if (it.step() && !it.isNull(0)) it.getLong(0) else null
+        }
     }
 
     override suspend fun count(): Long = db {

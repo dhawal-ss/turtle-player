@@ -1,6 +1,38 @@
 package app.turtleplayer.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import app.turtleplayer.ui.components.ShellSnackbar
+import app.turtleplayer.ui.generated.resources.shell_col_move_down
+import app.turtleplayer.ui.generated.resources.shell_col_move_up
+import app.turtleplayer.ui.generated.resources.shell_np_queue_clear
+import app.turtleplayer.ui.generated.resources.shell_np_queue_cleared
+import app.turtleplayer.ui.generated.resources.shell_np_queue_removed
+import app.turtleplayer.ui.generated.resources.shell_undo
+import app.turtleplayer.ui.theme.ShellPlatform
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -115,6 +147,8 @@ internal class ShellPlayerServices(
     val startSleepTimer: (durationMs: Long, endOfSong: Boolean) -> Unit,
     val cancelSleepTimer: () -> Unit,
     val sleepTimerActive: () -> Boolean,
+    /** Queue edits (remove with undo, reorder) this platform supports; null hides them. */
+    val queueEditor: ShellQueueEditor? = null,
 )
 
 /** The player surface showing over (phone) or beside (desktop) Now Playing. */
@@ -124,7 +158,7 @@ internal enum class PlayerSurface { LYRICS, QUEUE, MORE, SLEEP, DEVICES }
 // Queue
 // ---------------------------------------------------------------------------------------------
 
-/** Now playing on top, then what plays next; tap to jump, ✕ to remove. */
+/** Now playing on top, then what plays next: tap to jump, drag the handle to reorder, swipe or ✕ to remove. */
 @Composable
 internal fun ShellQueueList(
     state: PlaybackUiState,
@@ -137,69 +171,215 @@ internal fun ShellQueueList(
     val queue = state.queue
     val current = state.currentQueueIndex
     val listState = rememberLazyListState()
+    val editor = services.queueEditor
+    val upcoming = remember(queue, current) { if (current >= 0) (current + 1 until queue.size).toList() else queue.indices.toList() }
+    val played = remember(queue, current) { if (current >= 0) (0..current.coerceAtMost(queue.lastIndex)).toList() else emptyList() }
+
+    // While a drag runs, and until the platform applies it, rows show in the order being built.
+    var localOrder by remember { mutableStateOf<List<Int>?>(null) }
+    var localFor by remember { mutableStateOf<List<SongItem>?>(null) }
+    val shown = localOrder?.takeIf { localFor == queue && it.size == upcoming.size && it.toSet() == upcoming.toSet() } ?: upcoming
+    // Keyed by song id and its occurrence, not position, so rows below a removal or move keep their keys.
+    val rowKeys = remember(shown, queue) {
+        val seen = HashMap<String, Int>()
+        shown.map { index ->
+            val id = queue[index].id
+            val n = seen[id] ?: 0
+            seen[id] = n + 1
+            "q-$id-$n"
+        }
+    }
+
+    val removedText = stringResource(Res.string.shell_np_queue_removed)
+    val clearedText = stringResource(Res.string.shell_np_queue_cleared)
+    val undoText = stringResource(Res.string.shell_undo)
+    fun remove(indices: Set<Int>, message: String): Boolean {
+        val edit = editor ?: return false
+        // Settle the last undo first: the platforms keep one pending undo at a time.
+        ShellSnackbar.dismiss()
+        val undo = edit.remove(indices) ?: return false
+        ShellSnackbar.show(message, undoText, onAction = undo.restore, onDismiss = undo.discard)
+        return true
+    }
+    fun commit(order: List<Int>) {
+        val apply = editor?.reorder
+        if (apply == null || order == upcoming || !apply(played + order)) {
+            localOrder = null
+            return
+        }
+        localOrder = order
+        localFor = queue
+    }
+
+    val scope = rememberCoroutineScope()
+    val edgePx = with(LocalDensity.current) { 64.dp.toPx() }
+    val reorder = remember(listState) { CollectionReorder(listState, scope) }
+    SideEffect {
+        reorder.update(
+            rowKeys,
+            { from, to ->
+                localOrder = shown.moved(from, to)
+                localFor = queue
+            },
+            {
+                localOrder = shown
+                localFor = queue
+            },
+            { localOrder?.let(::commit) },
+            edgePx,
+        )
+    }
+
     LazyColumn(modifier, state = listState, contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         val now = queue.getOrNull(current)
         if (now != null) {
             item(key = "now-label") { IndexLabel(stringResource(Res.string.shell_np_now_playing), Modifier.padding(vertical = 8.dp)) }
             item(key = "now-$current") { QueueRow(now, playing = true, isPlaying = state.isPlaying, onClick = controller::togglePlayPause, onRemove = null) }
         }
-        val upcoming = if (current >= 0) (current + 1 until queue.size).toList() else queue.indices.toList()
         item(key = "next-label") {
             // Spicetify's "queue time": how long what is queued will play.
             val totalSec = upcoming.sumOf { queue[it].duration ?: 0L }
             Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.weight(1f))
                 if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, queueLength(totalSec)))
+                if (editor != null && upcoming.isNotEmpty()) {
+                    Text(
+                        stringResource(Res.string.shell_np_queue_clear), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink,
+                        modifier = Modifier.padding(start = 12.dp).clip(CircleShape).background(c.ink.copy(alpha = 0.1f))
+                            .shellPressable({ remove(upcoming.toSet(), clearedText) }, focusShape = CircleShape).padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
         if (upcoming.isEmpty()) {
             item(key = "empty") { Text(stringResource(Res.string.shell_np_queue_empty), style = Shell.type.bodySmall, color = c.ink2) }
         }
-        // Keyed by song id and its occurrence, not position, so rows below a removal keep their keys.
-        val seen = HashMap<String, Int>()
-        val keys = upcoming.map { index ->
-            val id = queue[index].id
-            val n = seen[id] ?: 0
-            seen[id] = n + 1
-            "q-$id-$n"
-        }
-        itemsIndexed(upcoming, key = { pos, _ -> keys[pos] }) { _, index ->
+        itemsIndexed(shown, key = { i, _ -> rowKeys[i] }) { position, index ->
+            val key = rowKeys[position]
+            val dragging = reorder.draggingKey == key
+            val canReorder = editor?.reorder != null
             QueueRow(
                 queue[index], playing = false, isPlaying = false,
                 onClick = { controller.playQueueIndex(index) },
-                onRemove = services.removeQueueIndex?.let { remove -> { remove(index) } },
-                modifier = Modifier.animateItem(),
+                onRemove = if (editor != null) ({ remove(setOf(index), removedText) }) else null,
+                onMove = if (canReorder) ({ to: Int -> commit(shown.moved(position, to)) }) else null,
+                position = position,
+                count = shown.size,
+                handle = if (canReorder) ({ ReorderHandle(key, reorder, position, shown.size) { from, to -> commit(shown.moved(from, to)) } }) else null,
+                modifier = if (dragging) Modifier.zIndex(1f).graphicsLayer { translationY = reorder.offsetOf(key) } else Modifier.animateItem(fadeInSpec = null),
             )
         }
     }
 }
 
+private fun List<Int>.moved(from: Int, to: Int): List<Int> =
+    if (from !in indices || to !in indices) this else toMutableList().apply { add(to, removeAt(from)) }
+
 @Composable
-private fun QueueRow(song: SongItem, playing: Boolean, isPlaying: Boolean, onClick: () -> Unit, onRemove: (() -> Unit)?, modifier: Modifier = Modifier) {
+private fun QueueRow(
+    song: SongItem,
+    playing: Boolean,
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    onRemove: (() -> Boolean)?,
+    modifier: Modifier = Modifier,
+    onMove: ((Int) -> Unit)? = null,
+    position: Int = 0,
+    count: Int = 0,
+    handle: (@Composable () -> Unit)? = null,
+) {
     val c = Shell.colors
     val (source, hovered) = rememberHover()
     val bg by animateColorAsState(if (hovered) c.ink.copy(alpha = 0.08f) else Color.Transparent, ShellMotion.emphasized())
-    Row(
-        modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(source)
-            .shellPressable(onClick, label = song.title).padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ShellArt(song.displayThumbnailUrl, Modifier.size(44.dp), shape = RoundedCornerShape(4.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(song.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            // Infinity Mix songs say why they are queued, so steering is visible in Up next.
-            InfinityWhyLabel(song.id, Modifier.padding(top = 2.dp))
-        }
-        if (playing && isPlaying) Equalizer(height = 12.dp, modifier = Modifier.padding(horizontal = 12.dp))
-        if (onRemove != null) {
-            Box(Modifier.size(48.dp).shellPressable(onRemove, label = stringResource(Res.string.shell_np_remove_from_queue), focusShape = CircleShape), contentAlignment = Alignment.Center) {
-                Glyph(Glyphs.Close, c.ink2, 14.dp)
+    val removeLabel = stringResource(Res.string.shell_np_remove_from_queue)
+    val upLabel = stringResource(Res.string.shell_col_move_up)
+    val downLabel = stringResource(Res.string.shell_col_move_down)
+    // Screen readers can't drag or swipe: the same edits as custom actions.
+    val actions = buildList {
+        if (onRemove != null) add(CustomAccessibilityAction(removeLabel) { onRemove() })
+        if (onMove != null && position > 0) add(CustomAccessibilityAction(upLabel) { onMove(position - 1); true })
+        if (onMove != null && position < count - 1) add(CustomAccessibilityAction(downLabel) { onMove(position + 1); true })
+    }
+    SwipeToRemove(enabled = onRemove != null && !ShellPlatform.desktop, onRemove = { onRemove?.invoke() == true }, modifier = modifier) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(source)
+                .shellPressable(onClick, label = song.title).semantics { if (actions.isNotEmpty()) customActions = actions }
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ShellArt(song.displayThumbnailUrl, Modifier.size(44.dp), shape = RoundedCornerShape(4.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(song.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song.artists.joinToString(", ") { it.name }, style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Infinity Mix songs say why they are queued, so steering is visible in Up next.
+                InfinityWhyLabel(song.id, Modifier.padding(top = 2.dp))
             }
+            if (playing && isPlaying) Equalizer(height = 12.dp, modifier = Modifier.padding(horizontal = 12.dp))
+            if (onRemove != null) {
+                Box(Modifier.size(48.dp).shellPressable({ onRemove() }, label = removeLabel, focusShape = CircleShape), contentAlignment = Alignment.Center) {
+                    Glyph(Glyphs.Close, c.ink2, 14.dp)
+                }
+            }
+            handle?.invoke()
         }
     }
 }
+
+/**
+ * Swipe sideways to remove (phones), as in Spotify's queue: a danger strip opens behind the row and,
+ * past a third of its width, the row slides away. Short of that it springs back.
+ */
+@Composable
+private fun SwipeToRemove(enabled: Boolean, onRemove: () -> Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (!enabled) {
+        Box(modifier) { content() }
+        return
+    }
+    val c = Shell.colors
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var width by remember { mutableIntStateOf(1) }
+    val danger = c.danger
+    Box(
+        modifier.fillMaxWidth().onSizeChanged { width = it.width.coerceAtLeast(1) }
+            .drawBehind {
+                val dx = offset.value
+                if (dx != 0f) {
+                    val strip = abs(dx)
+                    val alpha = 0.35f + 0.5f * (strip / (size.width * SWIPE_THRESHOLD)).coerceIn(0f, 1f)
+                    drawRect(danger.copy(alpha = alpha), topLeft = Offset(if (dx > 0) 0f else size.width - strip, 0f), size = Size(strip, size.height))
+                }
+            },
+    ) {
+        if (offset.value != 0f) {
+            Glyph(Glyphs.Close, c.ink, 16.dp, Modifier.align(if (offset.value > 0) Alignment.CenterStart else Alignment.CenterEnd).padding(horizontal = 20.dp))
+        }
+        Box(
+            Modifier.offset { IntOffset(offset.value.roundToInt(), 0) }.pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        scope.launch {
+                            val dx = offset.value
+                            if (abs(dx) > width * SWIPE_THRESHOLD) {
+                                offset.animateTo(if (dx > 0) width.toFloat() else -width.toFloat(), tween(ShellMotion.EXIT_MS, easing = ShellMotion.Exit))
+                                if (!onRemove()) offset.animateTo(0f, ShellMotion.spring())
+                            } else {
+                                offset.animateTo(0f, ShellMotion.spring())
+                            }
+                        }
+                    },
+                    onDragCancel = { scope.launch { offset.animateTo(0f, ShellMotion.spring()) } },
+                ) { change, amount ->
+                    change.consume()
+                    scope.launch { offset.snapTo(offset.value + amount) }
+                }
+            },
+        ) { content() }
+    }
+}
+
+private const val SWIPE_THRESHOLD = 0.35f
 
 // ---------------------------------------------------------------------------------------------
 // More, sleep timer, devices

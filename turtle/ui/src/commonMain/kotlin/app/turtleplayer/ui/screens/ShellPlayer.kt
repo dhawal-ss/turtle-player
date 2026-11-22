@@ -52,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +65,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -84,6 +86,8 @@ import app.turtleplayer.ui.components.IndexLabel
 import app.turtleplayer.ui.components.PlayPauseButton
 import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.ShellToast
+import app.turtleplayer.ui.components.ShellSnackbar
+import app.turtleplayer.ui.components.ShellSnackbarHost
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
@@ -128,6 +132,9 @@ import app.turtleplayer.ui.generated.resources.shell_state_on
 import app.turtleplayer.ui.generated.resources.shell_steer_title
 import app.turtleplayer.ui.generated.resources.shell_unlike
 import app.turtleplayer.ui.generated.resources.shell_unliked_toast
+import app.turtleplayer.ui.generated.resources.shell_undo
+import app.turtleplayer.ui.generated.resources.shell_mute
+import app.turtleplayer.ui.generated.resources.shell_unmute
 import app.turtleplayer.ui.generated.resources.shell_volume
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
@@ -341,9 +348,20 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
             }
             val addToPlaylist = com.metrolist.shared.ui.player.LocalPlayerPlatform.current.rememberPlaylistAdder()
             AddToPlaylistButton(song, { addToPlaylist(listOf(it)) }, c.ink, size = 48.dp, iconSize = 20.dp)
-            LikeButton(song, SongLikeState.isLiked(song.id), size = 48.dp, visual = 40.dp)
+            LikeButton(song, SongLikeState.isLiked(song.id), size = 48.dp, visual = 40.dp, onToggled = rememberLikeSnackbar(song))
             PlayPauseButton(state.isPlaying, controller::togglePlayPause, 48.dp, Color.Transparent, c.ink, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
         }
+    }
+}
+
+/** "Added to Liked Songs · Undo" for like buttons that are too small to say it themselves. */
+@Composable
+internal fun rememberLikeSnackbar(song: SongItem): (Boolean) -> Unit {
+    val likedText = stringResource(Res.string.shell_liked_toast)
+    val unlikedText = stringResource(Res.string.shell_unliked_toast)
+    val undo = stringResource(Res.string.shell_undo)
+    return remember(song, likedText, unlikedText, undo) {
+        { now -> ShellSnackbar.show(if (now) likedText else unlikedText, undo, onAction = { SongLikeState.toggleLike(song) }) }
     }
 }
 
@@ -530,6 +548,11 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
         PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint) { toast = it }
         InfinitySheetHost()
         ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars))
+        // Queue undo and the like; over the queue it clears the slim transport.
+        ShellSnackbarHost(
+            Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = if (surface == PlayerSurface.QUEUE || surface == PlayerSurface.LYRICS) 72.dp else 0.dp),
+        )
     }
 }
 
@@ -615,13 +638,33 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     val shuffled = slot.isShuffled()
     val repeat = slot.repeatMode()
     // Queue, lyrics and devices are Shell's own right-panel surfaces; upstream's drawers stay closed.
-    // Any left open from an earlier session are closed once, so they never cover the page.
+    // Any left open from an earlier session are closed once, so they never cover the page; after that,
+    // upstream's Q and L shortcuts (which open its drawers) open Shell's queue and lyrics panel instead.
     app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song?.displayThumbnailUrl)
     InfinitySheetHost()
+    val bar by rememberUpdatedState(slot)
     LaunchedEffect(Unit) {
-        if (slot.isQueueOpen()) slot.onToggleQueue()
-        if (slot.isLyricsOpen()) slot.onToggleLyrics()
+        var restored = true
+        snapshotFlow { bar.isQueueOpen() to bar.isLyricsOpen() }.collect { (queueOpen, lyricsOpen) ->
+            if (queueOpen) {
+                bar.onToggleQueue()
+                if (!restored) ShellDesktop.toggle(DesktopPanel.QUEUE)
+            }
+            if (lyricsOpen) {
+                bar.onToggleLyrics()
+                if (!restored) ShellDesktop.toggle(DesktopPanel.LYRICS)
+            }
+            restored = false
+        }
     }
+    val setVolume: (Float) -> Unit = { v ->
+        volume = v.coerceIn(0f, 1f)
+        slot.onVolumeChange(volume)
+    }
+    val currentVolume by rememberUpdatedState(volume)
+    val currentSetVolume by rememberUpdatedState(setVolume)
+    // The level to go back to on unmute.
+    var unmutedVolume by remember { mutableFloatStateOf(slot.volume.takeIf { it > 0f } ?: DEFAULT_UNMUTE_VOLUME) }
     val panel = ShellDesktop.panel.takeIf { ShellDesktop.nowPlayingOpen }
     val infinityTitle = stringResource(Res.string.shell_infinity_title)
     val infinityOn = ShellQueue.activeTitle(state) == infinityTitle
@@ -644,7 +687,7 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
                 if (ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)) {
                     InfinityThumbs(song, controller, c.ink2, size = 36.dp, iconSize = 18.dp)
                 } else {
-                    LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp)
+                    LikeButton(song, SongLikeState.isLiked(song.id), size = 36.dp, onToggled = rememberLikeSnackbar(song))
                 }
             }
         }
@@ -677,12 +720,42 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
             PanelButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), DesktopPanel.LYRICS, panel)
             PanelButton(Glyphs.Queue, stringResource(Res.string.shell_queue), DesktopPanel.QUEUE, panel)
             PanelButton(Glyphs.Devices, stringResource(Res.string.shell_devices), DesktopPanel.DEVICES, panel)
-            Glyph(Glyphs.Volume, c.ink2, 18.dp, contentDescription = stringResource(Res.string.shell_volume))
-            Spacer(Modifier.width(6.dp))
-            ShellSeekBar(
-                { (volume * 1000).toLong() }, 1000, { v -> volume = v / 1000f; slot.onVolumeChange(volume) }, stringResource(Res.string.shell_volume),
-                Modifier.width(96.dp), track = c.hairline, fill = c.ink, live = true,
-            )
+            // Spotify's volume: the icon mutes and unmutes, the wheel nudges it anywhere over the control.
+            Row(
+                Modifier.pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type != PointerEventType.Scroll) continue
+                            val dy = event.changes.sumOf { it.scrollDelta.y.toDouble() }.toFloat()
+                            if (dy == 0f) continue
+                            currentSetVolume(currentVolume - dy * VOLUME_WHEEL_STEP)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val muted = volume <= 0f
+                GlyphButton(
+                    if (muted) Glyphs.VolumeMuted else Glyphs.Volume,
+                    stringResource(if (muted) Res.string.shell_unmute else Res.string.shell_mute),
+                    {
+                        if (muted) {
+                            setVolume(unmutedVolume)
+                        } else {
+                            unmutedVolume = volume
+                            setVolume(0f)
+                        }
+                    },
+                    c.ink2, size = 32.dp, iconSize = 18.dp,
+                )
+                Spacer(Modifier.width(2.dp))
+                ShellSeekBar(
+                    { (volume * 1000).toLong() }, 1000, { v -> setVolume(v / 1000f) }, stringResource(Res.string.shell_volume),
+                    Modifier.width(96.dp), track = c.hairline, fill = c.ink, live = true,
+                )
+            }
             GlyphButton(Glyphs.Fullscreen, stringResource(Res.string.shell_fullscreen), slot.onToggleFullscreen, c.ink2, size = 36.dp, iconSize = 18.dp)
         }
     }
@@ -692,6 +765,10 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
 private fun PlayerViewModel.removeQueueIndex(index: Int) {
     uiState.value.queueEntryKeys.getOrNull(index)?.let { removeQueueEntry(it) }
 }
+
+/** Volume change per wheel notch, and the level unmute restores when nothing was muted from the bar. */
+private const val VOLUME_WHEEL_STEP = 0.05f
+private const val DEFAULT_UNMUTE_VOLUME = 0.5f
 
 /** Phone services: upstream's player view model and platform (downloads, playlists), in Shell's surfaces. */
 @Composable
@@ -723,6 +800,29 @@ private fun rememberPhoneServices(slot: PlayerSlot): ShellPlayerServices {
         startSleepTimer = { ms, endOfSong -> if (endOfSong) controller.stopSleepTimerAfterCurrentSong(false) else controller.startSleepTimer(ms, false) },
         cancelSleepTimer = controller::cancelSleepTimer,
         sleepTimerActive = { sleep },
+        queueEditor = remember(vm, controller) { phoneQueueEditor(vm, controller) },
+    )
+}
+
+/**
+ * Upstream's own queue edits behind the player view model (entry keys, with its undo), which work on
+ * Android and iOS; the controller's index-based removal is a no-op on Android. Indices are only
+ * trusted while the view model's entries line up with the controller's queue.
+ */
+private fun phoneQueueEditor(vm: com.metrolist.shared.viewmodels.PlayerViewModel, controller: PlaybackController): ShellQueueEditor {
+    fun keys(): List<Long>? = vm.uiState.value.queueEntryKeys.takeIf { it.size == controller.state.value.queue.size }
+    return ShellQueueEditor(
+        remove = remove@{ indices ->
+            val keys = keys() ?: return@remove null
+            val selected = indices.mapNotNullTo(HashSet()) { keys.getOrNull(it) }
+            if (selected.isEmpty() || vm.removeQueueEntries(selected) == null) return@remove null
+            val removals = vm.pendingQueueRemovals()
+            QueueUndo(restore = { vm.restoreQueueItems(removals) }, discard = { vm.discardQueueUndo(removals) })
+        },
+        reorder = reorder@{ order ->
+            val keys = keys() ?: return@reorder false
+            order.size == keys.size && vm.reorderQueueEntries(order.map(keys::get))
+        },
     )
 }
 

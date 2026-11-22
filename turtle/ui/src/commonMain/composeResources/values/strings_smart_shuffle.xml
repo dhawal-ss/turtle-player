@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Smart Shuffle on Shell's Playlist and Album pages (Turtle Player). Base English only; translations go in values-XX/. -->
+    <string name="shell_smart_shuffle">Smart Shuffle</string>
+    <string name="shell_smart_shuffle_busy">Finding songs that fit</string>
+</resources>
