@@ -1,5 +1,6 @@
 package app.turtleplayer.bridge
 
+import kotlinx.coroutines.flow.StateFlow
 import app.turtleplayer.search.DocType
 import app.turtleplayer.search.LexicalQuery
 import app.turtleplayer.search.LocalItem
@@ -43,6 +44,9 @@ class TurtleRuntime(
     private val history: MetrolistHistoryImport,
 ) {
     private val started = AtomicBoolean(false)
+
+    /** Resumes after a crash or system kill mid-song, then keeps the playing mark (CrashResume.kt). */
+    suspend fun crashResume(currentSong: StateFlow<SongItem?>, isPlaying: StateFlow<Boolean>) = CrashResume.run(store, currentSong, isPlaying)
 
     /** Idempotent. Called from the first player hook, which runs early on both platforms. */
     fun start() {

@@ -171,6 +171,7 @@ object TurtleBridge {
             }
             r.observer.attach(ours, currentSong, isPlaying, onEndOfTrack)
             TurtleLog.info("player observer attached")
+            ours.launch { r.crashResume(currentSong, isPlaying) }
             // Drive log heartbeat: a gap between two beats means the system froze or killed the player.
             while (isActive) {
                 delay(HEARTBEAT_MS)

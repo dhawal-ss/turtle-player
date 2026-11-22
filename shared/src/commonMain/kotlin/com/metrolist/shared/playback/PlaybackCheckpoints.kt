@@ -18,7 +18,7 @@ suspend fun observePlaybackCheckpoints(
         .collectLatest { (isPlaying, isEnabled) ->
             checkpoint()
             while (isPlaying && isEnabled) {
-                delay(PLAYBACK_CHECKPOINT_INTERVAL_MS)
+                delay(5_000L) // Turtle: HOOKS.md #60, a killed app resumes within 5 s of where it was
                 checkpoint()
             }
         }

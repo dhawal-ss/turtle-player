@@ -15,7 +15,7 @@ with Turtle DJ on 22 Nov 2026);
 every further screen takeover goes
 through `shared/.../turtle/TurtleUiSlots.kt` as a single line with fully qualified names, so it
 needs no import lines.)
-Current total: **69** hook lines, plus about 55 lines of behavior patches below.
+Current total: **69** hook lines, plus about 56 lines of behavior patches below.
 
 Paths below abbreviate `androidApp/src/main/kotlin/com/metrolist/android/` as `android/`,
 `desktopApp/src/jvmMain/kotlin/com/metrolist/desktop/` as `desktop/`, and
@@ -92,6 +92,8 @@ count toward the hook budget but should stay rare.
 | 17 | `android/playback/AndroidPlaybackPolicies.kt` | 2 | `NEXT_TRACK_PRELOAD_DELAY_MS` 5000 to 1500, plus comment | Android pre-resolves and queues the next track 1.5 s into a song instead of 5 s, mirroring desktop #16 | KMP lead |
 | 18 | `android/playback/ExoPlaybackPlayer.kt` (`buildDirectDataSourceFactory`) | 2 | `prefetchAhead = !video` on the direct audio `HttpRangeInputStream` | Turns on the whole-track background fetch from #15 for Android audio, so forward seeks are local too (backward seeks already were) | KMP lead |
 | 19 | `android/playback/ExoPlaybackPlayer.kt` (`createPlayer`) | 2 | `preloadConfiguration = ExoPlayer.PreloadConfiguration(5 s)` | With crossfade off (default) the next track sits unloaded in the same ExoPlayer playlist; Media3 now loads it ahead so a skip starts from buffered audio | KMP lead |
+
+| 60 | `shared/playback/PlaybackCheckpoints.kt` | 1 | The playing-state checkpoint loop saves the position every 5 s instead of every 30 s (`PLAYBACK_CHECKPOINT_INTERVAL_MS`, which still paces podcast progress) | OnePlus kills the app when it is swiped from recents, before the final save on task removal, so the restored song started up to 30 s back. A position-only checkpoint is a few dozen bytes. Found on device 22 Nov 2026 | KMP lead |
 
 The desktop stream-resolver warm-up at startup lives in `:turtle-bridge` (`TurtleRuntime`), so it
 needs no upstream edit.

@@ -36,6 +36,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.okhttp)
         }
+        androidMain.dependencies {
+            // Auto-resume after a crash or system kill presses play on our own media session.
+            implementation(libs.media3.session)
+        }
         commonMain.dependencies {
             implementation(libs.components.resources)
             implementation(libs.runtime)
