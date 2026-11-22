@@ -197,7 +197,7 @@ internal object ShellSpoken {
                     return@launch
                 }
                 val (index, position) = TurtleBridge.spoken.open(book, chapters)
-                start(controller, chapters, index.coerceIn(0, chapters.lastIndex), position, book.title)
+                start(controller, chapters, index.coerceIn(0, chapters.lastIndex), position, book.title, book.id)
             } finally {
                 opening = null
             }
@@ -206,7 +206,7 @@ internal object ShellSpoken {
 
     fun resume(controller: PlaybackController, progress: BookProgress, onFailed: () -> Unit = {}) = playBook(controller, progress.toBook(), onFailed)
 
-    private fun start(controller: PlaybackController, chapters: List<SongItem>, index: Int, positionMs: Long, title: String) {
+    private fun start(controller: PlaybackController, chapters: List<SongItem>, index: Int, positionMs: Long, title: String, bookId: String) {
         val chapter = chapters[index]
         val s = controller.state.value
         if (s.currentSong?.id == chapter.id) {
@@ -218,7 +218,7 @@ internal object ShellSpoken {
             return
         }
         pendingSeek = if (positionMs > MIN_RESUME_MS) PendingSeek(chapter.id, positionMs, TimeSource.Monotonic.markNow() + SEEK_WAIT_MS.milliseconds) else null
-        ShellQueue.play(controller, chapters, title, index)
+        ShellQueue.play(controller, chapters, title, index, sourceId = bookId)
     }
 
     /** Sleep timer through desktop's player state when present, else the controller (phones). */

@@ -49,7 +49,6 @@ import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
-import app.turtleplayer.ui.generated.resources.shell_dj_nav
 import app.turtleplayer.ui.generated.resources.shell_inf_fresh
 import app.turtleplayer.ui.generated.resources.shell_inf_fresh_body
 import app.turtleplayer.ui.generated.resources.shell_inf_genres
@@ -67,10 +66,6 @@ import app.turtleplayer.ui.generated.resources.shell_set_built_on_body
 import app.turtleplayer.ui.generated.resources.shell_set_content
 import app.turtleplayer.ui.generated.resources.shell_set_devtools_on
 import app.turtleplayer.ui.generated.resources.shell_set_display
-import app.turtleplayer.ui.generated.resources.shell_set_dj_body
-import app.turtleplayer.ui.generated.resources.shell_set_dj_open
-import app.turtleplayer.ui.generated.resources.shell_set_dj_open_body
-import app.turtleplayer.ui.generated.resources.shell_set_dj_sub
 import app.turtleplayer.ui.generated.resources.shell_set_gpl
 import app.turtleplayer.ui.generated.resources.shell_set_gpl_link
 import app.turtleplayer.ui.generated.resources.shell_set_group_app
@@ -152,8 +147,8 @@ import com.metrolist.shared.generated.resources.Res as SharedRes
  * Upstream's registry still owns every setting that changes behaviour; this file reshapes it before
  * Shell draws it: Metrolist-only and Shell-overridden settings are left out (see the KEEP lists below,
  * each checked against the code that reads the setting), the kept ones are regrouped under plain
- * names, and Turtle's own pages come first: Theme, Infinity Mix, Recommendations, Turtle DJ and
- * Spoken word, plus About Turtle with the GPL notice and the Metrolist credits.
+ * names, and Turtle's own pages come first: Theme, Infinity Mix, Recommendations and Spoken
+ * word, plus About Turtle with the GPL notice and the Metrolist credits.
  *
  * SettingsPageId is upstream's enum, so Turtle pages reuse ids of upstream pages Turtle hides
  * (APPEARANCE, PLAYER_STYLE, PLAYER_ARTWORK, MINI_PLAYER_STYLE, FONTS, UPDATES, ABOUT, DISCORD); no
@@ -276,7 +271,7 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                     "palette",
                     stringResource(Res.string.shell_set_palette),
                     listOf(
-                        customItem("palette", stringResource(Res.string.shell_set_palette), ShellPalettes.all.joinToString(", ") { it.name }) { PaletteGrid() },
+                        customItem("palette", stringResource(Res.string.shell_set_palette), ShellPalettes.all.map { stringResource(it.name) }.joinToString(", ")) { PaletteGrid() },
                     ),
                     description = stringResource(Res.string.shell_theme_body),
                 ),
@@ -372,32 +367,6 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                             stringResource(Res.string.shell_set_infinity_sub),
                         ),
                     ),
-                ),
-            ),
-        )
-
-    val dj =
-        turtlePage(
-            SettingsPageId.MINI_PLAYER_STYLE,
-            stringResource(Res.string.shell_dj_nav),
-            stringResource(Res.string.shell_set_dj_sub),
-            Glyphs.Turntable,
-            listOf(
-                group(
-                    "dj",
-                    "",
-                    listOf(
-                        actionItem("openDj", stringResource(Res.string.shell_set_dj_open), stringResource(Res.string.shell_set_dj_open_body)) {
-                            host.onClose()
-                            if (ShellPlatform.desktop) {
-                                ShellDesktop.explore = false
-                                ShellDesktop.dj = true
-                            } else {
-                                ShellDj.open = true
-                            }
-                        },
-                    ),
-                    description = stringResource(Res.string.shell_set_dj_body),
                 ),
             ),
         )
@@ -553,7 +522,7 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
         )
 
     val pages =
-        listOfNotNull(theme, infinityPage, recommendations, dj, spoken, playback, lyrics, content, storage, backup, privacy, integrations, advanced, about) +
+        listOfNotNull(theme, infinityPage, recommendations, spoken, playback, lyrics, content, storage, backup, privacy, integrations, advanced, about) +
             KEEP_SUBPAGES.mapNotNull { id -> if (id == SettingsPageId.EQUALIZER) equalizerPage else raw[id] }
     val rootGroups =
         listOf(

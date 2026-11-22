@@ -235,4 +235,74 @@ class HistoryShelvesTest {
         assertEquals(unheard.title, engine.displayName(unheard.key))
         assertNull(engine.displayName(TrackKey("mbid:nope")))
     }
+
+    @Test
+    fun mixesStayForTheDayAndDiscoveryForTheWeek() = runTest {
+        // Monday 10:00 UTC, so "tomorrow" is the same week.
+        clock.now = SyntheticWorld.T0 + 10 * 60 * MINUTE_MS
+        val radio = FakeRadio(world)
+        val engine = engine(upstream = radio)
+        fun List<Shelf>.of(kind: ShelfKind) = filter { it.kind == kind }.map { s -> s.id to s.items.map { it.key } }
+
+        val morning = engine.homeShelves()
+        val callsAfterFirst = radio.calls.size
+        assertTrue(morning.of(ShelfKind.DAILY_MIX).isNotEmpty())
+        // An afternoon of listening, then Home refreshes again the same day.
+        repeat(8) {
+            engine.onPlayEvent(play(user.heavyRotation[it % user.heavyRotation.size], clock.now))
+            clock.now += 200_000
+        }
+        val afternoon = engine.homeShelves()
+        assertEquals(morning.of(ShelfKind.DAILY_MIX), afternoon.of(ShelfKind.DAILY_MIX))
+        assertEquals(morning.of(ShelfKind.WEEKLY_DISCOVERY), afternoon.of(ShelfKind.WEEKLY_DISCOVERY))
+        assertEquals(callsAfterFirst, radio.calls.size, "kept shelves need no upstream calls")
+
+        // "Less like this" still takes effect on a kept mix.
+        val unwanted = afternoon.first { it.kind == ShelfKind.DAILY_MIX }.items.first()
+        engine.lessLikeThis(LessLikeThis.Track(unwanted.key, unwanted.track.artistKey))
+        assertTrue(engine.homeShelves().filter { it.kind == ShelfKind.DAILY_MIX }.flatMap { it.items }.none { it.key == unwanted.key })
+
+        // Tomorrow the mixes are rebuilt; the week's discovery stays.
+        clock.now += DAY_MS
+        engine.homeShelves()
+        assertTrue(radio.calls.size > callsAfterFirst, "new day, new mixes")
+        assertEquals(morning.of(ShelfKind.WEEKLY_DISCOVERY), engine.homeShelves().of(ShelfKind.WEEKLY_DISCOVERY))
+    }
+
+    @Test
+    fun likedSongsAloneGiveANewListenerAHome() = runTest {
+        // A first launch: no plays here, but a YouTube Music library with liked songs in their genres.
+        val liked = user.likedGenres.flatMap { world.tracksOfGenre(it) }.take(40)
+        val engine = engine(events = emptyList())
+        assertTrue(engine.homeShelves().none { it.kind == ShelfKind.DAILY_MIX }, "cold without saved songs")
+
+        engine.setSavedTracks(liked.mapIndexed { i, t -> SavedTrack(t, SavedKind.LIKED, clock.now - i * DAY_MS) })
+        val shelves = engine.homeShelves()
+
+        assertTrue(shelves.any { it.kind == ShelfKind.DAILY_MIX && it.items.isNotEmpty() }, "kinds: ${shelves.map { it.kind }}")
+        val mixed = shelves.filter { it.kind == ShelfKind.DAILY_MIX }.flatMap { it.items }
+        val inTaste = mixed.count { world.trackGenre.getValue(it.key) in user.likedGenres }
+        assertTrue(inTaste >= mixed.size * 0.8, "in taste $inTaste/${mixed.size}")
+        // Saved songs are not news: Weekly Discovery never offers them.
+        val savedKeys = liked.map { it.key }.toSet()
+        assertTrue(shelves.filter { it.kind == ShelfKind.WEEKLY_DISCOVERY }.flatMap { it.items }.none { it.key in savedKeys })
+    }
+
+    @Test
+    fun aLikeOnAPlayAndInTheLibraryCountsOnce() = runTest {
+        val t = world.tracks[0]
+        val played = TasteProfileBuilder().apply {
+            add(play(t, clock.now, liked = true))
+            addSaved(SavedTrack(t, SavedKind.LIKED, clock.now))
+        }.snapshot(clock.now, null)
+        val onlyPlayed = TasteProfileBuilder().apply { add(play(t, clock.now, liked = true)) }.snapshot(clock.now, null)
+        assertEquals(onlyPlayed.track(t.key)!!.affinity, played.track(t.key)!!.affinity, 1e-9)
+
+        val savedOnly = TasteProfileBuilder().apply { addSaved(SavedTrack(t, SavedKind.LIBRARY, clock.now - DAY_MS)) }.snapshot(clock.now, null)
+        val stats = savedOnly.track(t.key)!!
+        assertTrue(stats.affinity > 0 && stats.plays == 0 && stats.saved)
+        assertTrue(savedOnly.hasHeard(t.key) && savedOnly.hasHeardArtist(t.artistKey))
+        assertEquals(clock.now - DAY_MS, stats.lastPlayedMs)
+        assertEquals(0, savedOnly.artist(t.artistKey)!!.plays)
+    }
 }

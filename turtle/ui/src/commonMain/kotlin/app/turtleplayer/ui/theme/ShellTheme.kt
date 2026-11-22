@@ -113,16 +113,19 @@ private fun shellType(): ShellType {
     val grotesk = FontFamily(variable(Res.font.space_grotesk, 500), variable(Res.font.space_grotesk, 700))
     val inter = FontFamily(variable(Res.font.inter, 400), variable(Res.font.inter, 500), variable(Res.font.inter, 600), variable(Res.font.inter, 700))
     val mono = FontFamily(variable(Res.font.jetbrains_mono, 500))
-    return ShellType(
-        display = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 32.sp, letterSpacing = (-0.035).em),
-        headline = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 28.sp, letterSpacing = (-0.02).em),
-        sectionTitle = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 26.sp, letterSpacing = (-0.02).em),
-        title = TextStyle(fontFamily = inter, fontWeight = FontWeight.Bold, fontSize = 13.sp, lineHeight = 16.sp),
-        body = TextStyle(fontFamily = inter, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 20.sp),
-        bodySmall = TextStyle(fontFamily = inter, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp),
-        label = TextStyle(fontFamily = inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 16.sp),
-        index = TextStyle(fontFamily = mono, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 0.06.em),
-    )
+    // Remembered: a new ShellType each recomposition would invalidate every reader of LocalShellType.
+    return remember(grotesk, inter, mono) {
+        ShellType(
+            display = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 32.sp, letterSpacing = (-0.035).em),
+            headline = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 28.sp, letterSpacing = (-0.02).em),
+            sectionTitle = TextStyle(fontFamily = grotesk, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 26.sp, letterSpacing = (-0.02).em),
+            title = TextStyle(fontFamily = inter, fontWeight = FontWeight.Bold, fontSize = 13.sp, lineHeight = 16.sp),
+            body = TextStyle(fontFamily = inter, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 20.sp),
+            bodySmall = TextStyle(fontFamily = inter, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp),
+            label = TextStyle(fontFamily = inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 16.sp),
+            index = TextStyle(fontFamily = mono, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 0.06.em),
+        )
+    }
 }
 
 /**

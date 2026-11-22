@@ -315,4 +315,77 @@ class TasteEngineTest {
         val muted = engineWithHistory(controls = UserControls(mutedArtists = setOf(inTaste[0].artistKey)))
         assertTrue(muted.rankExternal(seed, upstream).none { it.track.artistKey == inTaste[0].artistKey })
     }
+
+    @Test
+    fun lessLikeThisSurvivesARestartAndKeepsTheTrackOutOfRadio() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = user.likedGenres.flatMap { world.tracksOfGenre(it) }.filter { it.artistKey != seed.artistKey }.distinctBy { it.artistKey }.take(10)
+        val unwanted = candidates[3]
+        engine.lessLikeThis(LessLikeThis.Track(unwanted.key, unwanted.artistKey))
+        engine.startAutoplay(seed)
+        val saved = engine.exportState()
+
+        val restarted = engineWithHistory()
+        assertTrue(restarted.importState(saved))
+        assertTrue(unwanted.key in restarted.controls.lessLikeThisTracks)
+        assertEquals(engine.recentlyRecommended(), restarted.recentlyRecommended())
+        assertTrue(restarted.rankExternal(seed, candidates).none { it.key == unwanted.key })
+        assertFalse(restarted.importState("not a saved state"))
+    }
+
+    @Test
+    fun tasteStateRoundTripsEveryControl() {
+        val state = TasteState(
+            UserControls(
+                mutedArtists = setOf(ArtistKey("a")),
+                boostedArtists = setOf(ArtistKey("b")),
+                mutedClusters = listOf(ClusterAnchor(listOf(0.6f, 0.8f))),
+                lessLikeThisTracks = setOf(TrackKey("yt:x")),
+                lessLikeThisArtists = mapOf(ArtistKey("c") to 3),
+                suppressedReasons = setOf("weekly"),
+                onboardingArtists = listOf(ArtistKey("d"), ArtistKey("e")),
+            ),
+            ExplorationState(3.5, 7.25),
+            listOf(TrackKey("yt:1"), TrackKey("yt:2")),
+        )
+        assertEquals(state, TasteState.decode(state.encode()))
+        assertEquals(TasteState(), TasteState.decode(TasteState().encode()))
+    }
+
+    @Test
+    fun artistSkippedTwiceThisSessionWaitsAtTheBackOfRadio() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = user.likedGenres.flatMap { world.tracksOfGenre(it) }.filter { it.artistKey != seed.artistKey }.distinctBy { it.artistKey }.take(10)
+        val before = engine.rankExternal(seed, candidates)
+        val skipped = before.first().track.artistKey
+        val theirs = world.tracks.filter { it.artistKey == skipped }.take(2)
+        for (t in theirs) {
+            engine.onPlayEvent(play(t, clock.now, EndReason.SKIPPED, msPlayed = 5_000))
+            clock.now += 5_000
+        }
+        val after = engine.rankExternal(seed, candidates)
+        assertEquals(candidates.map { it.key }.toSet(), after.map { it.key }.toSet(), "nothing added or lost")
+        assertEquals(skipped, after.last().track.artistKey)
+    }
+
+    @Test
+    fun oneShotAutoplayDoesNotCallUpstreamOnLaterPlays() = runTest {
+        var calls = 0
+        val counting = object : RecommendationSource {
+            override suspend fun related(seed: TrackMeta, limit: Int): List<TrackMeta> {
+                calls++
+                return world.tracksOfGenre(user.likedGenres.first()).take(limit)
+            }
+        }
+        val engine = engineWithHistory(upstream = counting)
+        engine.startAutoplay(continuous = false)
+        val afterStart = calls
+        repeat(3) {
+            engine.onPlayEvent(play(user.heavyRotation[it], clock.now))
+            clock.now += 200_000
+        }
+        assertEquals(afterStart, calls)
+    }
 }

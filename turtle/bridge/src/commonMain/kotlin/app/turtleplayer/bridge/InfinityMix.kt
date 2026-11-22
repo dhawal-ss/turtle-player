@@ -350,7 +350,7 @@ class InfinityMix(
             }
         }
         if (forYou.isEmpty()) {
-            forYou = runCatching { taste.startAutoplay() }.getOrDefault(emptyList())
+            forYou = runCatching { taste.startAutoplay(continuous = false) }.getOrDefault(emptyList())
                 .mapNotNull { item -> item.track.youtubeId?.let { cache.get(it) } }
                 .filter { it.id !in taken }
                 .toCollection(ArrayDeque())

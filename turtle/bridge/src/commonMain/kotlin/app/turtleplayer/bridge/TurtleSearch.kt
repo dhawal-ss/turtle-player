@@ -12,6 +12,7 @@ import app.turtleplayer.search.OnlineSearchProvider
 import app.turtleplayer.search.OnlineTrack
 import app.turtleplayer.search.ParsedQuery
 import app.turtleplayer.search.ResultItem
+import app.turtleplayer.search.SearchConfig
 import app.turtleplayer.search.SearchEngine
 import app.turtleplayer.search.TrackResult
 import com.metrolist.shared.model.AlbumItem
@@ -49,7 +50,7 @@ class TurtleSearch(
             artists = artists.map { OnlineArtist(it.title, browseId = it.id) },
             albums = albums.map { OnlineAlbum(it.title, it.artists.firstOrNull()?.name.orEmpty(), browseId = it.id, year = it.year?.toIntOrNull()) },
         )
-        val engine = SearchEngine(library = library, online = PageResults(online), affinity = affinity)
+        val engine = SearchEngine(library = library, online = PageResults(online), affinity = affinity, config = PAGE_CONFIG)
         val results = withTimeoutOrNull(RERANK_TIMEOUT_MS) { engine.search(query).first { it.isFinal } } ?: return null
 
         val songById = songs.associateBy { it.id }
@@ -65,11 +66,14 @@ class TurtleSearch(
             else -> null // a generated mix has no upstream item; keep upstream's top result
         }
 
+        val ourTop = itemOf(results.top)
         val upstreamTop = page.summaries.firstOrNull { it.isTopResult }
-        val top = itemOf(results.top) ?: upstreamTop?.items?.firstOrNull()
+        val top = ourTop ?: upstreamTop?.items?.firstOrNull()
         val rankedSongs = results.songs.mapNotNull { songOf(it) }.filter { it.id != top?.id }
         val rankedArtists = results.artists.mapNotNull(::artistOf).filter { it.id != top?.id }
         val rankedAlbums = results.albums.mapNotNull(::albumOf).filter { it.id != top?.id }
+        // Nothing ranked (an emoji, or text our matching cannot read): keep upstream's page rather than drop its sections.
+        if (ourTop == null && rankedSongs.isEmpty() && rankedArtists.isEmpty() && rankedAlbums.isEmpty()) return null
 
         val ours = setOf(SONGS, ARTISTS, ALBUMS)
         val summaries = buildList {
@@ -95,5 +99,8 @@ class TurtleSearch(
         const val ARTISTS = "Artists"
         const val ALBUMS = "Albums"
         const val RERANK_TIMEOUT_MS = 800L
+
+        // The online stage reads the page upstream already fetched, so even one character costs no request.
+        val PAGE_CONFIG = SearchConfig(minOnlineChars = 1)
     }
 }

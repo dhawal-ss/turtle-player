@@ -43,7 +43,6 @@ kotlin {
             api("app.turtleplayer:turtle-events")
             api("app.turtleplayer:turtle-search")
             api("app.turtleplayer:turtle-taste")
-            api("app.turtleplayer:turtle-mix")
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
             implementation(libs.koin.core)

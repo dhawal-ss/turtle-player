@@ -9,9 +9,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import app.turtleplayer.bridge.TurtleBridge
+import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_palette_shell
+import app.turtleplayer.ui.generated.resources.shell_palette_dynamic
+import app.turtleplayer.ui.generated.resources.shell_palette_mono
+import app.turtleplayer.ui.generated.resources.shell_palette_catppuccin
+import app.turtleplayer.ui.generated.resources.shell_palette_rosepine
+import app.turtleplayer.ui.generated.resources.shell_palette_nord
+import app.turtleplayer.ui.generated.resources.shell_palette_dracula
+import app.turtleplayer.ui.generated.resources.shell_palette_gruvbox
+import app.turtleplayer.ui.generated.resources.shell_palette_tokyonight
+import app.turtleplayer.ui.generated.resources.shell_palette_everforest
+import app.turtleplayer.ui.generated.resources.shell_palette_sunset
 import com.metrolist.shared.ui.theme.rememberArtworkSeedColor
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -21,7 +34,7 @@ import kotlin.math.min
  * from [ShellColors] tokens, so a palette re-skins the whole app, upstream's screens included.
  * [dynamic] palettes take their accent from the cover art of the song playing (Dribbblish Dynamic).
  */
-class ShellPalette(val id: String, val name: String, val colors: ShellColors, val dynamic: Boolean = false)
+class ShellPalette(val id: String, val name: StringResource, val colors: ShellColors, val dynamic: Boolean = false)
 
 private fun palette(
     ground: Long, frame: Long, panel: Long, s1: Long, s2: Long, s3: Long, hairline: Long,
@@ -40,19 +53,19 @@ private fun palette(
 }
 
 object ShellPalettes {
-    val shell = ShellPalette("shell", "Shell", ShellColors())
+    val shell = ShellPalette("shell", Res.string.shell_palette_shell, ShellColors())
     val all: List<ShellPalette> = listOf(
         shell,
-        ShellPalette("dynamic", "Cover colour", ShellColors(), dynamic = true),
-        ShellPalette("mono", "Mono", palette(0xFF0A0A0A, 0xFF000000, 0xFF111111, 0xFF121212, 0xFF1A1A1A, 0xFF242424, 0xFF2E2E2E, 0xFFF5F5F5, 0xFFA3A3A3, 0xFF8A8A8A, 0xFFFFFFFF, 0xFF0A0A0A)),
-        ShellPalette("catppuccin", "Catppuccin", palette(0xFF1E1E2E, 0xFF11111B, 0xFF181825, 0xFF1E1E2E, 0xFF313244, 0xFF45475A, 0xFF45475A, 0xFFCDD6F4, 0xFFA6ADC8, 0xFF7F849C, 0xFFCBA6F7, 0xFF11111B, 0xFFF38BA8)),
-        ShellPalette("rosepine", "Rosé Pine", palette(0xFF191724, 0xFF110F1A, 0xFF1F1D2E, 0xFF1F1D2E, 0xFF26233A, 0xFF403D52, 0xFF403D52, 0xFFE0DEF4, 0xFF908CAA, 0xFF6E6A86, 0xFFEBBCBA, 0xFF191724, 0xFFEB6F92)),
-        ShellPalette("nord", "Nord", palette(0xFF2E3440, 0xFF242933, 0xFF3B4252, 0xFF3B4252, 0xFF434C5E, 0xFF4C566A, 0xFF4C566A, 0xFFECEFF4, 0xFFD8DEE9, 0xFF9AA3B5, 0xFF88C0D0, 0xFF2E3440, 0xFFBF616A)),
-        ShellPalette("dracula", "Dracula", palette(0xFF282A36, 0xFF191A21, 0xFF21222C, 0xFF21222C, 0xFF343746, 0xFF44475A, 0xFF44475A, 0xFFF8F8F2, 0xFFBDBFD0, 0xFF6272A4, 0xFFFF79C6, 0xFF191A21, 0xFFFF5555)),
-        ShellPalette("gruvbox", "Gruvbox", palette(0xFF282828, 0xFF1D2021, 0xFF32302F, 0xFF32302F, 0xFF3C3836, 0xFF504945, 0xFF504945, 0xFFEBDBB2, 0xFFBDAE93, 0xFFA89984, 0xFFFABD2F, 0xFF1D2021, 0xFFFB4934)),
-        ShellPalette("tokyonight", "Tokyo Night", palette(0xFF1A1B26, 0xFF16161E, 0xFF1F2335, 0xFF1F2335, 0xFF24283B, 0xFF292E42, 0xFF3B4261, 0xFFC0CAF5, 0xFFA9B1D6, 0xFF565F89, 0xFF7AA2F7, 0xFF16161E, 0xFFF7768E)),
-        ShellPalette("everforest", "Everforest", palette(0xFF2D353B, 0xFF232A2E, 0xFF343F44, 0xFF343F44, 0xFF3D484D, 0xFF475258, 0xFF4F5B58, 0xFFD3C6AA, 0xFF9DA9A0, 0xFF859289, 0xFFA7C080, 0xFF232A2E, 0xFFE67E80)),
-        ShellPalette("sunset", "Sunset", palette(0xFF140E12, 0xFF0A0709, 0xFF1C1418, 0xFF1C1418, 0xFF261B21, 0xFF33242C, 0xFF3A2A33, 0xFFF6ECEF, 0xFFB9A6AE, 0xFF957F89, 0xFFFF8E5E, 0xFF140E12)),
+        ShellPalette("dynamic", Res.string.shell_palette_dynamic, ShellColors(), dynamic = true),
+        ShellPalette("mono", Res.string.shell_palette_mono, palette(0xFF0A0A0A, 0xFF000000, 0xFF111111, 0xFF121212, 0xFF1A1A1A, 0xFF242424, 0xFF2E2E2E, 0xFFF5F5F5, 0xFFA3A3A3, 0xFF8A8A8A, 0xFFFFFFFF, 0xFF0A0A0A)),
+        ShellPalette("catppuccin", Res.string.shell_palette_catppuccin, palette(0xFF1E1E2E, 0xFF11111B, 0xFF181825, 0xFF1E1E2E, 0xFF313244, 0xFF45475A, 0xFF45475A, 0xFFCDD6F4, 0xFFA6ADC8, 0xFF7F849C, 0xFFCBA6F7, 0xFF11111B, 0xFFF38BA8)),
+        ShellPalette("rosepine", Res.string.shell_palette_rosepine, palette(0xFF191724, 0xFF110F1A, 0xFF1F1D2E, 0xFF1F1D2E, 0xFF26233A, 0xFF403D52, 0xFF403D52, 0xFFE0DEF4, 0xFF908CAA, 0xFF6E6A86, 0xFFEBBCBA, 0xFF191724, 0xFFEB6F92)),
+        ShellPalette("nord", Res.string.shell_palette_nord, palette(0xFF2E3440, 0xFF242933, 0xFF3B4252, 0xFF3B4252, 0xFF434C5E, 0xFF4C566A, 0xFF4C566A, 0xFFECEFF4, 0xFFD8DEE9, 0xFF9AA3B5, 0xFF88C0D0, 0xFF2E3440, 0xFFBF616A)),
+        ShellPalette("dracula", Res.string.shell_palette_dracula, palette(0xFF282A36, 0xFF191A21, 0xFF21222C, 0xFF21222C, 0xFF343746, 0xFF44475A, 0xFF44475A, 0xFFF8F8F2, 0xFFBDBFD0, 0xFF6272A4, 0xFFFF79C6, 0xFF191A21, 0xFFFF5555)),
+        ShellPalette("gruvbox", Res.string.shell_palette_gruvbox, palette(0xFF282828, 0xFF1D2021, 0xFF32302F, 0xFF32302F, 0xFF3C3836, 0xFF504945, 0xFF504945, 0xFFEBDBB2, 0xFFBDAE93, 0xFFA89984, 0xFFFABD2F, 0xFF1D2021, 0xFFFB4934)),
+        ShellPalette("tokyonight", Res.string.shell_palette_tokyonight, palette(0xFF1A1B26, 0xFF16161E, 0xFF1F2335, 0xFF1F2335, 0xFF24283B, 0xFF292E42, 0xFF3B4261, 0xFFC0CAF5, 0xFFA9B1D6, 0xFF565F89, 0xFF7AA2F7, 0xFF16161E, 0xFFF7768E)),
+        ShellPalette("everforest", Res.string.shell_palette_everforest, palette(0xFF2D353B, 0xFF232A2E, 0xFF343F44, 0xFF343F44, 0xFF3D484D, 0xFF475258, 0xFF4F5B58, 0xFFD3C6AA, 0xFF9DA9A0, 0xFF859289, 0xFFA7C080, 0xFF232A2E, 0xFFE67E80)),
+        ShellPalette("sunset", Res.string.shell_palette_sunset, palette(0xFF140E12, 0xFF0A0709, 0xFF1C1418, 0xFF1C1418, 0xFF261B21, 0xFF33242C, 0xFF3A2A33, 0xFFF6ECEF, 0xFFB9A6AE, 0xFF957F89, 0xFFFF8E5E, 0xFF140E12)),
     )
 
     private val byId = all.associateBy { it.id }

@@ -47,15 +47,23 @@ class TurtleRuntime(
         if (!started.compareAndSet(expectedValue = false, newValue = true)) return
         val scope = turtleScope.scope
         librarySync.start(scope)
+        observer.startCheckpoints(scope)
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
         scope.launch {
+            restoreTasteState()
             restoreDiscoveryDial()
             infinity.restore()
             runCatching { taste.refresh() }
         }
         taste.observe(scope)
-        // Finishes and quick skips of Infinity songs tune their genre without a tap.
-        scope.launch { store.newEvents.collect { runCatching { infinity.onPlayEvent(it) } } }
+        // Finishes and quick skips of Infinity songs tune their genre without a tap; every play also
+        // moves the exploration state, which is saved with the listener's controls.
+        scope.launch {
+            store.newEvents.collect {
+                runCatching { infinity.onPlayEvent(it) }
+                saveTasteState()
+            }
+        }
         libraryContentSearchOverride = ::searchLibrary
         searchSummaryOverride = ::rerankSearch
         homeShelvesOverride = home::mergeInto
@@ -63,6 +71,12 @@ class TurtleRuntime(
             // Shelf items resolve through the library mirror, so build shelves after its first sync.
             while (!librarySync.isReady()) delay(500)
             home.start(scope)
+        }
+        // Liked and library songs (YouTube Music likes included) count toward taste from the first launch.
+        scope.launch {
+            librarySync.saved.collect { saved ->
+                if (saved != null) runCatching { taste.setSavedTracks(saved) }.onFailure { if (it is CancellationException) throw it else TurtleLog.error("could not apply saved songs", it) }
+            }
         }
         if (warmStreamResolverOnStart) scope.launch { warmStreamResolver() }
         scope.launch { watchLikes() }
@@ -145,6 +159,7 @@ class TurtleRuntime(
     suspend fun lessLikeThis(song: SongItem) {
         val meta = song.toTrackMeta()
         taste.lessLikeThis(LessLikeThis.Track(meta.key, meta.artistKey))
+        saveTasteState()
         infinity.feedback(song, liked = false)
         if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
     }
@@ -154,6 +169,17 @@ class TurtleRuntime(
         val p = position.coerceIn(0.0, 1.0)
         taste.setDiscoveryDial(DiscoveryDial.fromPosition(p))
         runCatching { store.setPref(PREF_DIAL, p.toString()) }.onFailure { TurtleLog.error("could not save the discovery dial", it) }
+    }
+
+    /** "Less like this", mutes and the exploration state; without this they were lost at every restart. */
+    private suspend fun saveTasteState() {
+        runCatching { store.setPref(PREF_TASTE_STATE, taste.exportState()) }
+            .onFailure { if (it is CancellationException) throw it else TurtleLog.error("could not save taste state", it) }
+    }
+
+    private suspend fun restoreTasteState() {
+        val saved = runCatching { store.pref(PREF_TASTE_STATE) }.getOrNull() ?: return
+        if (!taste.importState(saved)) TurtleLog.error("saved taste state unreadable; starting from defaults")
     }
 
     private suspend fun restoreDiscoveryDial() {
@@ -208,6 +234,7 @@ class TurtleRuntime(
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
         const val PREF_DIAL = "discovery_dial"
+        const val PREF_TASTE_STATE = "taste_state"
     }
 }
 

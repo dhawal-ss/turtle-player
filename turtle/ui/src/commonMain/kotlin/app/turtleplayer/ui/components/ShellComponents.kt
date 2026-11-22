@@ -56,6 +56,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -74,6 +77,7 @@ import coil3.compose.AsyncImage
  * Press feedback shared by every tappable Shell element: scale to 0.96 over the tap duration, a hand
  * cursor on desktop, and a lime focus ring in [focusShape] for keyboard users (H-Search's focus
  * language). [onLongClick] opens the item menu on phones, so cards never need `combinedClickable`.
+ * Tabs and chips pass [selected] so screen readers announce which one is on.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -83,6 +87,7 @@ fun Modifier.shellPressable(
     label: String? = null,
     onLongClick: (() -> Unit)? = null,
     focusShape: Shape = RoundedCornerShape(8.dp),
+    selected: Boolean? = null,
 ): Modifier {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -94,6 +99,7 @@ fun Modifier.shellPressable(
         .pointerHoverIcon(PointerIcon.Hand)
         .combinedClickable(interactionSource = interaction, indication = null, role = role, onLongClick = onLongClick, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+        .then(if (selected != null) Modifier.semantics { this.selected = selected } else Modifier)
 }
 
 private val LetterboxedVideoArt = Regex("""/(hq|sd)default(\.\w+)""")
@@ -131,7 +137,7 @@ fun ShellChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: M
     val bg by animateColorAsState(if (selected) c.accent else c.surface2, ShellMotion.emphasized())
     val fg by animateColorAsState(if (selected) c.onAccent else c.ink, ShellMotion.emphasized())
     Box(
-        modifier.height(32.dp).clip(CircleShape).background(bg).shellPressable(onClick, Role.Tab).padding(horizontal = 14.dp),
+        modifier.height(32.dp).clip(CircleShape).background(bg).shellPressable(onClick, Role.Tab, selected = selected).padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = Shell.type.label, color = fg) }
 }
@@ -281,19 +287,21 @@ fun ShellToast(message: String?, modifier: Modifier = Modifier) {
     val last = remember { arrayOf(message.orEmpty()) }
     if (message != null) last[0] = message
     val shown = message ?: last[0]
-    AnimatedVisibility(
-        message != null,
-        enter = slideInVertically(ShellMotion.spring()) { it * 2 } + fadeIn(ShellMotion.emphasized()),
-        exit = slideOutVertically(ShellMotion.exit()) { it * 2 } + fadeOut(ShellMotion.exit()),
-        modifier = modifier,
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp).clip(RoundedCornerShape(10.dp)).background(Shell.colors.ink).padding(horizontal = 14.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    // A polite live region that stays composed, so screen readers announce each toast as it appears.
+    Box(modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
+        AnimatedVisibility(
+            message != null,
+            enter = slideInVertically(ShellMotion.spring()) { it * 2 } + fadeIn(ShellMotion.emphasized()),
+            exit = slideOutVertically(ShellMotion.exit()) { it * 2 } + fadeOut(ShellMotion.exit()),
         ) {
-            Box(Modifier.size(22.dp).clip(CircleShape).background(Shell.colors.accent), contentAlignment = Alignment.Center) { CheckGlyph(Shell.colors.onAccent, 14.dp) }
-            Spacer(Modifier.width(12.dp))
-            Text(shown, style = Shell.type.label, color = Shell.colors.ground)
+            Row(
+                Modifier.fillMaxWidth().padding(12.dp).clip(RoundedCornerShape(10.dp)).background(Shell.colors.ink).padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(22.dp).clip(CircleShape).background(Shell.colors.accent), contentAlignment = Alignment.Center) { CheckGlyph(Shell.colors.onAccent, 14.dp) }
+                Spacer(Modifier.width(12.dp))
+                Text(shown, style = Shell.type.label, color = Shell.colors.ground)
+            }
         }
     }
 }

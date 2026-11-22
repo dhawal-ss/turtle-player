@@ -19,6 +19,15 @@ data class RankingWeights(
     val semanticFactor: Float = 0.8f,
     /** Online rank evidence for the provider's top result. */
     val onlineFactor: Float = 0.7f,
+    /**
+     * Share of the online rank evidence kept for a result that shares no word with the query although
+     * both are written in the same script; it grows to 1 with the share of query words matched.
+     */
+    val onlineUnmatchedFactor: Float = 0.35f,
+    /** Query understanding must be this sure of a song before a track tops an artist named exactly like the query. */
+    val trackOverArtistConfidence: Float = 0.6f,
+    /** Confidence of ARTIST intent when only an online artist (not the library) is named exactly like the query. */
+    val onlineArtistConfidence: Float = 0.7f,
     /** Extra relevance per additional retriever that found the same item. */
     val corroboration: Float = 0.04f,
     val libraryBoost: Float = 0.04f,
@@ -71,7 +80,8 @@ internal class ResultMerger(
         val canonical = TitleCanonicalizer.canonicalize(meta.title, cleanArtistName(meta.primaryArtist))
     }
 
-    suspend fun merge(query: ParsedQuery, snapshot: RetrievalSnapshot, statuses: Map<Retriever, RetrieverStatus>): SearchResults {
+    suspend fun merge(parsed: ParsedQuery, snapshot: RetrievalSnapshot, statuses: Map<Retriever, RetrieverStatus>): SearchResults {
+        val query = withOnlineArtistEvidence(parsed, snapshot.online)
         val compiled = CompiledQuery(query.toLexicalQuery().tokens)
         val tracks = mergeTracks(query, compiled, snapshot)
         val artists = mergeArtists(query, compiled, snapshot)
@@ -103,6 +113,27 @@ internal class ResultMerger(
         return lexicalCoverage == 0 || lyric * weights.lyricsFactor >= t.breakdown.relevance - 0.01f
     }
 
+    /**
+     * Query understanding only knows the library's names. When an online artist is named exactly like
+     * the query ("taylor swift" with none of her songs saved) and the query is not confidently a known
+     * song title, the user is most likely looking for that artist.
+     */
+    private fun withOnlineArtistEvidence(query: ParsedQuery, online: OnlineResults?): ParsedQuery {
+        if (online == null || online.artists.isEmpty()) return query
+        if (query.intent != Intent.SONG && query.intent != Intent.UNKNOWN) return query
+        if (query.confidence >= weights.trackOverArtistConfidence) return query
+        if (online.artists.none { namedLike(it.name, query) }) return query
+        val c = weights.onlineArtistConfidence
+        return query.copy(intent = Intent.ARTIST, confidence = c, intentScores = query.intentScores + (Intent.ARTIST to c))
+    }
+
+    /** [name] normalizes to the query's words, spaces aside ("AC/DC" for "acdc"). */
+    private fun namedLike(name: String, query: ParsedQuery): Boolean {
+        if (query.tokens.isEmpty()) return false
+        val key = TextNormalizer.normalize(cleanArtistName(name)).tokens
+        return key == query.tokens || key.joinToString("") == query.tokens.joinToString("")
+    }
+
     private fun chooseTop(query: ParsedQuery, all: List<ResultItem>): ResultItem? {
         if (query.intent == Intent.MOOD) {
             return MixResult(MixSeed(query.tokens, query.mood, query.filters), score = 1f)
@@ -110,7 +141,11 @@ internal class ResultMerger(
         val best = all.firstOrNull() ?: return null
         val preferred: ResultItem? = when (query.intent) {
             // Filters describe recordings: "taylor swift 2014" wants her 2014 songs, not her page.
-            Intent.ARTIST -> if (query.filters.isEmpty) all.firstOrNull { it is ArtistResult } else all.firstOrNull { it is TrackResult }
+            Intent.ARTIST -> if (query.filters.isEmpty) {
+                all.firstOrNull { it is ArtistResult && namedLike(it.name, query) } ?: all.firstOrNull { it is ArtistResult }
+            } else {
+                all.firstOrNull { it is TrackResult }
+            }
             Intent.ALBUM -> all.firstOrNull { it is AlbumResult }
             Intent.SONG, Intent.SONG_BY_ARTIST -> all.firstOrNull { it is TrackResult }
             Intent.LYRICS -> all.firstOrNull { it is TrackResult && it.lyrics != null } ?: all.firstOrNull { it is TrackResult }
@@ -200,7 +235,8 @@ internal class ResultMerger(
         val l = bestLexical?.score ?: 0f
         val y = (lyrics?.score ?: 0f) * if (query.intent == Intent.LYRICS) 1f else weights.lyricsFactor
         val s = semantic * weights.semanticFactor
-        val o = onlineRank?.let { weights.onlineFactor / (1f + 0.3f * it) } ?: 0f
+        val coverage = group.maxOf { it.lexical?.coverage ?: 0f }
+        val o = onlineRank?.let { onlineEvidence(query, it, coverage, listOf(rep.meta.title) + rep.meta.artists) } ?: 0f
         val evidence = listOf(l >= 0.2f, y > 0f, s > 0f, o > 0f).count { it }
         val relevance = maxOf(l, y, s, o) + weights.corroboration * (evidence - 1).coerceAtLeast(0)
         if (relevance < weights.minRelevance) return null
@@ -298,7 +334,7 @@ internal class ResultMerger(
         }
         return byKey.values.mapNotNull { acc ->
             val l = acc.lexical?.score ?: 0f
-            val o = acc.onlineRank?.let { weights.onlineFactor / (1f + 0.3f * it) } ?: 0f
+            val o = acc.onlineRank?.let { onlineEvidence(query, it, acc.lexical?.coverage ?: 0f, listOf(acc.name)) } ?: 0f
             val relevance = max(l, o) + if (l >= 0.2f && o > 0f) weights.corroboration else 0f
             if (relevance < weights.minRelevance) return@mapNotNull null
             val agreement = when (query.intent) {
@@ -364,7 +400,7 @@ internal class ResultMerger(
         }
         return byKey.values.mapNotNull { acc ->
             val l = acc.lexical?.score ?: 0f
-            val o = acc.onlineRank?.let { weights.onlineFactor / (1f + 0.3f * it) } ?: 0f
+            val o = acc.onlineRank?.let { onlineEvidence(query, it, acc.lexical?.coverage ?: 0f, listOf(acc.title, acc.artist)) } ?: 0f
             val relevance = max(l, o) + if (l >= 0.2f && o > 0f) weights.corroboration else 0f
             if (relevance < weights.minRelevance) return@mapNotNull null
             val agreement = when (query.intent) {
@@ -400,6 +436,25 @@ internal class ResultMerger(
 
     // ---------------------------------------------------------------- shared
 
+    /**
+     * Evidence from the provider's rank, scaled by the share of query words the result matched
+     * ([coverage]). A result written in another script than the query (a romaji query, a kanji
+     * title) cannot be compared word by word and keeps its full rank evidence, and so do lyrics
+     * queries, whose words are rarely in titles.
+     */
+    private fun onlineEvidence(query: ParsedQuery, rank: Int, coverage: Float, texts: List<String>): Float {
+        val evidence = weights.onlineFactor / (1f + 0.3f * rank)
+        if (query.intent == Intent.LYRICS || !sharesScript(query.normalizedTokens, texts)) return evidence
+        return evidence * (weights.onlineUnmatchedFactor + (1f - weights.onlineUnmatchedFactor) * coverage)
+    }
+
+    private fun sharesScript(queryTokens: List<String>, texts: List<String>): Boolean {
+        val queryScripts = scriptsOf(queryTokens.asSequence())
+        if (queryScripts.isEmpty()) return false
+        val textScripts = scriptsOf(texts.asSequence().flatMap { TextNormalizer.normalize(it).tokens })
+        return queryScripts.any { it in textScripts }
+    }
+
     /** Intent agreement counts in proportion to how sure query understanding is. */
     private fun blend(query: ParsedQuery, agreement: Float): Float = query.confidence * agreement + (1f - query.confidence) * 0.5f
 
@@ -410,6 +465,21 @@ internal class ResultMerger(
     private companion object {
         val resultOrder = compareByDescending<ResultItem> { it.score }.thenBy { it.kind }.thenBy { it.id }
     }
+}
+
+/** Writing systems of normalized text (Latin after transliteration, Han, Hangul, ...); digits have none. */
+internal fun scriptsOf(tokens: Sequence<String>): Set<Int> {
+    val scripts = HashSet<Int>()
+    for (token in tokens) for (c in token) {
+        if (!c.isLetter()) continue
+        scripts += when {
+            c.code < 0x0250 -> 0
+            c in '\u3400'..'\u9FFF' || c in '\uF900'..'\uFAFF' -> 1
+            c in '\u1100'..'\u11FF' || c in '\u3130'..'\u318F' || c in '\uAC00'..'\uD7AF' -> 2
+            else -> c.code shr 8 shl 8
+        }
+    }
+    return scripts
 }
 
 /** Strips channel decorations so "Coldplay - Topic" and "ColdplayVEVO" collapse to "Coldplay". */

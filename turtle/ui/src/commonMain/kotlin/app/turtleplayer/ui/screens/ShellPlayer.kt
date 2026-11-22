@@ -41,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -68,6 +69,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -117,8 +119,12 @@ import app.turtleplayer.ui.generated.resources.shell_playing_from
 import app.turtleplayer.ui.generated.resources.shell_previous
 import app.turtleplayer.ui.generated.resources.shell_queue
 import app.turtleplayer.ui.generated.resources.shell_repeat
+import app.turtleplayer.ui.generated.resources.shell_repeat_state_all
+import app.turtleplayer.ui.generated.resources.shell_repeat_state_one
 import app.turtleplayer.ui.generated.resources.shell_seek
 import app.turtleplayer.ui.generated.resources.shell_shuffle
+import app.turtleplayer.ui.generated.resources.shell_state_off
+import app.turtleplayer.ui.generated.resources.shell_state_on
 import app.turtleplayer.ui.generated.resources.shell_steer_title
 import app.turtleplayer.ui.generated.resources.shell_unlike
 import app.turtleplayer.ui.generated.resources.shell_unliked_toast
@@ -139,6 +145,7 @@ import com.metrolist.shared.ui.navigation.NavigationBackHandler
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.theme.rememberArtworkSeedColor
+import com.metrolist.shared.viewmodels.PlayerViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -158,16 +165,38 @@ internal fun artworkTint(url: String?, amount: Float, base: Color = Shell.colors
 
 internal fun formatTime(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(0)
-    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+    val secs = (s % 60).toString().padStart(2, '0')
+    if (s < 3600) return "${s / 60}:$secs"
+    return "${s / 3600}:${(s / 60 % 60).toString().padStart(2, '0')}:$secs"
 }
+
+/** Repeat's glyph and what screen readers say it is set to. */
+private fun repeatGlyph(mode: RepeatMode): ImageVector = if (mode == RepeatMode.ONE) Glyphs.RepeatOne else Glyphs.Repeat
+
+@Composable
+private fun repeatState(mode: RepeatMode): String = stringResource(
+    when (mode) {
+        RepeatMode.OFF -> Res.string.shell_state_off
+        RepeatMode.ONE -> Res.string.shell_repeat_state_one
+        RepeatMode.ALL -> Res.string.shell_repeat_state_all
+    },
+)
+
+@Composable
+private fun onOffState(on: Boolean): String = stringResource(if (on) Res.string.shell_state_on else Res.string.shell_state_off)
 
 /** The song's length, falling back to its metadata while the player has not reported one yet. */
 private fun durationOf(reportedMs: Long, song: SongItem?): Long =
     reportedMs.takeIf { it > 0 } ?: song?.duration?.toLong()?.takeIf { it > 0 }?.times(1000L) ?: 0L
 
 @Composable
-internal fun GlyphButton(glyph: ImageVector, label: String, onClick: () -> Unit, tint: Color, size: Dp = 48.dp, iconSize: Dp = 22.dp, dot: Boolean = false) {
-    Column(Modifier.size(size).shellPressable(onClick, label = label, focusShape = CircleShape), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+internal fun GlyphButton(glyph: ImageVector, label: String, onClick: () -> Unit, tint: Color, size: Dp = 48.dp, iconSize: Dp = 22.dp, dot: Boolean = false, state: String? = null) {
+    Column(
+        Modifier.size(size).shellPressable(onClick, label = label, focusShape = CircleShape)
+            .then(if (state != null) Modifier.semantics { stateDescription = state } else Modifier),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
         Glyph(glyph, tint, iconSize)
         if (dot) Box(Modifier.padding(top = 3.dp).size(4.dp).clip(CircleShape).background(tint))
     }
@@ -253,6 +282,9 @@ private fun skipTransition(forward: Boolean): ContentTransform {
         (slideOutHorizontally(ShellMotion.exit()) { -dir * it / 8 } + fadeOut(ShellMotion.exit()))
 }
 
+/** How far the mini player must be swiped to skip (the 120 px it used to be on a 3x phone). */
+private val SkipSwipe = 40.dp
+
 private val quickFade = fadeIn(tween(ShellMotion.EXIT_MS)) togetherWith fadeOut(tween(ShellMotion.EXIT_MS))
 
 // ---------------------------------------------------------------------------------------------
@@ -279,7 +311,8 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
                 detectHorizontalDragGestures(
                     onDragEnd = {
                         val dx = drag.value
-                        if (dx < -120f) controller.skipToNext() else if (dx > 120f) controller.skipToPrevious()
+                        val threshold = SkipSwipe.toPx()
+                        if (dx < -threshold) controller.skipToNext() else if (dx > threshold) controller.skipToPrevious()
                         scope.launch { drag.animateTo(0f, ShellMotion.spring()) }
                     },
                 ) { _, amount -> scope.launch { drag.snapTo(drag.value + amount) } }
@@ -307,8 +340,8 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
                 }
             }
             val addToPlaylist = com.metrolist.shared.ui.player.LocalPlayerPlatform.current.rememberPlaylistAdder()
-            AddToPlaylistButton(song, { addToPlaylist(listOf(it)) }, c.ink, size = 44.dp, iconSize = 20.dp)
-            LikeButton(song, SongLikeState.isLiked(song.id), size = 44.dp, visual = 40.dp)
+            AddToPlaylistButton(song, { addToPlaylist(listOf(it)) }, c.ink, size = 48.dp, iconSize = 20.dp)
+            LikeButton(song, SongLikeState.isLiked(song.id), size = 48.dp, visual = 40.dp)
             PlayPauseButton(state.isPlaying, controller::togglePlayPause, 48.dp, Color.Transparent, c.ink, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
         }
     }
@@ -372,6 +405,15 @@ private data class PlayerModes(val shuffle: Boolean, val repeat: Int, val queueT
 @Composable
 fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
     SideEffect { if (slot.collapsed) TurtleUiSlots.showUpstreamPlayer = false }
+    val vm = slot.viewModel
+    // Retuning the Infinity Mix from Home trims Up Next too, so this is registered while collapsed as well.
+    SideEffect { ShellInfinity.removeAt = vm::removeQueueIndex }
+    // Composed while collapsed too, so the listening log keeps the queue order and playhead on phones.
+    val handoff = LocalPlaybackController.current
+    DisposableEffect(handoff) {
+        TurtleBridge.attachController(handoff)
+        onDispose { TurtleBridge.detachController(handoff) }
+    }
     if (slot.collapsed) return@ShellTheme
     // Upstream's own back handler lives in the player we replace; without this, Back closes the app.
     NavigationBackHandler(enabled = true) { slot.onClose() }
@@ -379,7 +421,6 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
     val song = state.currentSong ?: return@ShellTheme
-    val vm = slot.viewModel
     val modes by remember(vm) { vm.uiState.map { PlayerModes(it.isShuffleOn, it.repeatMode, it.queueTitle) }.distinctUntilChanged() }
         .collectAsState(PlayerModes(false, 0, null))
     val live = rememberLivePosition(controller, state.isPlaying, song.id)
@@ -398,7 +439,6 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
     val services = rememberPhoneServices(slot)
     val source = (modes.queueTitle ?: ShellQueue.activeTitle(state))?.takeIf { it.isNotBlank() }
     val infinityOn = ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)
-    SideEffect { services.removeQueueIndex?.let { ShellInfinity.removeAt = it } }
 
     Box(Modifier.fillMaxSize().background(tint)) {
         Column(
@@ -464,11 +504,17 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
             }
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_shuffle), vm::toggleShuffle, if (modes.shuffle) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = modes.shuffle)
+                GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_shuffle), vm::toggleShuffle, if (modes.shuffle) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = modes.shuffle, state = onOffState(modes.shuffle))
                 GlyphButton(Glyphs.Previous, stringResource(Res.string.shell_previous), controller::skipToPrevious, c.ink, size = 60.dp, iconSize = 32.dp)
                 PlayPauseButton(state.isPlaying, controller::togglePlayPause, 72.dp, c.ink, c.ground, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
                 GlyphButton(Glyphs.Next, stringResource(Res.string.shell_next), controller::skipToNext, c.ink, size = 60.dp, iconSize = 32.dp)
-                GlyphButton(Glyphs.Repeat, stringResource(Res.string.shell_repeat), vm::toggleRepeat, if (modes.repeat != 0) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = modes.repeat != 0)
+                // Upstream's view model reports repeat as 0 off, 1 one, 2 all.
+                val repeat = when (modes.repeat) {
+                    1 -> RepeatMode.ONE
+                    2 -> RepeatMode.ALL
+                    else -> RepeatMode.OFF
+                }
+                GlyphButton(repeatGlyph(repeat), stringResource(Res.string.shell_repeat), vm::toggleRepeat, if (repeat != RepeatMode.OFF) c.accent else c.ink, size = 52.dp, iconSize = 24.dp, dot = repeat != RepeatMode.OFF, state = repeatState(repeat))
             }
             // Podcasts and audiobooks: speed, -15 / +30 and sleep (hidden for music).
             SpokenWordControls(song = song, controller = controller, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
@@ -481,9 +527,8 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
             SteerCard(tint)
             Spacer(Modifier.height(12.dp))
         }
-        PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint)
+        PhoneSurfaces(surface, { surface = it }, song, state, controller, services, live, tint) { toast = it }
         InfinitySheetHost()
-        TurtleDjHost()
         ShellToast(toast, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars))
     }
 }
@@ -557,6 +602,11 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
 fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
+    // Queue order and playhead for the listening log (skip vs. choosing another song, seeks).
+    DisposableEffect(controller) {
+        TurtleBridge.attachController(controller)
+        onDispose { TurtleBridge.detachController(controller) }
+    }
     val state by controller.rememberCalmState()
     val song = state.currentSong ?: slot.restoredSong
     val live = rememberLivePosition(controller, state.isPlaying, song?.id)
@@ -568,8 +618,6 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     // Any left open from an earlier session are closed once, so they never cover the page.
     app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song?.displayThumbnailUrl)
     InfinitySheetHost()
-    TurtleDjHost()
-    SideEffect { com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras?.removeQueueIndex?.let { ShellInfinity.removeAt = it } }
     LaunchedEffect(Unit) {
         if (slot.isQueueOpen()) slot.onToggleQueue()
         if (slot.isLyricsOpen()) slot.onToggleLyrics()
@@ -603,13 +651,13 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
         Column(Modifier.weight(1.4f), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 slot.onToggleShuffle?.let { toggle ->
-                    GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_shuffle), toggle, if (shuffled) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = shuffled)
+                    GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_shuffle), toggle, if (shuffled) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = shuffled, state = onOffState(shuffled))
                 }
                 GlyphButton(Glyphs.Previous, stringResource(Res.string.shell_previous), controller::skipToPrevious, c.ink, size = 36.dp, iconSize = 20.dp)
                 PlayPauseButton(state.isPlaying, controller::togglePlayPause, 40.dp, c.ink, c.ground, playLabel = stringResource(Res.string.shell_play), pauseLabel = stringResource(Res.string.shell_pause))
                 GlyphButton(Glyphs.Next, stringResource(Res.string.shell_next), controller::skipToNext, c.ink, size = 36.dp, iconSize = 20.dp)
                 slot.onCycleRepeat?.let { cycle ->
-                    GlyphButton(Glyphs.Repeat, stringResource(Res.string.shell_repeat), cycle, if (repeat != RepeatMode.OFF) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = repeat != RepeatMode.OFF)
+                    GlyphButton(repeatGlyph(repeat), stringResource(Res.string.shell_repeat), cycle, if (repeat != RepeatMode.OFF) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = repeat != RepeatMode.OFF, state = repeatState(repeat))
                 }
                 // The Infinity Mix, one click from anywhere (H-Desktop's transport row).
                 GlyphButton(Glyphs.Infinity, infinityTitle, {
@@ -640,6 +688,11 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     }
 }
 
+/** Removes the queue entry at [index] through upstream's player view model (phones). */
+private fun PlayerViewModel.removeQueueIndex(index: Int) {
+    uiState.value.queueEntryKeys.getOrNull(index)?.let { removeQueueEntry(it) }
+}
+
 /** Phone services: upstream's player view model and platform (downloads, playlists), in Shell's surfaces. */
 @Composable
 private fun rememberPhoneServices(slot: PlayerSlot): ShellPlayerServices {
@@ -660,7 +713,7 @@ private fun rememberPhoneServices(slot: PlayerSlot): ShellPlayerServices {
             val current = vm.uiState.value
             if (lyrics.songId != song.id || (current.lyrics.isEmpty() && !current.isLyricsLoading)) current.currentSong?.let { vm.loadLyrics(it) }
         },
-        removeQueueIndex = { index -> vm.uiState.value.queueEntryKeys.getOrNull(index)?.let { vm.removeQueueEntry(it) } },
+        removeQueueIndex = vm::removeQueueIndex,
         addToPlaylist = { addToPlaylist(listOf(it)) },
         share = { vm.shareSong(it) },
         download = { download(listOf(it)) },
@@ -686,6 +739,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
     services: ShellPlayerServices,
     live: LivePosition,
     tint: Color,
+    onToast: (String) -> Unit,
 ) {
     val c = Shell.colors
     val full = surface == PlayerSurface.LYRICS || surface == PlayerSurface.QUEUE
@@ -724,7 +778,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
         when (lastSheet[0]) {
             PlayerSurface.SLEEP -> ShellSleepTimer(services) { onSurface(null) }
             PlayerSurface.DEVICES -> ShellDevices(state, controller)
-            else -> ShellMoreActions(song, controller, services, onShow = onSurface, onDone = { onSurface(null) })
+            else -> ShellMoreActions(song, controller, services, onShow = onSurface, onDone = { onSurface(null) }, onToast = onToast)
         }
     }
 }

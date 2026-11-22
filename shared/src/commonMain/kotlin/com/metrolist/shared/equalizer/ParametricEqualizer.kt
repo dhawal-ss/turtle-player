@@ -124,7 +124,6 @@ class ParametricEqualizer(
         count: Int = samples.size,
         outputGainDb: Double = 0.0,
     ) {
-        com.metrolist.shared.turtle.TurtleAudioFx.processor?.process(this, samples, count, sampleRate, channelCount)
         val outputGain = 10.0.pow(outputGainDb.coerceIn(MIN_AUDIO_PREAMP_DB, MAX_AUDIO_BOOST_DB) / 20.0)
         if (activeFilters.isEmpty() && preampGain == 1.0 && outputGain == 1.0) {
             var frameStart = 0

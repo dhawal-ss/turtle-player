@@ -31,6 +31,20 @@ class TasteProfileTest {
     }
 
     @Test
+    fun firstPlaySkippedBeforeHalfwayIsNotANewFind() {
+        val (skippedEarly, heldOn) = world.tracks.take(2)
+        val p = TasteProfileBuilder().apply {
+            // Both are first plays that held past a minute of a 200 s song.
+            add(play(skippedEarly, now - HOUR_MS, EndReason.SKIPPED, msPlayed = 61_000))
+            add(play(heldOn, now - HOUR_MS, EndReason.SKIPPED, msPlayed = 150_000))
+        }.snapshot(now, rep)
+        assertEquals(null, p.track(skippedEarly.key)!!.foundMs)
+        assertTrue(p.track(skippedEarly.key)!!.affinity < 0)
+        assertTrue(p.track(heldOn.key)!!.foundMs != null)
+        assertTrue(p.track(heldOn.key)!!.affinity > 0)
+    }
+
+    @Test
     fun affinityHalvesEveryNinetyDaysRegardlessOfEventOrder() {
         val t = world.tracks[0]
         val inOrder = TasteProfileBuilder().apply {

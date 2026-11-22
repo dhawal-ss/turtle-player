@@ -92,13 +92,15 @@ class LexicalIndex {
 
     fun tracks(): List<IndexedTrack> = trackSlots.values.mapNotNull { docs[it]?.track }
 
-    /** Adds or replaces [meta]. Sources accumulate: a history track later saved to the library has both. */
+    /**
+     * Adds or replaces [meta] with exactly [sources], so a song unsaved from the library and upserted
+     * as HISTORY loses its LIBRARY source. Pass every source that applies (a saved song that was also
+     * played is both); [removeSource] drops one.
+     */
     fun upsert(meta: TrackMeta, sources: Set<LocalSource> = setOf(LocalSource.LIBRARY)) {
-        val previous = trackSlots[meta.key]?.let { docs[it]?.track }
-        val merged = (previous?.sources.orEmpty() + sources).ifEmpty { setOf(LocalSource.LIBRARY) }
-        if (previous != null) remove(meta.key)
+        if (trackSlots.containsKey(meta.key)) remove(meta.key)
         val (canonical, fields) = DocBuilder.track(meta)
-        val slot = insert(Doc(DocType.TRACK, fields).also { it.track = IndexedTrack(meta, canonical, merged) })
+        val slot = insert(Doc(DocType.TRACK, fields).also { it.track = IndexedTrack(meta, canonical, sources.ifEmpty { setOf(LocalSource.LIBRARY) }) })
         trackSlots[meta.key] = slot
         meta.artists.filter { it.isNotBlank() }.distinctBy { ArtistKey.of(it) }.forEach { retainArtist(it) }
         if (!meta.album.isNullOrBlank()) retainAlbum(meta)

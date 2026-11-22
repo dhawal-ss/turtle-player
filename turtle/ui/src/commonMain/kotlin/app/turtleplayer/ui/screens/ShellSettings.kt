@@ -464,7 +464,7 @@ private fun SettingsPageRow(
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (compact) 1.dp else 0.dp)
                 .heightIn(min = if (compact) 56.dp else 68.dp).clip(RoundedCornerShape(10.dp)).background(bg).hoverable(source)
-                .shellPressable(onClick, role = if (compact) Role.Tab else Role.Button, label = page.title, focusShape = RoundedCornerShape(10.dp))
+                .shellPressable(onClick, role = if (compact) Role.Tab else Role.Button, label = page.title, focusShape = RoundedCornerShape(10.dp), selected = selected.takeIf { compact })
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

@@ -16,6 +16,7 @@ import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +50,12 @@ internal val deviceTime = LocalTimeResolver { epochMs ->
     local.hour to local.dayOfWeek.isoDayNumber
 }
 
+/** The listener's calendar day, so Daily Mixes turn over at their midnight. */
+@OptIn(ExperimentalTime::class)
+internal val deviceDay: (Long) -> Long = { epochMs ->
+    Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(TimeZone.currentSystemDefault()).date.toEpochDays().toLong()
+}
+
 /** App-lifetime work (index sync, taste updates), independent of any screen or service. */
 class TurtleScope(
     val scope: CoroutineScope = CoroutineScope(
@@ -71,7 +78,7 @@ val turtleModule: Module = module {
         SqlitePlayEventStore(spec.driver, spec.path)
     }
     single<PlayEventStore> { get<SqlitePlayEventStore>() }
-    single { ListeningSessionTracker(get(), Clock.System, deviceTime) }
+    single { ListeningSessionTracker(get(), Clock.System, deviceTime, checkpoint = get<SqlitePlayEventStore>()) }
     single { PlayerObserver(get()) }
     single { SpotifyHistoryImporter(get(), deviceTime) }
     single { ListenBrainzHistoryImporter(get(), deviceTime) }
@@ -84,7 +91,7 @@ val turtleModule: Module = module {
 
     // Co-listening packs are not trained yet; until then the engine ranks on listening history alone.
     single<EmbeddingStore> { InMemoryEmbeddingStore() }
-    single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get())) }
+    single { TasteEngine(events = get(), store = get(), catalog = get<LibrarySync>(), upstream = YouTubeRadioSource(get()), localDay = deviceDay) }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get()) }
     single { InfinityMix(get(), get(), get(), get()) }
@@ -201,6 +208,19 @@ object TurtleBridge {
             if (store == null) delay(KOIN_POLL_MS)
         }
         store
+    }
+
+    /**
+     * Shell hands over upstream's playback controller while it is on screen, so the listening log can
+     * tell the next button from choosing another song, and see seeks. Needs no upstream hook line.
+     */
+    fun attachController(controller: PlaybackController) {
+        PlaybackHints.controller = controller
+    }
+
+    /** Shell's player left the screen: drop the controller so it is not kept past its Activity. */
+    fun detachController(controller: PlaybackController) {
+        if (PlaybackHints.controller === controller) PlaybackHints.controller = null
     }
 
     /** "Less like this" on a song (no-op when our runtime is unavailable). */

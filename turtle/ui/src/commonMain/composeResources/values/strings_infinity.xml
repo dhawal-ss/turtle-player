@@ -59,6 +59,17 @@
     <string name="shell_theme_title">Theme</string>
     <string name="shell_theme_body">Re-skin the whole app. Cover colour takes its accent from whatever is playing.</string>
     <string name="shell_theme_open">Theme</string>
+    <string name="shell_palette_shell">Shell</string>
+    <string name="shell_palette_dynamic">Cover colour</string>
+    <string name="shell_palette_mono">Mono</string>
+    <string name="shell_palette_catppuccin">Catppuccin</string>
+    <string name="shell_palette_rosepine">Rosé Pine</string>
+    <string name="shell_palette_nord">Nord</string>
+    <string name="shell_palette_dracula">Dracula</string>
+    <string name="shell_palette_gruvbox">Gruvbox</string>
+    <string name="shell_palette_tokyonight">Tokyo Night</string>
+    <string name="shell_palette_everforest">Everforest</string>
+    <string name="shell_palette_sunset">Sunset</string>
     <string name="shell_inf_thumb_up">I like this</string>
     <string name="shell_inf_thumb_down">Not for me</string>
     <string name="shell_inf_up_toast">Got it. More like this.</string>
@@ -67,4 +78,6 @@
     <string name="shell_inf_fresh_confirm">Tap again to forget all tuning</string>
     <string name="shell_inf_fresh_body">Forgets this mix's picks, likes and passes. Your listening history stays.</string>
     <string name="shell_add_to_playlist">Add to playlist</string>
+    <!-- More genres picked than the Home card lists, e.g. "+3". -->
+    <string name="shell_inf_more_genres">+%1$d</string>
 </resources>

@@ -76,6 +76,133 @@ class ListeningSessionTrackerTest {
         assertTrue(a.sessionId != b.sessionId)
         assertEquals(0, b.position)
     }
+
+    @Test
+    fun trackRestoredPausedCountsOnlyListeningTime() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val tracker = ListeningSessionTracker(store, clock)
+
+        // Restored paused at launch, then left alone for an hour before playing 40 s.
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.RESUMED, Surface.QUEUE, playing = false))
+        clock.advance(60 * 60_000L)
+        tracker.onSignal(PlaybackSignal.PlayingChanged(true))
+        clock.advance(40_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.USER_NEXT, Surface.QUEUE))
+        tracker.flush()
+
+        val a = store.since(0).first()
+        assertEquals(40_000, a.msPlayed)
+        assertEquals(EndReason.SKIPPED, a.endReason)
+        assertFalse(a.isFinished)
+    }
+
+    @Test
+    fun trackThatNeverPlayedIsNotRecorded() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val tracker = ListeningSessionTracker(store, clock)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("restored"), StartReason.RESUMED, Surface.QUEUE, playing = false))
+        clock.advance(20 * 60_000L)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.TAPPED, Surface.SEARCH))
+        clock.advance(10_000)
+        tracker.flush()
+
+        assertEquals(listOf("yt:b"), store.since(0).map { it.trackKey.value })
+    }
+
+    @Test
+    fun choosingSomethingElseIsNotASkip() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val tracker = ListeningSessionTracker(store, clock)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(15_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("album"), StartReason.TAPPED, Surface.ALBUM))
+        clock.advance(195_000)
+        // Next pressed in the outro: a finish, not a skip.
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("c"), StartReason.USER_NEXT, Surface.QUEUE))
+        tracker.flush()
+
+        val (a, album) = store.since(0)
+        assertEquals(EndReason.STOPPED, a.endReason)
+        assertFalse(a.isQuickSkip)
+        assertEquals(EndReason.COMPLETED, album.endReason)
+    }
+
+    @Test
+    fun longPauseMidTrackStartsNewSession() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val tracker = ListeningSessionTracker(store, clock)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(30_000)
+        tracker.onSignal(PlaybackSignal.PlayingChanged(false))
+        clock.advance(3 * 60 * 60_000L)
+        tracker.onSignal(PlaybackSignal.PlayingChanged(true))
+        clock.advance(170_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        tracker.flush()
+
+        val (a, b) = store.since(0)
+        assertEquals(200_000, a.msPlayed)
+        assertTrue(a.sessionId != b.sessionId)
+    }
+
+    @Test
+    fun playInProgressSurvivesARestart() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val saved = MemoryCheckpoint()
+        val before = ListeningSessionTracker(store, clock, checkpoint = saved)
+
+        before.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(200_000)
+        before.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        clock.advance(60_000)
+        before.checkpoint()
+        // The app is killed here; "b" was never closed.
+
+        val after = ListeningSessionTracker(store, clock, checkpoint = saved)
+        val recovered = after.recover()
+        assertEquals("yt:b", recovered?.trackKey?.value)
+        assertEquals(60_000, recovered?.msPlayed)
+        assertEquals(EndReason.STOPPED, recovered?.endReason)
+        assertEquals(listOf("yt:a", "yt:b"), store.since(0).map { it.trackKey.value })
+        // Recovered once only.
+        assertEquals(null, after.recover())
+    }
+
+    @Test
+    fun closedPlayIsNeverRecoveredTwice() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val saved = MemoryCheckpoint()
+        val tracker = ListeningSessionTracker(store, clock, checkpoint = saved)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(100_000)
+        tracker.checkpoint()
+        clock.advance(100_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        // Killed before "b" was checkpointed: nothing may be recovered, since "a" is already stored.
+
+        assertEquals(null, ListeningSessionTracker(store, clock, checkpoint = saved).recover())
+        assertEquals(listOf("yt:a"), store.since(0).map { it.trackKey.value })
+    }
+}
+
+private class MemoryCheckpoint : OpenPlayCheckpoint {
+    private var play: PlayEvent? = null
+
+    override suspend fun save(play: PlayEvent?) {
+        this.play = play
+    }
+
+    override suspend fun take(): PlayEvent? = play.also { play = null }
 }
 
 class HistoryImportTest {

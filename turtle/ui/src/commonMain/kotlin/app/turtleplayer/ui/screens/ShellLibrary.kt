@@ -53,6 +53,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -617,14 +618,15 @@ private fun ShellLibChips(selected: UpFilter?, text: LibraryContentText, onFilte
             exit = shrinkHorizontally(ShellMotion.exit()) + fadeOut(ShellMotion.exit()),
         ) {
             Box(
-                Modifier.size(32.dp).clip(CircleShape).background(c.surface2)
+                // A 48 dp target around the 32 dp button, as Material's icon buttons do.
+                Modifier.minimumInteractiveComponentSize().size(32.dp).clip(CircleShape).background(c.surface2)
                     .shellPressable({ onFilterChange(null) }, label = stringResource(Res.string.shell_lib_clear_filter), focusShape = CircleShape),
                 contentAlignment = Alignment.Center,
             ) { Glyph(Glyphs.Close, c.ink, 14.dp) }
         }
         options.forEach { option ->
             val isSelected = selected == option
-            ShellChip(text.filterLabels[option] ?: option.name, isSelected, { onFilterChange(if (isSelected) null else option) })
+            ShellChip(text.filterLabels.getValue(option), isSelected, { onFilterChange(if (isSelected) null else option) })
         }
     }
 }
@@ -685,7 +687,7 @@ private fun ShellLibSortRow(
     var expanded by remember { mutableStateOf(false) }
     var anchor by remember { mutableStateOf(IntOffset.Zero) }
     val ascending = sorting.direction == SortDirection.ASCENDING
-    val sortLabel = text.sortLabels[sortType] ?: sortType.name
+    val sortLabel = text.sortLabels.getValue(sortType)
     Row(Modifier.fillMaxWidth().height(52.dp).padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.trackPressPosition { anchor = it.round() }) {
             Row(
@@ -706,14 +708,14 @@ private fun ShellLibSortRow(
                 onOptionSelected = { option ->
                     Settings.shared.setLibrarySorting(filterType, LibrarySorting(LibraryContentSort.valueOf(option.name), option.shellDefaultDirection))
                 },
-                optionLabel = { text.sortLabels[it] ?: it.name },
+                optionLabel = { text.sortLabels.getValue(it) },
                 anchorOffset = anchor,
             )
         }
         if (sortType != LibrarySortType.MANUAL) {
             val rotation by animateFloatAsState(if (ascending) 180f else 0f, ShellMotion.emphasized())
             Box(
-                Modifier.size(36.dp).shellPressable(
+                Modifier.size(48.dp).shellPressable(
                     {
                         Settings.shared.setLibrarySorting(
                             filterType,

@@ -29,13 +29,27 @@ data class CanonicalTitle(
  * "live" or "remix" can be preferred or penalized deliberately.
  */
 object TitleCanonicalizer {
+    /** Upload and release noise. Only removed from bracketed and dash-separated segments, never from the title itself. */
     private val noisePhrases = listOf(
         "official music video", "official video", "official audio", "official lyric video",
         "official visualizer", "official visualiser", "official mv", "official", "music video",
         "lyric video", "lyrics video", "with lyrics", "lyrics", "lyric", "audio", "video", "visualizer",
         "visualiser", "hd", "hq", "4k", "mv", "explicit", "clean", "color coded", "eng sub", "romanized",
-        "remastered", "remaster", "mono", "stereo", "radio edit", "album version", "single version",
-        "original mix", "extended mix", "extended", "full version", "version",
+        "digitally remastered", "digital remaster", "remastered", "remaster", "digital", "mono", "stereo",
+        "radio edit", "album version", "single version", "original mix", "extended mix", "extended",
+        "full version", "version", "deluxe", "expanded", "special edition", "anniversary", "edition",
+        "bonus track", "bonus",
+    )
+
+    /**
+     * Upload markers that are unambiguous even outside brackets ("Yellow Official Video"), so they
+     * are removed from the end of the title. Single words such as "clean" or "video" are not: they
+     * end real titles ("Come Clean").
+     */
+    private val trailingMarkers = listOf(
+        "official music video", "official video", "official audio", "official lyric video", "official visualizer",
+        "official visualiser", "official mv", "music video", "lyric video", "lyrics video", "with lyrics",
+        "color coded", "eng sub",
     )
 
     /** Words that may follow a leading version word in a dash segment: "Live at X", "Acoustic Session". */
@@ -44,6 +58,7 @@ object TitleCanonicalizer {
     private val bracketed = Regex("""[(\[{【「]([^)\]}】」]*)[)\]}】」]""")
     private val featPattern = Regex("""(?i)\s(?:feat\.?|ft\.?|featuring)\s+([^()\[\]|]+?)(?=\s+-\s|$)""")
     private val yearPattern = Regex("""^(?:19|20)\d\d$""")
+    private val ordinalPattern = Regex("""^\d+(?:st|nd|rd|th)$""")
     private val dashSplit = Regex("""\s+[-–—|]\s+""")
 
     /**
@@ -64,7 +79,9 @@ object TitleCanonicalizer {
             val norm = TextNormalizer.normalize(inner)
             when {
                 norm.tokens.isEmpty() -> " "
-                norm.tokens.first() == "feat" || norm.tokens.first() == "with" -> {
+                // "(With Lyrics)" is upload noise, "(with Kygo)" a featured artist.
+                norm.tokens.first() == "feat" ||
+                    (norm.tokens.first() == "with" && !isMarkerRest(removeNoise(norm.tokens.drop(1).joinToString(" ")))) -> {
                     noteFeatured(inner.trim().substringAfter(' ', ""))
                     " "
                 }
@@ -73,7 +90,7 @@ object TitleCanonicalizer {
                     val tags = tagsIn(norm.tokens)
                     versions += tags
                     val rest = removeNoise(norm.folded)
-                    if (rest.isBlank() || tags.isNotEmpty() || rest.split(' ').all { yearPattern.matches(it) }) " " else m.value
+                    if (tags.isNotEmpty() || isMarkerRest(rest)) " " else m.value
                 }
             }
         }
@@ -92,8 +109,7 @@ object TitleCanonicalizer {
                 val rest = removeNoise(norm.folded)
                 val tags = tagsIn(norm.tokens)
                 val markerShaped = norm.tokens.isNotEmpty() && (
-                    rest.isBlank() ||
-                        rest.split(' ').all { yearPattern.matches(it) } ||
+                    isMarkerRest(rest) ||
                         (tags.isNotEmpty() && (tagsIn(listOf(norm.tokens.last())).isNotEmpty() ||
                             (tagsIn(listOf(norm.tokens.first())).isNotEmpty() &&
                                 (norm.tokens.size == 1 || norm.tokens[1] in versionContinuations || yearPattern.matches(norm.tokens[1])))))
@@ -108,7 +124,7 @@ object TitleCanonicalizer {
             working = (" $working").removeRange(m.range)
         }
 
-        val base = removeNoise(TextNormalizer.normalize(working).folded)
+        val base = removeTrailingMarkers(TextNormalizer.normalize(working).folded)
         return CanonicalTitle(
             base = base.ifBlank { TextNormalizer.key(title) },
             versions = versions,
@@ -126,6 +142,18 @@ object TitleCanonicalizer {
     fun tagsIn(tokens: List<String>): Set<VersionTag> {
         val set = tokens.toSet()
         return VersionTag.entries.filterTo(mutableSetOf()) { tag -> tag.words.any { it in set } }
+    }
+
+    /** What is left of a segment after noise removal is empty or only years and ordinals ("2003", "25th"). */
+    private fun isMarkerRest(rest: String): Boolean =
+        rest.isBlank() || rest.split(' ').all { yearPattern.matches(it) || ordinalPattern.matches(it) }
+
+    private fun removeTrailingMarkers(folded: String): String {
+        var s = folded
+        while (true) {
+            val marker = trailingMarkers.firstOrNull { s.endsWith(" $it") } ?: return s
+            s = s.dropLast(marker.length + 1)
+        }
     }
 
     private fun removeNoise(folded: String): String {

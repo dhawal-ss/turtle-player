@@ -57,6 +57,10 @@
     <string name="shell_previous">Previous</string>
     <string name="shell_shuffle">Shuffle</string>
     <string name="shell_repeat">Repeat</string>
+    <string name="shell_state_on">On</string>
+    <string name="shell_state_off">Off</string>
+    <string name="shell_repeat_state_all">All songs</string>
+    <string name="shell_repeat_state_one">This song</string>
     <string name="shell_lyrics">Lyrics</string>
     <string name="shell_queue">Queue</string>
     <string name="shell_devices">Connect to a device</string>

@@ -44,3 +44,18 @@ data class Shelf(
 }
 
 val QueueItem.lessLikeThis: LessLikeThis get() = LessLikeThis.Track(key, track.artistKey)
+
+/**
+ * How long a home shelf stays as built, as in Spotify: mixes are the day's mixes, discovery is the
+ * week's. Kept shelves still drop tracks the listener marks "less like this" or artists they mute.
+ * On repeat is not listed: it follows the listening live.
+ */
+enum class ShelfCadence(val weekly: Boolean) {
+    /** Daily Mixes (artist mixes without vectors). */
+    DAILY(false),
+    DAILY_MORE_LIKE(false),
+    DAILY_FRESH(false),
+    DAILY_REDISCOVER(false),
+    /** Weekly Discovery, Monday to Sunday in the listener's time zone. */
+    WEEKLY(true),
+}

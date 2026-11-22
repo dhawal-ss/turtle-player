@@ -18,30 +18,36 @@ import kotlinx.coroutines.launch
  * it (autoplay only appends), and playing anything else replaces it.
  */
 object ShellQueue {
-    private class Anchor(val songId: String, val title: String)
+    private class Anchor(val songId: String, val title: String, val sourceId: String?)
 
     private var anchor by mutableStateOf<Anchor?>(null)
 
-    /** Plays [songs] as a named queue and remembers the name. */
-    fun play(controller: PlaybackController, songs: List<SongItem>, title: String, startIndex: Int = 0) {
+    /** Plays [songs] as a named queue and remembers the name and, when known, the playlist or book id. */
+    fun play(controller: PlaybackController, songs: List<SongItem>, title: String, startIndex: Int = 0, sourceId: String? = null) {
         val first = songs.getOrNull(startIndex) ?: return
-        anchor = Anchor(first.id, title)
+        anchor = Anchor(first.id, title, sourceId)
         controller.playQueue(songs, startIndex, queueTitle = title)
     }
 
+    private fun active(state: PlaybackUiState): Anchor? = anchor?.takeIf { a -> state.queue.any { it.id == a.songId } }
+
     /** The name of the Shell-started queue that is still playing, or null. */
-    fun activeTitle(state: PlaybackUiState): String? {
-        val a = anchor ?: return null
-        return a.title.takeIf { state.queue.any { it.id == a.songId } }
-    }
+    fun activeTitle(state: PlaybackUiState): String? = active(state)?.title
+
+    /** The id of the library item the Shell-started queue came from, while it is still playing. */
+    fun activeSourceId(state: PlaybackUiState): String? = active(state)?.sourceId
 }
 
-private fun PlaybackUiState.calm() = copy(positionMs = 0L, bufferedPositionMs = 0L)
+private fun PlaybackUiState.calm() = copy(
+    positionMs = 0L,
+    bufferedPositionMs = 0L,
+    sleepTimerState = sleepTimerState.copy(remainingMs = null),
+)
 
 /**
- * Playback state without the position tick, which both platforms update continuously: screens that
- * collect this recompose on song, queue, play/pause and mode changes only. Read the position in a
- * leaf with [rememberLivePosition].
+ * Playback state without the position and sleep-timer countdown ticks, which update continuously:
+ * screens that collect this recompose on song, queue, play/pause and mode changes only. Read the
+ * position in a leaf with [rememberLivePosition], and the countdown from `controller.state` in a leaf.
  */
 @androidx.compose.runtime.Composable
 internal fun PlaybackController.rememberCalmState(): androidx.compose.runtime.State<PlaybackUiState> {

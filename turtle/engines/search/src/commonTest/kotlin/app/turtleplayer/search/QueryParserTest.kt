@@ -14,6 +14,7 @@ class QueryParserTest {
         upsert(track("s", "Ben E. King", "Stand by Me"))
         upsert(track("l", "Oasis", "Live Forever", "Definitely Maybe"))
         upsert(track("t", "Michael Jackson", "Billie Jean", "Thriller"))
+        upsert(track("w", "The Weeknd", "Blinding Lights", "After Hours"))
     }
     private val parser = QueryParser(index.lexicons())
 
@@ -24,6 +25,7 @@ class QueryParserTest {
         assertTrue(q.confidence >= 0.9f)
         assertEquals(Intent.ARTIST, parser.parse("radiohed ").intent, "typo in a known artist")
         assertEquals(Intent.ARTIST, parser.parse("coldp").intent, "artist being typed")
+        assertEquals(Intent.ARTIST, parser.parse("teh weeknd").intent, "swapped letters in a short word")
     }
 
     @Test

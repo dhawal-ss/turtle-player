@@ -79,9 +79,10 @@ internal fun Swatch(p: ShellPalette, selected: Boolean, onClick: () -> Unit) {
     val k = p.colors
     val ring by animateDpAsState(if (selected) 2.dp else 1.dp, ShellMotion.emphasized())
     val shape = RoundedCornerShape(10.dp)
+    val name = stringResource(p.name)
     Column(
         Modifier.width(104.dp).clip(shape).border(ring, if (selected) c.accent else c.hairline, shape)
-            .shellPressable(onClick, label = p.name, focusShape = shape),
+            .shellPressable(onClick, label = name, focusShape = shape),
     ) {
         Box(Modifier.fillMaxWidth().height(64.dp).background(k.ground).padding(8.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -98,7 +99,7 @@ internal fun Swatch(p: ShellPalette, selected: Boolean, onClick: () -> Unit) {
             }
         }
         Text(
-            p.name, style = Shell.type.bodySmall.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
+            name, style = Shell.type.bodySmall.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
             color = if (selected) c.ink else c.ink2, maxLines = 1, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
         )
     }

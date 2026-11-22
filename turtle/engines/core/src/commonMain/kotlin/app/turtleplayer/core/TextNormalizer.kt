@@ -28,12 +28,19 @@ object TextNormalizer {
         val lower = input.lowercase()
         var i = 0
         while (i < lower.length) {
-            val c = lower[i]
+            val c = widen(lower[i])
             when {
                 c == '&' || c == '+' -> sb.append(" and ")
                 // Apostrophes join words: "don't" -> "dont".
                 c == '\'' || c == '’' || c == '`' || c == '´' -> Unit
-                c in '̀'..'ͯ' -> Unit // combining marks left over from lowercase()
+                // Letter-like symbols inside a name: "P!nk" -> "pink", "Ke$ha" -> "kesha", "$uicideboy$".
+                c == '!' && isLetterAt(lower, i - 1) && isLetterAt(lower, i + 1) -> sb.append('i')
+                c == '$' && (isLetterAt(lower, i - 1) || isLetterAt(lower, i + 1)) -> sb.append('s')
+                isMark(c) -> {
+                    // Vowel signs and viramas are part of Indic words ("दिल"); other marks (Latin accents left
+                    // over from lowercase(), Arabic harakat, Hebrew points) are optional and dropped.
+                    if (isEssentialMark(c) && sb.isNotEmpty() && sb.last() != ' ') sb.append(c)
+                }
                 c in '぀'..'ヿ' -> {
                     i = Kana.romanize(lower, i, sb)
                     continue
@@ -56,6 +63,19 @@ object TextNormalizer {
         return NormalizedText(tokens.joinToString(" "), tokens)
     }
 
+    /** Full-width ASCII ("Ｍｕｓｉｃ１９９９") to plain ASCII. */
+    private fun widen(c: Char): Char = if (c in '\uFF01'..'\uFF5E') (c.code - 0xFEE0).toChar().lowercaseChar() else c
+
+    private fun isLetterAt(s: String, i: Int): Boolean = i in s.indices && widen(s[i]).isLetter()
+
+    private fun isMark(c: Char): Boolean = when (c.category) {
+        CharCategory.NON_SPACING_MARK, CharCategory.COMBINING_SPACING_MARK, CharCategory.ENCLOSING_MARK -> true
+        else -> false
+    }
+
+    /** Marks that change the letter in abugidas written with spaces (Devanagari to Sinhala, Tibetan, Myanmar). */
+    private fun isEssentialMark(c: Char): Boolean = c in '\u0900'..'\u0DFF' || c in '\u0F00'..'\u0FFF' || c in '\u1000'..'\u109F'
+
     /** Convenience for keys and comparisons. */
     fun key(input: String): String = normalize(input).folded
 
@@ -65,9 +85,20 @@ object TextNormalizer {
     private fun fold(c: Char): String? {
         if (c < 'À') return null
         latin[c]?.let { return it }
+        if (c in '\u1EA0'..'\u1EF9') return vietnamese(c)
         cyrillic[c]?.let { return it }
         greek[c]?.let { return it }
         return null
+    }
+
+    /** Latin Extended Additional block of Vietnamese letters with stacked diacritics ("ậ", "ữ"). */
+    private fun vietnamese(c: Char): String = when (c) {
+        in '\u1EA0'..'\u1EB7' -> "a"
+        in '\u1EB8'..'\u1EC7' -> "e"
+        in '\u1EC8'..'\u1ECB' -> "i"
+        in '\u1ECC'..'\u1EE3' -> "o"
+        in '\u1EE4'..'\u1EF1' -> "u"
+        else -> "y"
     }
 
     private fun table(vararg groups: Pair<String, String>): Map<Char, String> {
@@ -81,8 +112,9 @@ object TextNormalizer {
         "àáâãäåāăąǎ" to "a", "çćĉċč" to "c", "ďđ" to "d", "èéêëēĕėęěẽ" to "e",
         "ĝğġģ" to "g", "ĥħ" to "h", "ìíîïĩīĭįıǐ" to "i", "ĵ" to "j", "ķ" to "k",
         "ĺļľŀł" to "l", "ñńņňŉ" to "n", "òóôõöøōŏőǒơ" to "o", "ŕŗř" to "r",
-        "śŝşšș" to "s", "ţťŧț" to "t", "ùúûüũūŭůűųǔư" to "u", "ŵ" to "w",
-        "ýÿŷỳ" to "y", "źżž" to "z", "ß" to "ss", "æ" to "ae", "œ" to "oe",
+        "śŝşšș" to "s", "ţťŧț" to "t", "ùúûüũūŭůűųǔưǖǘǚǜ" to "u", "ŵẁẃẅ" to "w",
+        "ýÿŷỳẏ" to "y", "źżžẓ" to "z", "ḍ" to "d", "ḥ" to "h", "ḷ" to "l", "ṁṃ" to "m", "ṅṇ" to "n",
+        "ṛṝ" to "r", "ṡṣ" to "s", "ṭ" to "t", "ß" to "ss", "æ" to "ae", "œ" to "oe",
         "þ" to "th", "ð" to "d",
     )
 
@@ -130,6 +162,19 @@ internal object Kana {
 
     private val smallY = mapOf('ゃ' to "a", 'ゅ' to "u", 'ょ' to "o")
 
+    private val smallVowel = mapOf('ぁ' to "a", 'ぃ' to "i", 'ぅ' to "u", 'ぇ' to "e", 'ぉ' to "o")
+
+    /**
+     * Loanword digraphs written with a small vowel: ファ fa, ティ ti, ドゥ du, シェ she, ウィ wi, イェ ye.
+     * Null when the pair is not a digraph (a vowel followed by a small vowel is just two vowels).
+     */
+    private fun digraph(syllable: String, vowel: String): String? = when {
+        syllable.length >= 2 -> syllable.dropLast(1) + vowel
+        syllable == "u" && vowel != "u" -> "w$vowel"
+        syllable == "i" && vowel == "e" -> "ye"
+        else -> null
+    }
+
     private fun toHiragana(c: Char): Char = if (c in 'ァ'..'ヶ') c - 0x60 else c
 
     /** Appends romaji for the kana run starting at [start]; returns the index after it. */
@@ -157,9 +202,14 @@ internal object Kana {
             }
             val next = text.getOrNull(i + 1)?.let(::toHiragana)
             val yVowel = next?.let { smallY[it] }
+            val small = next?.let { smallVowel[it] }
+            val combined = if (small != null) digraph(syllable, small) else null
             if (yVowel != null && syllable.endsWith("i") && syllable.length >= 2) {
                 val stem = syllable.dropLast(1)
                 syllable = if (stem.endsWith("sh") || stem.endsWith("ch") || stem == "j") stem + yVowel else stem + "y" + yVowel
+                i++
+            } else if (combined != null) {
+                syllable = combined
                 i++
             }
             if (geminate) {

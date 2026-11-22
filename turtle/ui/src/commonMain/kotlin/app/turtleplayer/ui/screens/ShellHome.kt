@@ -86,6 +86,7 @@ import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_inf_tune
+import app.turtleplayer.ui.generated.resources.shell_inf_more_genres
 import app.turtleplayer.ui.generated.resources.shell_theme_open
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
@@ -214,7 +215,6 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         ShellInfinity.sheetOpen = true
     }
     InfinitySheetHost()
-    TurtleDjHost()
     if (ShellAppearance.open) ShellThemeSheet()
 
     val ground = LocalShellGround.current ?: c.ground
@@ -438,7 +438,7 @@ private fun InfinityCard(artUrls: List<String?>, playing: Boolean, wide: Boolean
             IndexLabel(stringResource(Res.string.shell_infinity_label))
             Text(stringResource(Res.string.shell_infinity_tagline), style = if (wide) Shell.type.display.copy(fontSize = Shell.type.display.fontSize * 1.5f, lineHeight = Shell.type.display.lineHeight * 1.5f) else Shell.type.headline, color = c.ink)
             Text(
-                if (picked.isEmpty()) stringResource(Res.string.shell_infinity_subtitle) else picked.joinToString(" · ") + if (genres.genres.size > 4) " · +${genres.genres.size - 4}" else "",
+                if (picked.isEmpty()) stringResource(Res.string.shell_infinity_subtitle) else picked.joinToString(" · ") + if (genres.genres.size > 4) " · " + stringResource(Res.string.shell_inf_more_genres, genres.genres.size - 4) else "",
                 style = Shell.type.bodySmall, color = if (picked.isEmpty()) c.ink2 else c.accent, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Text(stringResource(Res.string.shell_inf_tune), style = Shell.type.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = c.ink, modifier = Modifier.padding(top = 6.dp))

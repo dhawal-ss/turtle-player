@@ -64,7 +64,11 @@ data class FieldMatch(
 internal class IndexedField(val field: Field, val tokens: List<String>) {
     val joined: List<String> = if (field == Field.VERSION || field == Field.FEATURED) emptyList() else tokens.zipWithNext { a, b -> a + b }
 
-    fun allTerms(): Sequence<String> = tokens.asSequence() + joined.asSequence()
+    /** The whole field glued together when it is an initialism of 3+ letters: "mia" finds "M.I.A.", "rem" "R.E.M.". */
+    val compact: String? =
+        if (field != Field.VERSION && tokens.size >= 3 && tokens.all { it.length <= 2 }) tokens.joinToString("") else null
+
+    fun allTerms(): Sequence<String> = tokens.asSequence() + joined.asSequence() + listOfNotNull(compact).asSequence()
 }
 
 /** Builds the indexed fields of each document type. Shared by the index and ad-hoc scoring of online results. */
@@ -197,6 +201,13 @@ internal object LexicalScorer {
                     val s = w * m.quality * JOINED_FACTOR
                     if (s > best[qi]) {
                         best[qi] = s; bestField[qi] = f; bestPos[qi] = pos; bestSpan[qi] = 2; bestMatch[qi] = m; bestTerm[qi] = f.joined[pos]
+                    }
+                }
+                f.compact?.let { term ->
+                    val m = lookup(qi, term)
+                    if (m != null && m.kind != MatchKind.INFIX && w * m.quality * JOINED_FACTOR > best[qi]) {
+                        best[qi] = w * m.quality * JOINED_FACTOR
+                        bestField[qi] = f; bestPos[qi] = 0; bestSpan[qi] = f.tokens.size; bestMatch[qi] = m; bestTerm[qi] = term
                     }
                 }
             }

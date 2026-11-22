@@ -72,6 +72,26 @@ class LexicalIndexTest {
     }
 
     @Test
+    fun shortTokensAllowOneAdjacentSwap() {
+        val idx = index(track("w", "The Weeknd", "Blinding Lights"), track("c", "X", "Cat"))
+        assertEquals(listOf("w"), idx.trackIds("teh weeknd"))
+        assertEquals(listOf("c"), idx.trackIds("cta"))
+        assertEquals(listOf("c"), idx.trackIds("cta", asYouType = true))
+        assertEquals(emptyList(), idx.trackIds("tca"), "only adjacent characters swap")
+        assertNotNull(idx.artistLexicon.lookup(listOf("teh", "weeknd"), false))
+    }
+
+    @Test
+    fun initialismsMatchWithoutDots() {
+        val idx = index(track("m", "M.I.A.", "Paper Planes"), track("r", "R.E.M.", "Losing My Religion"), track("t", "t.A.T.u.", "All the Things She Said"))
+        fun artist(q: String) = (idx.search(LexicalQuery.of(q, asYouType = false), types = setOf(DocType.ARTIST)).firstOrNull()?.item as? LocalItem.Artist)?.artist?.name
+        assertEquals("M.I.A.", artist("mia"))
+        assertEquals("R.E.M.", artist("rem"))
+        assertEquals("t.A.T.u.", artist("tatu"))
+        assertEquals(listOf("m"), idx.trackIds("mia paper planes"))
+    }
+
+    @Test
     fun joinedTokensFindCompactSpellings() {
         val idx = index(track("acdc", "AC/DC", "Back in Black"))
         val artist = idx.search(LexicalQuery.of("acdc", asYouType = false), types = setOf(DocType.ARTIST)).single()
@@ -97,15 +117,20 @@ class LexicalIndexTest {
     }
 
     @Test
-    fun upsertReplacesAndMergesSources() {
+    fun upsertReplacesMetadataAndSources() {
         val idx = LexicalIndex()
         idx.upsert(track("1", "Coldplay", "Yelow"), setOf(LocalSource.HISTORY))
         idx.upsert(track("1", "Coldplay", "Yellow"), setOf(LocalSource.LIBRARY))
         assertEquals(1, idx.trackCount)
-        assertEquals(setOf(LocalSource.HISTORY, LocalSource.LIBRARY), idx.track(TrackKey.youtube("1"))!!.sources)
+        assertEquals(setOf(LocalSource.LIBRARY), idx.track(TrackKey.youtube("1"))!!.sources)
         val hit = idx.search(LexicalQuery.of("yellow", asYouType = false)).first { it.item is LocalItem.Track }
         assertEquals(MatchKind.EXACT, hit.matches.single { it.field == Field.TITLE }.kind)
 
+        // Unsaved from the library but played before: no longer a library track.
+        idx.upsert(track("1", "Coldplay", "Yellow"), setOf(LocalSource.HISTORY))
+        assertEquals(setOf(LocalSource.HISTORY), idx.track(TrackKey.youtube("1"))!!.sources)
+
+        idx.upsert(track("1", "Coldplay", "Yellow"), setOf(LocalSource.LIBRARY, LocalSource.HISTORY))
         idx.removeSource(TrackKey.youtube("1"), LocalSource.LIBRARY)
         assertNotNull(idx.track(TrackKey.youtube("1")))
         idx.removeSource(TrackKey.youtube("1"), LocalSource.HISTORY)

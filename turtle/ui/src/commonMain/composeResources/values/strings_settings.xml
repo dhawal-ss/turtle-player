@@ -36,12 +36,6 @@
     <string name="shell_set_recs_dial_body">Sets the blend of favourites and new finds in the Infinity Mix. Changes are heard within a song.</string>
     <string name="shell_set_recs_tune">Tune the Infinity Mix</string>
 
-    <!-- Turtle DJ -->
-    <string name="shell_set_dj_sub">Your live mixing booth</string>
-    <string name="shell_set_dj_body">Turtle DJ keeps its decks, effects and set options in the booth.</string>
-    <string name="shell_set_dj_open">Open Turtle DJ</string>
-    <string name="shell_set_dj_open_body">Leaves settings and opens the booth</string>
-
     <!-- Spoken word -->
     <string name="shell_set_spoken">Spoken word</string>
     <string name="shell_set_spoken_sub">Podcasts and audiobooks</string>

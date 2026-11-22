@@ -11,6 +11,7 @@ import app.turtleplayer.events.DeviceType
 import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.NetworkType
+import app.turtleplayer.events.OpenPlayCheckpoint
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
@@ -30,7 +31,7 @@ import kotlinx.coroutines.withContext
  * schema version and migrations never collide with ours. Plain androidx.sqlite (no Room codegen)
  * keeps the bridge build simple on every platform.
  */
-class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore {
+class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore, OpenPlayCheckpoint {
     private val connection: SQLiteConnection = driver.open(path)
     private val mutex = Mutex()
     private val stream = MutableSharedFlow<PlayEvent>(extraBufferCapacity = 64)
@@ -45,43 +46,7 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
         val version = connection.prepare("PRAGMA user_version").use { if (it.step()) it.getLong(0) else 0L }
         if (version < 1) {
             connection.execSQL("PRAGMA journal_mode=WAL")
-            connection.execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS play_event (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    track_key TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    artists TEXT NOT NULL,
-                    artist_key TEXT NOT NULL,
-                    album TEXT,
-                    track_duration_ms INTEGER,
-                    released_at_ms INTEGER,
-                    youtube_id TEXT,
-                    isrc TEXT,
-                    explicit INTEGER NOT NULL,
-                    session_id TEXT NOT NULL,
-                    position INTEGER NOT NULL,
-                    surface TEXT NOT NULL,
-                    surface_detail TEXT,
-                    start_reason TEXT NOT NULL,
-                    end_reason TEXT NOT NULL,
-                    started_at_ms INTEGER NOT NULL,
-                    ms_played INTEGER NOT NULL,
-                    duration_ms INTEGER,
-                    seeks INTEGER NOT NULL,
-                    replayed INTEGER NOT NULL,
-                    shuffle INTEGER,
-                    liked INTEGER NOT NULL,
-                    added_to_playlist INTEGER NOT NULL,
-                    less_like_this INTEGER NOT NULL,
-                    hour INTEGER,
-                    weekday INTEGER,
-                    device TEXT,
-                    network TEXT,
-                    source TEXT NOT NULL
-                )
-                """.trimIndent(),
-            )
+            connection.execSQL(eventTable("play_event"))
             connection.execSQL("CREATE INDEX IF NOT EXISTS idx_play_event_started ON play_event(started_at_ms)")
             connection.execSQL("CREATE INDEX IF NOT EXISTS idx_play_event_track ON play_event(track_key)")
             connection.execSQL("CREATE INDEX IF NOT EXISTS idx_play_event_artist ON play_event(artist_key)")
@@ -93,7 +58,49 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
             connection.execSQL("CREATE TABLE IF NOT EXISTS pref (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             connection.execSQL("PRAGMA user_version = 2")
         }
+        if (version < 3) {
+            // The play in progress (at most one row), so it survives the app being killed.
+            connection.execSQL(eventTable("open_play"))
+            connection.execSQL("PRAGMA user_version = 3")
+        }
     }
+
+    private fun eventTable(name: String) =
+        """
+        CREATE TABLE IF NOT EXISTS $name (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artists TEXT NOT NULL,
+            artist_key TEXT NOT NULL,
+            album TEXT,
+            track_duration_ms INTEGER,
+            released_at_ms INTEGER,
+            youtube_id TEXT,
+            isrc TEXT,
+            explicit INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            surface TEXT NOT NULL,
+            surface_detail TEXT,
+            start_reason TEXT NOT NULL,
+            end_reason TEXT NOT NULL,
+            started_at_ms INTEGER NOT NULL,
+            ms_played INTEGER NOT NULL,
+            duration_ms INTEGER,
+            seeks INTEGER NOT NULL,
+            replayed INTEGER NOT NULL,
+            shuffle INTEGER,
+            liked INTEGER NOT NULL,
+            added_to_playlist INTEGER NOT NULL,
+            less_like_this INTEGER NOT NULL,
+            hour INTEGER,
+            weekday INTEGER,
+            device TEXT,
+            network TEXT,
+            source TEXT NOT NULL
+        )
+        """.trimIndent()
 
     /** A stored setting of ours, or null when never set. */
     suspend fun pref(key: String): String? = db {
@@ -110,6 +117,18 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
             it.step()
         }
         Unit
+    }
+
+    override suspend fun save(play: PlayEvent?) = db {
+        connection.execSQL("DELETE FROM open_play")
+        if (play != null) insert(play, table = "open_play")
+        Unit
+    }
+
+    override suspend fun take(): PlayEvent? = db {
+        val saved = query("SELECT * FROM open_play LIMIT 1") {}.firstOrNull()
+        connection.execSQL("DELETE FROM open_play")
+        saved?.copy(id = 0)
     }
 
     private suspend fun <T> db(block: () -> T): T = withContext(Dispatchers.IO) { mutex.withLock { block() } }
@@ -169,8 +188,8 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
 
     fun close() = connection.close()
 
-    private fun insert(e: PlayEvent): Long {
-        connection.prepare(INSERT).use { s ->
+    private fun insert(e: PlayEvent, table: String = "play_event"): Long {
+        connection.prepare(insertInto(table)).use { s ->
             var i = 0
             fun text(v: String?) = if (v == null) s.bindNull(++i) else s.bindText(++i, v)
             fun long(v: Long?) = if (v == null) s.bindNull(++i) else s.bindLong(++i, v)
@@ -270,8 +289,8 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore 
 
     private companion object {
         const val ARTIST_SEPARATOR = "\u001f"
-        val INSERT = """
-            INSERT INTO play_event (
+        fun insertInto(table: String) = """
+            INSERT INTO $table (
                 track_key, title, artists, artist_key, album, track_duration_ms, released_at_ms, youtube_id, isrc, explicit,
                 session_id, position, surface, surface_detail, start_reason, end_reason, started_at_ms, ms_played,
                 duration_ms, seeks, replayed, shuffle, liked, added_to_playlist, less_like_this, hour, weekday,

@@ -59,7 +59,7 @@ data class SearchConfig(
     val lyricsLimit: Int = 10,
     val semanticLimit: Int = 30,
     val onlineLimit: Int = 30,
-    /** Online search starts once the query has this many characters. */
+    /** Online search starts once the query has this many characters, or one CJK ideograph or Hangul syllable ("雨"). */
     val minOnlineChars: Int = 2,
     val groups: GroupLimits = GroupLimits(),
     val weights: RankingWeights = RankingWeights(),
@@ -105,7 +105,8 @@ class SearchEngine(
             send(SearchResults.empty(query, statuses.toMap()))
             return@channelFlow
         }
-        val runOnline = online.enabled && query.raw.trim().length >= config.minOnlineChars
+        val typed = query.raw.trim()
+        val runOnline = online.enabled && (typed.length >= config.minOnlineChars || typed.any(::isLogogram))
         statuses[Retriever.LOCAL] = RetrieverStatus.PENDING
         statuses[Retriever.SEMANTIC] = if (semantic.enabled) RetrieverStatus.PENDING else RetrieverStatus.SKIPPED
         statuses[Retriever.ONLINE] = if (runOnline) RetrieverStatus.PENDING else RetrieverStatus.SKIPPED
@@ -151,6 +152,10 @@ class SearchEngine(
             emit()
         }
     }
+
+    /** One character that is a whole word: a CJK ideograph or a Hangul syllable. */
+    private fun isLogogram(c: Char): Boolean =
+        c in '\u4E00'..'\u9FFF' || c in '\u3400'..'\u4DBF' || c in '\uF900'..'\uFAFF' || c in '\uAC00'..'\uD7AF'
 
     private class Outcome(val retriever: Retriever, val status: RetrieverStatus, val value: Any?)
 

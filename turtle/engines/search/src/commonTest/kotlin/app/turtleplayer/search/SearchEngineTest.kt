@@ -226,6 +226,76 @@ class SearchEngineTest {
     }
 
     @Test
+    fun singleIdeographSearchesOnline() = runTest {
+        val online = FakeOnlineProvider(listOf(OnlineTrack(track("ame", "森高千里", "雨"), popularity = 0.6f)))
+        val final = engine(online = online).search("雨").last()
+        assertEquals(RetrieverStatus.DONE, final.retrievers[Retriever.ONLINE])
+        assertEquals("ame", (final.top as TrackResult).track.youtubeId)
+    }
+
+    @Test
+    fun onlineArtistNamedLikeTheQueryIsTheTopResult() = runTest {
+        // Her songs rank first online and none is in the library, so only the online artist says "artist".
+        val online = FixedOnline(
+            OnlineResults(
+                tracks = listOf(OnlineTrack(track("shake", "Taylor Swift", "Shake It Off"), official = true, popularity = 0.95f)),
+                artists = listOf(OnlineArtist("Taylor Swift", browseId = "UC_taylor")),
+            ),
+        )
+        val final = engine(online = online).search("taylor swift").last()
+        val top = assertIs<ArtistResult>(final.top, final.ranked.toString())
+        assertEquals("UC_taylor", top.browseId)
+        assertEquals(Intent.ARTIST, final.query.intent)
+        assertIs<TrackResult>(engine(online = online).search("taylor swift 2014").last().top, "a year asks for her songs")
+    }
+
+    @Test
+    fun knownTitleStaysOnTopOfAnArtistWithTheSameName() = runTest {
+        val online = FixedOnline(
+            OnlineResults(
+                tracks = listOf(OnlineTrack(track("creep-ov", "Radiohead", "Creep (Official Video)"), official = true, popularity = 0.9f)),
+                artists = listOf(OnlineArtist("Creep", browseId = "UC_creep")),
+            ),
+        )
+        val final = engine(online = online).search("creep").last()
+        val top = assertIs<TrackResult>(final.top, final.ranked.toString())
+        assertTrue(top.track.youtubeId == "creep" || top.alternates.any { it.id == "creep" }, "the library's Creep")
+        assertEquals(Intent.SONG, final.query.intent)
+    }
+
+    @Test
+    fun onlineResultsSharingNoWordWithTheQueryRankBelowLibraryMatches() = runTest {
+        val lib = LocalLibrary().apply { upsert(track("lana", "Lana Del Rey", "Video Games", "Born to Die")) }
+        val online = FixedOnline(
+            OnlineResults(
+                tracks = listOf(
+                    OnlineTrack(track("other", "Someone Else", "Completely Different"), official = true, popularity = 0.95f),
+                    OnlineTrack(track("kanji", "米津玄師", "感電"), popularity = 0.9f),
+                ),
+            ),
+        )
+        val final = engine(online = online, lib = lib).search("video games").last()
+        assertEquals("lana", (final.top as TrackResult).track.youtubeId)
+        val unrelated = final.songs.single { it.track.youtubeId == "other" }
+        val otherScript = final.songs.single { it.track.youtubeId == "kanji" }
+        // Same script and no shared word: the provider's rank alone counts for little. Another script cannot be compared.
+        assertTrue(unrelated.breakdown.relevance < otherScript.breakdown.relevance, "${unrelated.breakdown} vs ${otherScript.breakdown}")
+    }
+
+    @Test
+    fun initialismArtistIsFoundWithoutDots() = runTest {
+        val lib = LocalLibrary().apply { upsert(track("planes", "M.I.A.", "Paper Planes", "Kala")) }
+        val top = engine(online = OnlineSearchProvider.None, lib = lib).search("mia").last().top
+        assertEquals("M.I.A.", assertIs<ArtistResult>(top).name)
+    }
+
+    /** Returns the same results for any query, like a provider whose ranking is not purely lexical. */
+    private class FixedOnline(private val results: OnlineResults) : OnlineSearchProvider {
+        override suspend fun search(query: ParsedQuery, limit: Int) = results
+        override suspend fun suggestions(prefix: String) = emptyList<String>()
+    }
+
+    @Test
     fun lateLocalResultsArriveInALaterEmission() = runTest {
         // A local budget of zero forces the first emission before the local stage has run.
         val emissions = engine(online = OnlineSearchProvider.None, config = SearchConfig(localDeadline = kotlin.time.Duration.ZERO)).search("creep").toList()

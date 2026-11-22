@@ -72,6 +72,7 @@ import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.ShellArt
 import app.turtleplayer.ui.components.ShellChip
 import app.turtleplayer.ui.components.rememberHover
+import app.turtleplayer.ui.components.ShellToast
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_inf_tune
@@ -83,7 +84,6 @@ import app.turtleplayer.ui.generated.resources.shell_artists
 import app.turtleplayer.ui.generated.resources.shell_collapse_library
 import app.turtleplayer.ui.generated.resources.shell_expand_library
 import app.turtleplayer.ui.generated.resources.shell_explore
-import app.turtleplayer.ui.generated.resources.shell_dj_nav
 import app.turtleplayer.ui.generated.resources.shell_hide_now_playing
 import app.turtleplayer.ui.generated.resources.shell_infinity_meta
 import app.turtleplayer.ui.generated.resources.shell_infinity_title
@@ -135,8 +135,6 @@ object ShellDesktop {
     /** True while Explore covers the page (our own page; any upstream navigation closes it). */
     var explore by mutableStateOf(false)
 
-    /** True while Turtle DJ covers the page (a Shell page like Explore; any upstream navigation closes it). */
-    var dj by mutableStateOf(false)
 
     /** The last Home Shell drew: Explore reads its YouTube Music data and opener. */
     internal var home by mutableStateOf<HomeSlot?>(null)
@@ -186,7 +184,7 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
     val route = LocalNavigator.current.state.currentRoute
-    LaunchedEffect(route) { ShellDesktop.explore = false; ShellDesktop.dj = false }
+    LaunchedEffect(route) { ShellDesktop.explore = false }
     BoxWithConstraints(slot.modifier.fillMaxSize().background(c.frame)) {
         val collapsed = ShellDesktop.libraryCollapsed || maxWidth < 960.dp
         val sidebarWidth by animateDpAsState(if (collapsed) SidebarCollapsedWidth else SidebarWidth, ShellMotion.emphasized())
@@ -199,7 +197,6 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
                 // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
                 ExploreOverlay()
-                DjPageOverlay()
             }
             AnimatedVisibility(
                 showNowPlaying,
@@ -236,12 +233,10 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
             val explore = ShellDesktop.explore
             slot.items.forEachIndexed { i, item ->
                 if (i == libraryIndex) return@forEachIndexed
-                val selected = !explore && !ShellDesktop.dj && i == slot.selectedIndex
-                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; ShellDesktop.dj = false; slot.onSelect(i) }
+                val selected = !explore && i == slot.selectedIndex
+                NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) { ShellDesktop.explore = false; slot.onSelect(i) }
                 if (item.key.equals("home", ignoreCase = true)) {
-                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.dj = false; ShellDesktop.explore = true }
-                    // Turtle DJ is a destination of its own, right under Explore.
-                    NavRow(Glyphs.Turntable, stringResource(Res.string.shell_dj_nav), ShellDesktop.dj, collapsed) { ShellDesktop.explore = false; ShellDesktop.dj = true }
+                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.explore = true }
                 }
             }
         }
@@ -249,7 +244,7 @@ private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, co
             library = library,
             collapsed = collapsed,
             librarySelected = libraryIndex >= 0 && libraryIndex == slot.selectedIndex,
-            onOpenLibrary = { ShellDesktop.explore = false; ShellDesktop.dj = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
+            onOpenLibrary = { ShellDesktop.explore = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         slot.footer?.invoke()
@@ -263,7 +258,7 @@ private fun NavRow(glyph: ImageVector, label: String, selected: Boolean, collaps
     val tint by animateColorAsState(if (selected || hovered) c.ink else c.ink2, ShellMotion.emphasized())
     Row(
         Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(6.dp)).hoverable(source)
-            .shellPressable(onClick, Role.Tab, label).padding(horizontal = if (collapsed) 0.dp else 12.dp),
+            .shellPressable(onClick, Role.Tab, label, selected = selected).padding(horizontal = if (collapsed) 0.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.Start,
     ) {
@@ -285,7 +280,6 @@ private class LibraryRow(
     val badge: ImageVector? = null,
     val badgeTint: Color? = null,
     val badgeBackground: Color? = null,
-    val playing: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -318,36 +312,46 @@ private fun LibraryCard(
 
     val filter = ShellDesktop.libraryFilter
     val items = library.items()
-    val activeQueue = ShellQueue.activeTitle(state)
-    val rows = buildList {
-        if (filter == LibraryFilter.ALL || filter == LibraryFilter.PLAYLISTS) {
-            add(LibraryRow("liked", likedTitle, playlistKind, null, false, Glyphs.Heart, c.onAccent, c.accent) {
-                library.open(PlaylistItem(id = BuiltinPlaylist.LIKED.id, title = likedTitle, thumbnail = null))
-            })
-            add(
-                LibraryRow("infinity", infinityTitle, infinityMeta, null, false, Glyphs.Infinity, c.accent, c.surface2, playing = activeQueue == infinityTitle && state.isPlaying) {
-                    // Like Spotify's sidebar, a click opens it: the Infinity sheet (genres, moods, steer, Start).
-                    ShellInfinity.sheetOpen = true
-                },
-            )
-        }
-        items.asSequence()
-            .filter { it.id != BuiltinPlaylist.LIKED.id }
-            .filter { item -> item.libraryFilter()?.let { filter == LibraryFilter.ALL || it == filter } ?: false }
-            .distinctBy { it.id }
-            .forEach { item ->
-                val meta = when (item) {
-                    is ArtistItem -> artistKind
-                    is AlbumItem -> pair(albumKind, item.artists.joinToString(", ") { it.name })
-                    is PlaylistItem -> pair(playlistKind, item.author)
-                    else -> playlistKind
-                }
-                val art = (item as? PlaylistItem)?.customThumbnail ?: item.thumbnail
-                add(LibraryRow(item.id, item.title, meta, art, item is ArtistItem, playing = activeQueue == item.title && state.isPlaying) { library.open(item) })
+    // What is playing, by id: two playlists with the same name never both light up.
+    val playingKey = when {
+        !state.isPlaying -> null
+        ShellQueue.activeTitle(state) == infinityTitle -> "infinity"
+        else -> ShellQueue.activeSourceId(state)
+    }
+    // Rebuilt only when the library, filter, palette or language changes, not on every playback tick.
+    val rows = remember(items, filter, library, c, likedTitle, infinityTitle, playlistKind, artistKind, albumKind, infinityMeta, pairFormat) {
+        buildList {
+            if (filter == LibraryFilter.ALL || filter == LibraryFilter.PLAYLISTS) {
+                add(LibraryRow("liked", likedTitle, playlistKind, null, false, Glyphs.Heart, c.onAccent, c.accent) {
+                    library.open(PlaylistItem(id = BuiltinPlaylist.LIKED.id, title = likedTitle, thumbnail = null))
+                })
+                add(
+                    LibraryRow("infinity", infinityTitle, infinityMeta, null, false, Glyphs.Infinity, c.accent, c.surface2) {
+                        // Like Spotify's sidebar, a click opens it: the Infinity sheet (genres, moods, steer, Start).
+                        ShellInfinity.sheetOpen = true
+                    },
+                )
             }
+            items.asSequence()
+                .filter { it.id != BuiltinPlaylist.LIKED.id }
+                .filter { item -> item.libraryFilter()?.let { filter == LibraryFilter.ALL || it == filter } ?: false }
+                .distinctBy { it.id }
+                .forEach { item ->
+                    val meta = when (item) {
+                        is ArtistItem -> artistKind
+                        is AlbumItem -> pair(albumKind, item.artists.joinToString(", ") { it.name })
+                        is PlaylistItem -> pair(playlistKind, item.author)
+                        else -> playlistKind
+                    }
+                    val art = (item as? PlaylistItem)?.customThumbnail ?: item.thumbnail
+                    add(LibraryRow(item.id, item.title, meta, art, item is ArtistItem) { library.open(item) })
+                }
+        }
     }
     val query = ShellDesktop.libraryQuery.trim()
-    val shown = if (query.isEmpty()) rows else rows.filter { it.title.contains(query, ignoreCase = true) || it.meta.contains(query, ignoreCase = true) }
+    val shown = remember(rows, query) {
+        if (query.isEmpty()) rows else rows.filter { it.title.contains(query, ignoreCase = true) || it.meta.contains(query, ignoreCase = true) }
+    }
 
     Column(modifier.clip(PanelShape).background(c.panel)) {
         // Header: the title collapses the panel (as in Spotify); the arrow opens the full Library page.
@@ -388,7 +392,7 @@ private fun LibraryCard(
             LibrarySearchField()
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp)) {
-            items(shown, key = { it.key }) { row -> LibraryRowView(row, collapsed, Modifier.animateItem()) }
+            items(shown, key = { it.key }) { row -> LibraryRowView(row, collapsed, playing = row.key == playingKey, Modifier.animateItem()) }
             if (!collapsed && query.isEmpty() && rows.none { it.key != "liked" && it.key != "infinity" }) {
                 item(key = "empty") {
                     Text(stringResource(Res.string.shell_library_empty), style = Shell.type.bodySmall, color = c.ink2, modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp))
@@ -411,7 +415,7 @@ private fun SmallIconButton(glyph: ImageVector, label: String, onClick: () -> Un
 }
 
 @Composable
-private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, modifier: Modifier) {
+private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, playing: Boolean, modifier: Modifier) {
     val c = Shell.colors
     val (source, hovered) = rememberHover()
     val bg by animateColorAsState(if (hovered) c.surface2 else Color.Transparent, ShellMotion.emphasized())
@@ -432,10 +436,10 @@ private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, modifier: Modifi
         if (!collapsed) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(row.title, style = Shell.type.body, color = if (row.playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(row.title, style = Shell.type.body, color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(row.meta, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (row.playing) {
+            if (playing) {
                 Spacer(Modifier.width(8.dp))
                 Equalizer(height = 12.dp)
             }
@@ -485,47 +489,57 @@ private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
     val tint = artworkTint(song.displayThumbnailUrl, 0.14f, base = c.panel)
     val requested = ShellDesktop.panel
     val mode = if (services == null && requested != DesktopPanel.DEVICES) DesktopPanel.NOW_PLAYING else requested
-    Column(modifier.clip(PanelShape).background(tint)) {
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (mode != DesktopPanel.NOW_PLAYING) {
-                SmallIconButton(Glyphs.ArrowLeft, stringResource(Res.string.shell_now_playing_view)) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING }
-                Spacer(Modifier.width(4.dp))
+    var toast by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(toast) { if (toast != null) { delay(2400); toast = null } }
+    Box(modifier.clip(PanelShape).background(tint)) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (mode != DesktopPanel.NOW_PLAYING) {
+                    SmallIconButton(Glyphs.ArrowLeft, stringResource(Res.string.shell_now_playing_view)) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING }
+                    Spacer(Modifier.width(4.dp))
+                }
+                val title = when (mode) {
+                    DesktopPanel.NOW_PLAYING -> ShellQueue.activeTitle(state) ?: song.title
+                    DesktopPanel.QUEUE -> stringResource(Res.string.shell_queue)
+                    DesktopPanel.LYRICS -> stringResource(Res.string.shell_lyrics)
+                    DesktopPanel.DEVICES -> stringResource(Res.string.shell_devices)
+                    DesktopPanel.MORE -> stringResource(Res.string.shell_more)
+                    DesktopPanel.SLEEP -> stringResource(Res.string.shell_np_sleep_timer)
+                }
+                Text(title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (mode == DesktopPanel.NOW_PLAYING && services != null) {
+                    SmallIconButton(Glyphs.More, stringResource(Res.string.shell_more)) { ShellDesktop.panel = DesktopPanel.MORE }
+                }
+                SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.nowPlayingOpen = false }
             }
-            val title = when (mode) {
-                DesktopPanel.NOW_PLAYING -> ShellQueue.activeTitle(state) ?: song.title
-                DesktopPanel.QUEUE -> stringResource(Res.string.shell_queue)
-                DesktopPanel.LYRICS -> stringResource(Res.string.shell_lyrics)
-                DesktopPanel.DEVICES -> stringResource(Res.string.shell_devices)
-                DesktopPanel.MORE -> stringResource(Res.string.shell_more)
-                DesktopPanel.SLEEP -> stringResource(Res.string.shell_np_sleep_timer)
-            }
-            Text(title, style = Shell.type.body.copy(fontWeight = FontWeight.Bold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (mode == DesktopPanel.NOW_PLAYING && services != null) {
-                SmallIconButton(Glyphs.More, stringResource(Res.string.shell_more)) { ShellDesktop.panel = DesktopPanel.MORE }
-            }
-            SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.nowPlayingOpen = false }
-        }
-        AnimatedContent(mode, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, modifier = Modifier.weight(1f)) { m ->
-            val pad = Modifier.fillMaxSize().padding(horizontal = 16.dp)
-            if (m == DesktopPanel.NOW_PLAYING || (services == null && m != DesktopPanel.DEVICES)) {
-                NowPlayingContent(song, state, tint)
-            } else if (m == DesktopPanel.DEVICES) {
-                Column(pad.verticalScroll(rememberScrollState())) { ShellDevices(state, controller) }
-            } else if (services != null) {
-                when (m) {
-                    DesktopPanel.QUEUE -> ShellQueueList(state, controller, services, pad, PaddingValues(bottom = 16.dp))
-                    DesktopPanel.LYRICS -> {
-                        val live = rememberLivePosition(controller, state.isPlaying, song.id)
-                        ShellLyricsFor(song, services, live, { controller.seekTo(it); live.ms = it }, pad, compact = true, contentPadding = PaddingValues(vertical = 16.dp))
+            AnimatedContent(mode, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, modifier = Modifier.weight(1f)) { m ->
+                val pad = Modifier.fillMaxSize().padding(horizontal = 16.dp)
+                if (m == DesktopPanel.NOW_PLAYING || (services == null && m != DesktopPanel.DEVICES)) {
+                    NowPlayingContent(song, state, tint)
+                } else if (m == DesktopPanel.DEVICES) {
+                    Column(pad.verticalScroll(rememberScrollState())) { ShellDevices(state, controller) }
+                } else if (services != null) {
+                    when (m) {
+                        DesktopPanel.QUEUE -> ShellQueueList(state, controller, services, pad, PaddingValues(bottom = 16.dp))
+                        DesktopPanel.LYRICS -> {
+                            val live = rememberLivePosition(controller, state.isPlaying, song.id)
+                            ShellLyricsFor(song, services, live, { controller.seekTo(it); live.ms = it }, pad, compact = true, contentPadding = PaddingValues(vertical = 16.dp))
+                        }
+                        DesktopPanel.MORE -> Column(pad.verticalScroll(rememberScrollState())) {
+                            ShellMoreActions(
+                                song, controller, services,
+                                onShow = { s -> if (s == PlayerSurface.SLEEP) ShellDesktop.panel = DesktopPanel.SLEEP },
+                                onDone = { ShellDesktop.panel = DesktopPanel.NOW_PLAYING },
+                                onToast = { toast = it },
+                            )
+                        }
+                        DesktopPanel.SLEEP -> Column(pad.verticalScroll(rememberScrollState())) { ShellSleepTimer(services) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING } }
+                        else -> Unit
                     }
-                    DesktopPanel.MORE -> Column(pad.verticalScroll(rememberScrollState())) {
-                        ShellMoreActions(song, controller, services, onShow = { s -> if (s == PlayerSurface.SLEEP) ShellDesktop.panel = DesktopPanel.SLEEP }, onDone = { ShellDesktop.panel = DesktopPanel.NOW_PLAYING })
-                    }
-                    DesktopPanel.SLEEP -> Column(pad.verticalScroll(rememberScrollState())) { ShellSleepTimer(services) { ShellDesktop.panel = DesktopPanel.NOW_PLAYING } }
-                    else -> Unit
                 }
             }
         }
+        ShellToast(toast, Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -637,13 +651,5 @@ private fun LibrarySearchField() {
 private fun ExploreOverlay() {
     AnimatedVisibility(ShellDesktop.explore, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
         ShellTheme { ShellExplorePage(ShellDesktop.home, Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
-    }
-}
-
-/** Turtle DJ as a desktop page over the content (inside upstream's gutters), like Explore. */
-@Composable
-private fun DjPageOverlay() {
-    AnimatedVisibility(ShellDesktop.dj, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
-        ShellTheme { TurtleDjPage(onClose = { ShellDesktop.dj = false }, modifier = Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
     }
 }

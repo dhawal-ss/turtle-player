@@ -1,6 +1,5 @@
 package app.turtleplayer.ui.screens
 
-import app.turtleplayer.ui.generated.resources.shell_dj_tab
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -84,8 +83,7 @@ fun ShellNavigation(slot: NavigationSlot) = ShellTheme {
 @Composable
 private fun BottomTabs(slot: NavigationSlot) {
     val c = Shell.colors
-    // Always composed on phones, so the DJ tab and Infinity open from any page.
-    TurtleDjHost()
+    // Always composed on phones, so Infinity opens from any page.
     InfinitySheetHost()
     val density = LocalDensity.current
     LaunchedEffect(slot.navigationVisible) { if (!slot.navigationVisible) slot.onOccupiedHeightChanged(0.dp) }
@@ -116,7 +114,7 @@ private fun BottomTabs(slot: NavigationSlot) {
                     // A soft pill grows behind the selected glyph (H-Motion 07); lime stays for "yours / now".
                     val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
                     Column(
-                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
+                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label, selected = selected),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -131,8 +129,6 @@ private fun BottomTabs(slot: NavigationSlot) {
                         )
                     }
                 }
-                // Turtle DJ, Shell's own destination: opens the full-screen booth.
-                DjTab(Modifier.weight(1f).fillMaxHeight())
             }
         }
     }
@@ -167,7 +163,7 @@ private fun Rail(slot: NavigationSlot) {
                     val bg by animateColorAsState(if (selected) c.accent else c.ground, ShellMotion.emphasized())
                     val fg by animateColorAsState(if (selected) c.onAccent else c.ink2, ShellMotion.emphasized())
                     Column(
-                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label),
+                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ slot.onSelect(i) }, Role.Tab, item.label, selected = selected),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
@@ -212,31 +208,5 @@ private fun HiddenBarScrim(slot: NavigationSlot, modifier: Modifier) {
             Spacer(Modifier.height(84.dp))
             Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
-    }
-}
-
-/** The bottom bar's Turtle DJ tab, styled like upstream's tabs; lit while the booth is open or a set plays. */
-@Composable
-private fun DjTab(modifier: Modifier) {
-    val c = Shell.colors
-    val selected = ShellDj.open
-    val live = ShellDj.session != null
-    val tint by animateColorAsState(if (selected) c.ink else if (live) c.accent else c.ink2, ShellMotion.emphasized())
-    val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
-    val label = org.jetbrains.compose.resources.stringResource(app.turtleplayer.ui.generated.resources.Res.string.shell_dj_tab)
-    Column(
-        modifier.shellPressable({ ShellDj.open = true }, Role.Tab, label),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Box(Modifier.size(56.dp, 32.dp).graphicsLayer { scaleX = 0.6f + 0.4f * pill; alpha = pill }.clip(CircleShape).background(c.surface3))
-            Glyph(Glyphs.Turntable, tint, 24.dp)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            label, style = Shell.type.bodySmall.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
-            color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
     }
 }

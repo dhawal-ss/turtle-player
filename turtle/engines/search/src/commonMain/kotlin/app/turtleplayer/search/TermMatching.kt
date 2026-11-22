@@ -45,6 +45,19 @@ class TermMatcher(
     private val pattern: BitParallelPattern? =
         if (maxTypos > 0 && token.length <= BitParallelPattern.MAX_LENGTH) BitParallelPattern(token) else null
 
+    /**
+     * Adjacent-swap spellings of a 3-character token ("teh" -> "eth", "the"). Such short tokens allow
+     * no other typo: one substitution turns too many real words into each other ("cat", "car").
+     */
+    internal val transpositions: List<String> =
+        if (maxTypos == 0 && token.length == SWAP_LENGTH) {
+            (0 until token.length - 1).filter { token[it] != token[it + 1] }.map { i ->
+                token.substring(0, i) + token[i + 1] + token[i] + token.substring(i + 2)
+            }
+        } else {
+            emptyList()
+        }
+
     /** Whether a non-typed token may still match as a prefix ("bohem rhapsody"). */
     private val partialPrefix = !strict && !asPrefix && token.length >= PARTIAL_PREFIX_MIN
     private val infix = !strict && token.length >= INFIX_MIN
@@ -66,6 +79,7 @@ class TermMatcher(
             if (asPrefix) return TermMatch(MatchKind.PREFIX, 0, 0.76f + 0.2f * ratio)
             if (partialPrefix) return TermMatch(MatchKind.PREFIX, 0, 0.5f + 0.2f * ratio)
         }
+        if (t == q && term in transpositions) return SWAPPED
         val p = pattern ?: return null
         // Prefilter: each distinct query character absent from the term needs at least one edit.
         if ((signature and termSignature.inv()).countOneBits() > maxTypos) return null
@@ -92,7 +106,11 @@ class TermMatcher(
         /** Tokens this long may match inside longer terms. */
         const val INFIX_MIN = 5
 
+        /** Short tokens of this length may swap two adjacent characters. */
+        const val SWAP_LENGTH = 3
+
         private val EXACT = TermMatch(MatchKind.EXACT, 0, 1f)
+        private val SWAPPED = TermMatch(MatchKind.FUZZY, 1, 0.75f)
     }
 }
 
@@ -161,8 +179,10 @@ internal class Vocabulary {
     /** Calls [onMatch] for every term with postings that [matcher] accepts. */
     fun forEachMatch(matcher: TermMatcher, onMatch: (Term, TermMatch) -> Unit) {
         if (matcher.maxTypos == 0 && matcher.maxTermLength == matcher.token.length) {
-            // Exact-only token: a hash lookup is enough.
-            terms[matcher.token]?.takeIf { !it.postings.isEmpty() }?.let { term -> matcher.match(term.text, term.signature)?.let { onMatch(term, it) } }
+            // Exact-only token (and its adjacent swaps): hash lookups are enough.
+            for (text in listOf(matcher.token) + matcher.transpositions) {
+                terms[text]?.takeIf { !it.postings.isEmpty() }?.let { term -> matcher.match(term.text, term.signature)?.let { onMatch(term, it) } }
+            }
             return
         }
         val from = bucket(matcher.minTermLength)

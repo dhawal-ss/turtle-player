@@ -3,6 +3,7 @@ package app.turtleplayer.taste
 import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.Clock
 import app.turtleplayer.core.DAY_MS
+import app.turtleplayer.core.HOUR_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.core.cleanArtistName
@@ -78,6 +79,8 @@ class TasteEngine(
     controls: UserControls = UserControls(),
     exploration: ExplorationState = ExplorationState(),
     recentlyRecommended: List<TrackKey> = emptyList(),
+    /** Local calendar day (days since 1970-01-01 in the listener's time zone) of an epoch time, for shelf cadence. */
+    private val localDay: (Long) -> Long = { it.floorDiv(DAY_MS) },
 ) {
     private val mutex = Mutex()
     private val policy = ExplorationPolicy(random)
@@ -97,7 +100,11 @@ class TasteEngine(
     private val radioCollector = collector(listOfNotNull(sessionGen, cfGen, upstreamGen), config.radioCandidateTarget)
     private val discoveryCollector = collector(listOf(onboardingGen, clusterGen, cfGen))
 
+    /** Shelves kept for their cadence ([ShelfCadence]): the period they were built in, and the shelves. */
+    private val stable = HashMap<ShelfCadence, Pair<Long, List<Shelf>>>()
+
     private var builder = TasteProfileBuilder(config.affinity)
+    private var saved: List<SavedTrack> = emptyList()
     private var clusters: List<TasteCluster> = emptyList()
     private var profile: TasteProfile = TasteProfile.empty()
     private var loaded = false
@@ -124,6 +131,16 @@ class TasteEngine(
 
     /** Rebuilds the profile and taste clusters from the event store. Call daily and after imports. */
     suspend fun refresh() = mutex.withLock { refreshLocked() }
+
+    /**
+     * The listener's liked and library songs (from YouTube Music too), so taste is not cold on day
+     * one. Replaces the previous list; rebuilds the profile only when it changed.
+     */
+    suspend fun setSavedTracks(tracks: List<SavedTrack>) = mutex.withLock {
+        if (tracks == saved) return@withLock
+        saved = tracks
+        if (loaded) refreshLocked()
+    }
 
     /** Collects new events from the store until [scope] is cancelled. Do not also call [onPlayEvent]. */
     fun observe(scope: CoroutineScope): Job = scope.launch { events.newEvents.collect { onPlayEvent(it) } }
@@ -160,8 +177,12 @@ class TasteEngine(
 
     // ---- Autoplay and radio --------------------------------------------------------------------
 
-    /** Starts autoplay after [nowPlaying] (or from long-term taste when null). Returns Up Next. */
-    suspend fun startAutoplay(nowPlaying: TrackMeta? = null, context: PlayContext? = null): List<QueueItem> = mutex.withLock {
+    /**
+     * Starts autoplay after [nowPlaying] (or from long-term taste when null). Returns Up Next.
+     * With [continuous] false the queue is built once and not re-ranked on later plays, for callers
+     * that take the list and manage playback themselves (each re-rank may call the upstream radio).
+     */
+    suspend fun startAutoplay(nowPlaying: TrackMeta? = null, context: PlayContext? = null, continuous: Boolean = true): List<QueueItem> = mutex.withLock {
         ensureLoaded()
         context?.let { this.context = it }
         resetSessionLocked()
@@ -170,7 +191,14 @@ class TasteEngine(
         radioSeed = null
         autoplayActive = true
         rerankLocked()
+        autoplayActive = continuous
         queue
+    }
+
+    /** Stops re-ranking Up Next on every play (see [startAutoplay]). */
+    suspend fun stopAutoplay() = mutex.withLock {
+        autoplayActive = false
+        radioSeed = null
     }
 
     /** Starts radio from any track or artist: a seeded session model. The shelf becomes Up Next. */
@@ -198,27 +226,33 @@ class TasteEngine(
         source: CandidateSource = CandidateSource.UPSTREAM_RADIO,
     ): List<QueueItem> = mutex.withLock {
         ensureLoaded()
-        val unique = tracks.distinctBy { it.key }.filter { it.artistKey !in controls.mutedArtists }
+        val unique = tracks.distinctBy { it.key }
+            .filter { it.artistKey !in controls.mutedArtists && it.key !in controls.lessLikeThisTracks }
         if (unique.isEmpty()) return@withLock emptyList()
         val now = clock.nowMs()
+        val skippedNow = sessionSkippedArtistsLocked(now)
         val seedVector = representation.vectorFor(seed)
         val extractor = FeatureExtractor(profile, controls, session.vector(), now, context, seedVector)
         val reason = Reason.UpstreamRadio(seed.key)
-        val ranked = unique.mapIndexedNotNull { i, t ->
+        val scored = unique.mapIndexedNotNull { i, t ->
             val v = representation.vectorFor(t)
             if (controls.isInMutedCluster(v)) return@mapIndexedNotNull null
             val c = Candidate(t, source, reason, 1f - 0.5f * i / unique.size)
             val f = extractor.extract(c, v)
             ScoredCandidate(c, v, f, ranker.score(f))
         }.sortedWith(compareByDescending<ScoredCandidate> { it.score }.thenBy { it.candidate.key.value })
+        // Artists skipped again and again this session wait at the back, as they would with a person picking.
+        val (ranked, pushedBack) = scored.partition { it.candidate.track.artistKey !in skippedNow }
         val share = policy.sampleShare(explorationState, controls.discoveryDial)
         val slots = policy.planSlots(ranked.size, share)
         val keys = ranked.mapTo(HashSet()) { it.candidate.key }
         val laidOut = assembler.assemble(emptyList(), ranked, slots, profile.recentPlays, seed, recent, now, allowAgain = keys)
         val placed = laidOut.mapTo(HashSet()) { it.key }
-        val leftovers = ranked.filter { it.candidate.key !in placed }.map { QueueItem.of(it) }
+        val leftovers = (ranked.filter { it.candidate.key !in placed } + pushedBack).map { QueueItem.of(it) }
         val result = laidOut + leftovers
-        for (item in result) {
+        // Only the page head is likely to play soon; marking a whole 50-song page "recently recommended"
+        // would starve other surfaces of those songs.
+        for (item in result.take(config.upNextSize)) {
             recent.add(item.key)
             queuedSlots.remove(item.key)
             queuedSlots[item.key] = item.slot
@@ -295,35 +329,77 @@ class TasteEngine(
      * history plus the upstream radio. Upstream is called at most [TasteConfig.shelfUpstreamSeeds]
      * times per call, concurrently, failures tolerated, and never without listening history.
      */
-    suspend fun homeShelves(): List<Shelf> = mutex.withLock {
-        ensureLoaded()
-        val radios = radioCacheLocked()
-        val mixPlan = artistMixPlanLocked()
-        val pick = moreLikePickLocked()
-        val weeklyRanked = vectorWeeklyRankedLocked()
-        radios.prefetch(
-            buildList {
-                mixPlan.forEach { add(it.meta) }
-                if (pick != null && pick.vector == null) add(pick.stats.meta)
-                if (weeklyRanked.isEmpty()) discoverySeedsLocked().forEach { add(it.meta) }
-            },
+    suspend fun homeShelves(): List<Shelf> {
+        class Plan(
+            val now: Long,
+            val radios: RadioCache,
+            val mixPlan: List<TrackStats>?,
+            val pick: MoreLikePick?,
+            val weeklyRanked: List<ScoredCandidate>?,
+            val seeds: List<TrackMeta>,
         )
-        buildList {
-            addAll(dailyMixesLocked(mixPlan, radios))
-            pick?.let { moreLikeLocked(it, radios) }?.let(::add)
-            add(onRepeatLocked())
-            add(weeklyDiscoveryLocked(weeklyRanked, radios))
-            freshForYouLocked()?.let(::add)
-            add(rediscoverLocked())
-        }.filter { it.items.isNotEmpty() && it.reason.key !in controls.suppressedReasons }
+        val plan = mutex.withLock {
+            ensureLoaded()
+            val now = clock.nowMs()
+            // Null = kept from earlier in its period: no work, no upstream calls.
+            val mixPlan = if (keptLocked(ShelfCadence.DAILY, now) == null) artistMixPlanLocked() else null
+            val pick = if (keptLocked(ShelfCadence.DAILY_MORE_LIKE, now) == null) moreLikePickLocked() else null
+            val weeklyRanked = if (keptLocked(ShelfCadence.WEEKLY, now) == null) vectorWeeklyRankedLocked() else null
+            val seeds = buildList {
+                mixPlan?.forEach { add(it.meta) }
+                if (pick != null && pick.vector == null) add(pick.stats.meta)
+                if (weeklyRanked != null && weeklyRanked.isEmpty()) discoverySeedsLocked().forEach { add(it.meta) }
+            }
+            Plan(now, radioCacheLocked(), mixPlan, pick, weeklyRanked, seeds)
+        }
+        // The upstream radios load without holding the engine: play events and radio ranking go on meanwhile.
+        plan.radios.prefetch(plan.seeds)
+        return mutex.withLock {
+            val now = plan.now
+            buildList {
+                addAll(stableLocked(ShelfCadence.DAILY, now) { plan.mixPlan?.let { dailyMixesLocked(it, plan.radios) }.orEmpty() })
+                addAll(stableLocked(ShelfCadence.DAILY_MORE_LIKE, now) { listOfNotNull(plan.pick?.let { moreLikeLocked(it, plan.radios) }) })
+                add(onRepeatLocked())
+                addAll(stableLocked(ShelfCadence.WEEKLY, now) { plan.weeklyRanked?.let { listOf(weeklyDiscoveryLocked(it, plan.radios)) }.orEmpty() })
+                addAll(stableLocked(ShelfCadence.DAILY_FRESH, now) { listOfNotNull(freshForYouLocked()) })
+                addAll(stableLocked(ShelfCadence.DAILY_REDISCOVER, now) { listOf(rediscoverLocked()) })
+            }.filter { it.items.isNotEmpty() && it.reason.key !in controls.suppressedReasons }
+        }
+    }
+
+    /** Forgets kept shelves, so the next [homeShelves] builds every shelf afresh (pull to refresh). */
+    suspend fun refreshShelves() = mutex.withLock { stable.clear() }
+
+    private fun periodOf(cadence: ShelfCadence, nowMs: Long): Long {
+        val day = localDay(nowMs)
+        return if (cadence.weekly) day - ((day + 3).mod(7L)) else day // weeks start on Monday (1970-01-01 was a Thursday)
+    }
+
+    /** The shelves kept for [cadence] in the current period, with what the listener has ruled out since removed. */
+    private fun keptLocked(cadence: ShelfCadence, nowMs: Long): List<Shelf>? {
+        val (period, shelves) = stable[cadence] ?: return null
+        if (period != periodOf(cadence, nowMs)) return null
+        return shelves.map { shelf ->
+            shelf.copy(items = shelf.items.filter { it.key !in controls.lessLikeThisTracks && it.track.artistKey !in controls.mutedArtists })
+        }
+    }
+
+    private suspend fun stableLocked(cadence: ShelfCadence, nowMs: Long, build: suspend () -> List<Shelf>): List<Shelf> {
+        keptLocked(cadence, nowMs)?.let { return it }
+        val built = build()
+        // An empty build (offline, no history yet) is retried at the next refresh instead of kept.
+        if (built.any { it.items.isNotEmpty() }) stable[cadence] = periodOf(cadence, nowMs) to built
+        return built
     }
 
     /** Daily Mixes: one per taste cluster, or up to three artist mixes while there are no clusters. */
-    suspend fun dailyMixes(): List<Shelf> = mutex.withLock {
-        ensureLoaded()
-        val plan = artistMixPlanLocked()
-        val radios = radioCacheLocked().also { it.prefetch(plan.map(TrackStats::meta)) }
-        dailyMixesLocked(plan, radios)
+    suspend fun dailyMixes(): List<Shelf> {
+        val (plan, radios) = mutex.withLock {
+            ensureLoaded()
+            artistMixPlanLocked() to radioCacheLocked()
+        }
+        radios.prefetch(plan.map(TrackStats::meta))
+        return mutex.withLock { dailyMixesLocked(plan, radios) }
     }
 
     suspend fun weeklyDiscovery(): Shelf = mutex.withLock {
@@ -398,7 +474,29 @@ class TasteEngine(
         rankLocked(autoplayCollector, request).filter { includeHeard || !profile.hasHeard(it.candidate.key) }.take(limit)
     }
 
+    // ---- Persistence ---------------------------------------------------------------------------
+
+    /** The listener's controls, exploration state and recent recommendations, for the app to save. */
+    suspend fun exportState(): String = mutex.withLock { TasteState(controls, explorationState, recent.toList()).encode() }
+
+    /** Restores what [exportState] saved; keeps the current discovery dial. Returns false for unreadable text. */
+    suspend fun importState(encoded: String): Boolean = mutex.withLock {
+        val state = TasteState.decode(encoded) ?: return@withLock false
+        controls = state.controls.copy(discoveryDial = controls.discoveryDial)
+        explorationState = state.exploration
+        recent.restore(state.recent)
+        if (loaded) updateProfileLocked()
+        true
+    }
+
     // ---- Internals -----------------------------------------------------------------------------
+
+    /** Artists quick-skipped at least twice in the last [SESSION_WINDOW_MS]: not wanted right now. */
+    private fun sessionSkippedArtistsLocked(now: Long): Set<ArtistKey> =
+        profile.recentPlays.asSequence()
+            .filter { it.quickSkip && it.startedAtMs >= now - SESSION_WINDOW_MS }
+            .groupingBy { it.artist }.eachCount()
+            .filterValues { it >= 2 }.keys
 
     private suspend fun ensureLoaded() {
         if (!loaded) refreshLocked()
@@ -407,7 +505,10 @@ class TasteEngine(
     private suspend fun refreshLocked() {
         val now = clock.nowMs()
         val history = events.since(now - config.historyDays * DAY_MS)
-        builder = TasteProfileBuilder(config.affinity).also { it.addAll(history) }
+        builder = TasteProfileBuilder(config.affinity).also { b ->
+            b.addAll(history)
+            saved.forEach(b::addSaved)
+        }
         val full = builder.build(now, representation, config.clustering)
         clusters = full.clusters
         profile = withColdStart(full)
@@ -740,5 +841,10 @@ class TasteEngine(
         val request = GenerationRequest(profile, controls, now, sessionVector = profile.longTermVector)
         val ranked = rankLocked(collector(listOf(rediscoveryGen)), request)
         return Shelf(shelfId(ShelfKind.REDISCOVER, "rediscover"), ShelfKind.REDISCOVER, Reason.RediscoverShelf, compose(ranked, 1.0, 2, now))
+    }
+
+    private companion object {
+        /** How far back "this session" reaches for repeated skips of one artist. */
+        const val SESSION_WINDOW_MS = 2 * HOUR_MS
     }
 }

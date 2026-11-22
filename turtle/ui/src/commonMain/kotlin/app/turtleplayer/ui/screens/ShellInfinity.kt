@@ -64,6 +64,7 @@ import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.turtle.TurtleUiSlots
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.playback.PlaybackController
 import kotlinx.coroutines.Job
@@ -145,7 +146,10 @@ internal object ShellInfinity {
     /** Whether the Infinity sheet is showing; any surface can open it. */
     var sheetOpen by mutableStateOf(false)
 
-    /** Removes the queue item at an index on this platform (set by the player surfaces). */
+    /**
+     * Removes a queue index through upstream's phone player view model. Android's controller has no
+     * removeQueueItems, so the phone player sheet registers this whenever it is composed, collapsed too.
+     */
     var removeAt: ((Int) -> Unit)? = null
 
     /** Composed hosts; only the first one shows the sheet, so it never opens twice. */
@@ -205,11 +209,40 @@ internal object ShellInfinity {
         scope.launch {
             val s = controller.state.value
             val keepThrough = s.currentQueueIndex + 1
-            removeAt?.let { remove -> for (i in s.queue.lastIndex downTo keepThrough + 1) remove(i) }
+            removeQueued(controller, (keepThrough + 1..s.queue.lastIndex).toSet())
             delay(RESTEER_SETTLE_MS)
             refill(controller)
         }
         return true
+    }
+
+    /** Saves the picks, then starts the mix or re-mixes what is queued. */
+    fun applyPicks(controller: PlaybackController, genres: List<String>, mixTitle: String, playing: Boolean) {
+        scope.launch {
+            TurtleBridge.setInfinityGenres(genres)
+            if (!playing || !resteer(controller)) play(controller, mixTitle)
+        }
+    }
+
+    /** Forgets the mix's tuning, outliving the sheet that asked. */
+    fun startFresh() {
+        scope.launch { TurtleBridge.infinityStartFresh() }
+    }
+
+    /**
+     * Removes queue indices, highest first. Desktop's and Android's controllers don't implement
+     * removeQueueItems, so desktop goes through its player state (registered at startup) and phones
+     * through [removeAt]; iOS's controller removes them itself.
+     */
+    private fun removeQueued(controller: PlaybackController, indices: Set<Int>) {
+        if (indices.isEmpty()) return
+        val descending = indices.sortedDescending()
+        val desktopRemove = TurtleUiSlots.desktopExtras?.removeQueueIndex
+        when {
+            desktopRemove != null -> descending.forEach(desktopRemove)
+            controller.removeQueueItems(indices) != null -> Unit
+            else -> removeAt?.let { remove -> descending.forEach(remove) }
+        }
     }
 
     private const val SETTLE_MS = 1_500L
@@ -357,14 +390,6 @@ internal fun ShellInfinitySheet() = ShellTheme {
     }
 }
 
-/** Saves the picks, then starts the mix or re-mixes what is queued. */
-internal fun ShellInfinity.applyPicks(controller: PlaybackController, genres: List<String>, mixTitle: String, playing: Boolean) {
-    MainScope().launch {
-        TurtleBridge.setInfinityGenres(genres)
-        if (!playing || !resteer(controller)) play(controller, mixTitle)
-    }
-}
-
 @Composable
 private fun TuningLine(likes: Int, passes: Int, weights: Map<String, Double>, picks: Set<String>) {
     val c = Shell.colors
@@ -464,7 +489,7 @@ private fun StartFresh(onDone: () -> Unit) {
             Modifier.clip(CircleShape).shellPressable({
                 if (!armed) armed = true else {
                     armed = false
-                    MainScope().launch { TurtleBridge.infinityStartFresh() }
+                    ShellInfinity.startFresh()
                     onDone()
                 }
             }, focusShape = CircleShape).padding(horizontal = 4.dp, vertical = 8.dp),

@@ -35,6 +35,17 @@ object GoldenQueries {
         t("1999", "prince-1999", Category.EXACT),
         t("live forever", "oasis-live-forever", Category.EXACT),
         a("acdc", "AC/DC", Category.EXACT),
+        t("video games", "lana-video", Category.EXACT),
+        t("stereo love", "maya-stereo", Category.EXACT),
+        a("mia", "M.I.A.", Category.EXACT),
+        a("rem", "R.E.M.", Category.EXACT),
+        t("pink so what", "pink-so-what", Category.SONG_BY_ARTIST),
+        t("kesha tik tok", "kesha-tiktok", Category.SONG_BY_ARTIST),
+
+        // Artists only the online catalog knows: none of their songs is saved
+        a("lorde", "Lorde", Category.EXACT),
+        a("chappell roan", "Chappell Roan", Category.EXACT),
+        a("journey", "Journey", Category.EXACT),
 
         // Version filters typed as words
         t("hotel california live", "eagles-hotel-live", Category.VERSION),
@@ -108,6 +119,8 @@ object GoldenQueries {
         t("夜に駆ける", "yoasobi-yoru", Category.SCRIPTS),
         a("aimyon", "あいみょん", Category.SCRIPTS),
         t("mariigoorudo", "aimyon-marigold", Category.SCRIPTS),
+        t("雨", "moritaka-ame", Category.SCRIPTS),
+        t("lac troi", "son-tung-lac-troi", Category.ACCENTS),
 
         // Lyrics fragments (fixture lyrics are invented)
         t("salt is in the letters that you folded", "lanterns-harbor", Category.LYRICS),

@@ -75,11 +75,14 @@ import app.turtleplayer.ui.generated.resources.shell_np_sleep_end_of_song
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_on
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_timer
 import app.turtleplayer.ui.generated.resources.shell_np_never_song
+import app.turtleplayer.ui.generated.resources.shell_np_never_done
 import app.turtleplayer.ui.generated.resources.shell_np_queue_left
 import app.turtleplayer.ui.generated.resources.shell_np_never_artist
 import app.turtleplayer.ui.generated.resources.shell_np_start_radio
 import app.turtleplayer.ui.generated.resources.shell_np_this_device
 import app.turtleplayer.ui.generated.resources.shell_next_in_queue
+import app.turtleplayer.ui.generated.resources.shell_sp_hours_minutes
+import app.turtleplayer.ui.generated.resources.shell_sp_minutes
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import com.metrolist.shared.cast.CastConnectionStatus
@@ -146,13 +149,21 @@ internal fun ShellQueueList(
             val totalSec = upcoming.sumOf { queue[it].duration ?: 0L }
             Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.weight(1f))
-                if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, formatQueueLength(totalSec)))
+                if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, queueLength(totalSec)))
             }
         }
         if (upcoming.isEmpty()) {
             item(key = "empty") { Text(stringResource(Res.string.shell_np_queue_empty), style = Shell.type.bodySmall, color = c.ink2) }
         }
-        itemsIndexed(upcoming, key = { _, index -> "q-$index-${queue[index].id}" }) { _, index ->
+        // Keyed by song id and its occurrence, not position, so rows below a removal keep their keys.
+        val seen = HashMap<String, Int>()
+        val keys = upcoming.map { index ->
+            val id = queue[index].id
+            val n = seen[id] ?: 0
+            seen[id] = n + 1
+            "q-$id-$n"
+        }
+        itemsIndexed(upcoming, key = { pos, _ -> keys[pos] }) { _, index ->
             QueueRow(
                 queue[index], playing = false, isPlaying = false,
                 onClick = { controller.playQueueIndex(index) },
@@ -183,7 +194,7 @@ private fun QueueRow(song: SongItem, playing: Boolean, isPlaying: Boolean, onCli
         }
         if (playing && isPlaying) Equalizer(height = 12.dp, modifier = Modifier.padding(horizontal = 12.dp))
         if (onRemove != null) {
-            Box(Modifier.size(44.dp).shellPressable(onRemove, label = stringResource(Res.string.shell_np_remove_from_queue), focusShape = CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(48.dp).shellPressable(onRemove, label = stringResource(Res.string.shell_np_remove_from_queue), focusShape = CircleShape), contentAlignment = Alignment.Center) {
                 Glyph(Glyphs.Close, c.ink2, 14.dp)
             }
         }
@@ -201,8 +212,11 @@ internal fun ShellMoreActions(
     services: ShellPlayerServices,
     onShow: (PlayerSurface) -> Unit,
     onDone: () -> Unit,
+    onToast: (String) -> Unit,
 ) {
     val sleepOn = services.sleepTimerActive()
+    // Blocking takes effect at once, so say so (and where to undo it) rather than closing silently.
+    val blockedText = stringResource(Res.string.shell_np_never_done)
     SheetHeader(song)
     ActionRow(Glyphs.Add, stringResource(Res.string.shell_np_add_to_playlist)) { onDone(); services.addToPlaylist(song) }
     song.artists.firstOrNull()?.id?.let { artistId ->
@@ -225,12 +239,14 @@ internal fun ShellMoreActions(
         onDone()
         com.metrolist.shared.state.SongLikeState.dislike(song)
         ShellActions.lessLikeThis(controller, song)
+        onToast(blockedText)
     }
     song.artists.firstOrNull()?.takeIf { !it.id.isNullOrBlank() }?.let { artist ->
         ActionRow(Glyphs.Close, stringResource(Res.string.shell_np_never_artist, artist.name)) {
             onDone()
             com.metrolist.shared.settings.BlockedContent.blockArtist(artist)
             ShellActions.lessLikeThis(controller, song)
+            onToast(blockedText)
         }
     }
 }
@@ -386,7 +402,8 @@ internal fun ShellLyricsFor(song: SongItem, services: ShellPlayerServices, live:
 }
 
 /** "1 h 12 min" or "38 min" for a queue's total length in seconds. */
-internal fun formatQueueLength(seconds: Long): String {
-    val minutes = (seconds + 30) / 60
-    return if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
+@Composable
+private fun queueLength(seconds: Long): String {
+    val minutes = ((seconds + 30) / 60).toInt()
+    return if (minutes >= 60) stringResource(Res.string.shell_sp_hours_minutes, minutes / 60, minutes % 60) else stringResource(Res.string.shell_sp_minutes, minutes)
 }

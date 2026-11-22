@@ -30,6 +30,10 @@ data class AffinityWeights(
     /** Skipped within 30 s: the strongest negative implicit signal. */
     val quickSkip: Double = -1.0,
     val lessLikeThis: Double = -4.0,
+    /** A song liked in the library (YouTube Music likes included), whether or not it was played here. */
+    val savedLiked: Double = 2.0,
+    /** A song added to the library without a like. */
+    val savedToLibrary: Double = 1.0,
     val halfLifeDays: Double = 90.0,
     /** Half-life of [TrackStats.recentFinishes], which ranks "On repeat". */
     val recentHalfLifeDays: Double = 14.0,
@@ -89,6 +93,8 @@ data class TrackStats(
     val recentFinishes: Double = 0.0,
     /** When the listener found this song: its first play held them [AffinityWeights.ENGAGED_MS]. Null if never. */
     val foundMs: Long? = null,
+    /** Liked or in their library ([SavedTrack]); such a song is known to them even with no plays here. */
+    val saved: Boolean = false,
 ) {
     val key: TrackKey get() = meta.key
     val skips: SkipStats get() = SkipStats(plays, quickSkips)
@@ -104,9 +110,19 @@ data class ArtistStats(
     val finishes: Int,
     val quickSkips: Int,
     val lastPlayedMs: Long,
+    /** Songs of theirs the listener saved ([SavedTrack]). */
+    val savedTracks: Int = 0,
 ) {
     val skips: SkipStats get() = SkipStats(plays, quickSkips)
 }
+
+enum class SavedKind { LIKED, LIBRARY }
+
+/**
+ * A song the listener saved outside of listening here: liked (on YouTube Music too) or added to the
+ * library at [atMs]. Their own words, so it counts toward taste from the first launch.
+ */
+data class SavedTrack(val meta: TrackMeta, val kind: SavedKind, val atMs: Long)
 
 /** One recent play, kept for fatigue features and album caps. */
 data class RecentPlay(
@@ -149,9 +165,10 @@ class TasteProfile(
 
     fun artist(key: ArtistKey): ArtistStats? = artists[key]
 
-    fun hasHeard(key: TrackKey): Boolean = (tracks[key]?.plays ?: 0) > 0
+    /** Played here, or saved: either way not news to the listener. */
+    fun hasHeard(key: TrackKey): Boolean = tracks[key]?.let { it.plays > 0 || it.saved } ?: false
 
-    fun hasHeardArtist(key: ArtistKey): Boolean = (artists[key]?.plays ?: 0) > 0
+    fun hasHeardArtist(key: ArtistKey): Boolean = artists[key]?.let { it.plays > 0 || it.savedTracks > 0 } ?: false
 
     /** Nearest cluster and its similarity, or null with no clusters. */
     fun nearestCluster(vector: FloatArray): Pair<TasteCluster, Float>? =
@@ -217,6 +234,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         // The earliest play, whatever order events arrive in: decides whether the song was a new find.
         var firstEvent: PlayEvent? = null
         var last = Long.MIN_VALUE
+        var savedAt: Long? = null
     }
 
     private class ArtistAcc {
@@ -225,6 +243,7 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         var finishes = 0
         var quickSkips = 0
         var last = Long.MIN_VALUE
+        var saved = 0
     }
 
     private val tracks = LinkedHashMap<TrackKey, TrackAcc>()
@@ -237,6 +256,24 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
     val eventCount: Int get() = tracks.values.sumOf { it.plays }
 
     fun addAll(events: Iterable<PlayEvent>) = events.forEach(::add)
+
+    /**
+     * Adds a saved song. Add plays first: a like already recorded on a play event is not counted twice.
+     * Saved songs raise affinity but are not plays, so skip rates and "On repeat" are unaffected.
+     */
+    fun addSaved(saved: SavedTrack) {
+        val t = tracks.getOrPut(saved.meta.key) { TrackAcc(saved.meta) }
+        if (t.savedAt != null) return
+        t.savedAt = saved.atMs
+        val weight = when (saved.kind) {
+            SavedKind.LIKED -> if (t.likes > 0) 0.0 else weights.savedLiked.also { t.likes++ }
+            SavedKind.LIBRARY -> weights.savedToLibrary
+        }
+        if (weight != 0.0) t.affinity.add(weight, saved.atMs, weights)
+        val a = artists.getOrPut(saved.meta.artistKey) { ArtistAcc() }
+        a.saved++
+        if (weight != 0.0) a.affinity.add(weight, saved.atMs, weights)
+    }
 
     fun add(e: PlayEvent) {
         val s = weights.signal(e)
@@ -291,21 +328,26 @@ class TasteProfileBuilder(val weights: AffinityWeights = AffinityWeights()) {
         val trackStats = LinkedHashMap<TrackKey, TrackStats>(tracks.size * 2)
         for ((k, t) in tracks) {
             // A first play that held a minute is a new find: it scores nearly a finish (instead of a late
-            // skip) and seeds "More like" picks.
+            // skip) and seeds "More like" picks. Skipping it before halfway is not a find, however long the intro.
             val fe = t.firstEvent
-            val found = fe != null && !fe.isQuickSkip && !fe.lessLikeThis && fe.msPlayed >= AffinityWeights.ENGAGED_MS
+            val found = fe != null && !fe.isQuickSkip && !fe.lessLikeThis && fe.msPlayed >= AffinityWeights.ENGAGED_MS &&
+                (!fe.endReason.isSkip || (fe.completion ?: 0f) >= 0.5f)
             val bonus = if (found && !fe.isFinished) {
                 (weights.newFind - weights.signal(fe.copy(liked = false, replayed = false, addedToPlaylist = false))) * weights.decay(nowMs - fe.startedAtMs)
             } else 0.0
             trackStats[k] = TrackStats(
                 meta = t.meta, affinity = t.affinity.at(nowMs, weights) + bonus, plays = t.plays, finishes = t.finishes,
                 quickSkips = t.quickSkips, likes = t.likes, replays = t.replays, lessLikeThis = t.lessLikeThis,
-                firstPlayedMs = t.first, lastPlayedMs = t.last, recentFinishes = t.recentFinishes.at(nowMs, weights), foundMs = if (found) fe.startedAtMs else null,
+                // A saved song never played here dates from when it was saved (Rediscover, days-since features).
+                firstPlayedMs = if (t.plays > 0) t.first else t.savedAt ?: t.first,
+                lastPlayedMs = if (t.plays > 0) t.last else t.savedAt ?: t.last,
+                recentFinishes = t.recentFinishes.at(nowMs, weights), foundMs = if (found) fe.startedAtMs else null,
+                saved = t.savedAt != null,
             )
         }
         val artistStats = LinkedHashMap<ArtistKey, ArtistStats>(artists.size * 2)
         for ((k, a) in artists) {
-            artistStats[k] = ArtistStats(k, a.affinity.at(nowMs, weights), a.plays, a.finishes, a.quickSkips, a.last)
+            artistStats[k] = ArtistStats(k, a.affinity.at(nowMs, weights), a.plays, a.finishes, a.quickSkips, a.last, a.saved)
         }
         val recentPlays = recent.filter { it.startedAtMs in (nowMs - DAY_MS)..nowMs }.sortedBy { it.startedAtMs }
 

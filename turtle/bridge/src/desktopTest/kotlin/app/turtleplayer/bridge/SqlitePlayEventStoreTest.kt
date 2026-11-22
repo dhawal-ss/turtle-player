@@ -9,11 +9,13 @@ import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
+import androidx.sqlite.execSQL
 import com.metrolist.shared.db.JdbcSQLiteDriver
 import kotlinx.coroutines.test.runTest
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class SqlitePlayEventStoreTest {
     private fun event(id: String, at: Long, source: EventSource = EventSource.LOCAL) = PlayEvent(
@@ -51,5 +53,28 @@ class SqlitePlayEventStoreTest {
         reopened.deleteSource(EventSource.SPOTIFY_IMPORT)
         assertEquals(1, reopened.count())
         reopened.close()
+    }
+    @Test
+    fun upgradedDatabaseKeepsThePlayInProgressAcrossARestart() = runTest {
+        val file = File.createTempFile("turtle", ".db").apply { delete(); deleteOnExit() }
+        SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath).apply { append(event("old", 500)); close() }
+        // Turn it back into a version 2 database, as installed before the play-in-progress table.
+        JdbcSQLiteDriver().open(file.absolutePath).apply {
+            execSQL("DROP TABLE open_play")
+            execSQL("PRAGMA user_version = 2")
+            close()
+        }
+
+        val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+        val inProgress = event("playing", 4_000).copy(endReason = EndReason.STOPPED)
+        store.save(inProgress)
+        store.save(inProgress.copy(msPlayed = 30_000)) // replaces, never accumulates
+        store.close()
+
+        val restarted = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+        assertEquals(inProgress.copy(msPlayed = 30_000), restarted.take())
+        assertNull(restarted.take())
+        assertEquals(listOf("yt:old"), restarted.since(0).map { it.trackKey.value })
+        restarted.close()
     }
 }

@@ -55,6 +55,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -369,6 +370,7 @@ private fun SearchField(slot: SearchSlot) {
     val q = slot.uiState.query
     val ring by animateColorAsState(if (q.isNotEmpty()) c.accent else c.accent.copy(alpha = 0f), tween(200, easing = ShellMotion.Emphasized))
     val textStyle = Shell.type.body.copy(fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    val hint = stringResource(Res.string.shell_search_hint)
     // The ring sits just outside the field, like H-Search's box-shadow: a 2dp border around a 2dp gap.
     Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().border(2.dp, ring, RoundedCornerShape(10.dp)).padding(2.dp)) {
         Row(
@@ -379,7 +381,8 @@ private fun SearchField(slot: SearchSlot) {
             Glyph(Glyphs.Search, c.ground, 22.dp)
             Spacer(Modifier.width(10.dp))
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (q.isEmpty()) Text(stringResource(Res.string.shell_search_hint), style = textStyle, color = c.ground.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // The field carries the hint as its label, so screen readers don't read the placeholder twice.
+                if (q.isEmpty()) Text(hint, style = textStyle, color = c.ground.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
                 BasicTextField(
                     value = q,
                     onValueChange = slot.onQueryChange,
@@ -388,7 +391,7 @@ private fun SearchField(slot: SearchSlot) {
                     cursorBrush = SolidColor(c.ground),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { slot.onSearch(q) }),
-                    modifier = Modifier.fillMaxWidth().focusRequester(slot.focusRequester),
+                    modifier = Modifier.fillMaxWidth().focusRequester(slot.focusRequester).semantics { contentDescription = hint },
                 )
             }
             if (q.isNotEmpty()) {

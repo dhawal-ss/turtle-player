@@ -112,6 +112,15 @@ object GoldenCatalog {
         frank-nights|Frank Ocean|Nights|Blonde|2016|L|0.8
         sza-kill|SZA|Kill Bill|SOS|2022|L|0.9
         lorde-royals|Lorde|Royals|Pure Heroine|2013|CAT|0.85
+        lorde-green|Lorde|Green Light|Melodrama|2017|CAT|0.8
+        chappell-hot-to-go|Chappell Roan|HOT TO GO!|The Rise and Fall of a Midwest Princess|2023|CAT|0.85
+        mia-paper|M.I.A.|Paper Planes|Kala|2007|L|0.85
+        rem-religion|R.E.M.|Losing My Religion|Out of Time|1991|CAT|0.9
+        pink-so-what|P!nk|So What|Funhouse|2008|L|0.85
+        kesha-tiktok|Ke${"$"}ha|TiK ToK|Animal|2009|CAT|0.9
+        maya-stereo|Edward Maya;Vika Jigulina|Stereo Love|Stereo Love|2009|L|0.8
+        son-tung-lac-troi|Sơn Tùng M-TP|Lạc Trôi|Lạc Trôi|2017|CAT|0.7
+        moritaka-ame|森高千里|雨|古今東西|1990|CAT|0.6
         lana-video|Lana Del Rey|Video Games|Born to Die|2011|L|0.8
         lana-summertime|Lana Del Rey|Summertime Sadness|Born to Die|2012|CAT|0.85
         phoebe-motion|Phoebe Bridgers|Motion Sickness|Stranger in the Alps|2017|L|0.6
