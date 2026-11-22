@@ -94,6 +94,10 @@ class HistoryShelvesTest {
         assertTrue(finishes30.getValue(shelf.items.first().key) >= best - 2, "top: ${finishes30[shelf.items.first().key]} of max $best")
         assertTrue(shelf.items.zipWithNext().none { (a, b) -> a.track.artistKey == b.track.artistKey }, "no artist back to back")
 
+        // Finished once lately is "recently played", not "on repeat".
+        val once = history.filter { it.isFinished }.groupBy { it.trackKey }.filterValues { it.size == 1 }.keys
+        assertTrue(shelf.items.none { it.key in once })
+
         val dropped = shelf.items.first()
         engine.lessLikeThis(dropped.lessLikeThis)
         assertTrue(engine.onRepeat().items.none { it.key == dropped.key })

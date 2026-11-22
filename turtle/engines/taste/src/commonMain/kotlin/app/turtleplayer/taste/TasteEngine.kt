@@ -837,7 +837,8 @@ class TasteEngine(
         val cutoff = now - config.onRepeatDays * DAY_MS
         val floor = recentFinishFloor()
         val picks = profile.tracks.values
-            .filter { it.lastPlayedMs >= cutoff && it.finishes > 0 && it.recentFinishes >= floor && usable(it) }
+            // Songs they keep coming back to: at least two recent finishes (one is just "recently played").
+            .filter { it.lastPlayedMs >= cutoff && it.finishes >= 2 && it.recentFinishes >= 2 * floor && usable(it) }
             .sortedWith(compareByDescending<TrackStats> { it.recentFinishes + 0.3 * it.affinity }.thenBy { it.key.value })
             .toMutableList()
         val ordered = ArrayList<TrackStats>()
