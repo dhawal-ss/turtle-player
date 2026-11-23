@@ -427,7 +427,7 @@ internal fun ShellSettingsTextDialog(item: SettingsItemRegistration, onDismiss: 
                     verticalAlignment = if (item.multiline) Alignment.Top else Alignment.CenterVertically,
                 ) {
                     Box(Modifier.weight(1f).padding(vertical = 14.dp), contentAlignment = Alignment.CenterStart) {
-                        if (text.isEmpty()) item.textPlaceholder?.let { Text(it, style = style, color = c.ink2.copy(alpha = 0.7f)) }
+                        if (text.isEmpty()) item.textPlaceholder?.let { Text(it, style = style, color = c.ink2) }
                         BasicTextField(
                             value = text,
                             onValueChange = { text = it },

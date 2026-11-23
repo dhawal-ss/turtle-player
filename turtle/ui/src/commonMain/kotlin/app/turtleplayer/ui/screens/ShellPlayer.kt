@@ -142,9 +142,11 @@ import app.turtleplayer.ui.generated.resources.shell_mute
 import app.turtleplayer.ui.generated.resources.shell_unmute
 import app.turtleplayer.ui.generated.resources.shell_volume
 import app.turtleplayer.ui.theme.Shell
+import app.turtleplayer.ui.theme.ShellColors
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.ShellTheme
+import app.turtleplayer.ui.theme.readableTint
 import com.metrolist.shared.generated.resources.playback_position_time
 import com.metrolist.shared.model.RepeatMode
 import com.metrolist.shared.model.SongItem
@@ -167,15 +169,31 @@ import org.jetbrains.compose.resources.stringResource
 import kotlin.math.roundToInt
 import com.metrolist.shared.generated.resources.Res as SharedRes
 
-/** Ground tinted with a share of the artwork's color: every song feels different, chrome stays calm. */
+/**
+ * Ground tinted with a share of the artwork's color: every song feels different, chrome stays calm.
+ * [texts] are the dimmest text colors drawn on it; a bright cover's tint is darkened until they read.
+ */
 @Composable
-internal fun artworkTint(url: String?, amount: Float, base: Color = Shell.colors.ground): Color {
+internal fun artworkTint(
+    url: String?,
+    amount: Float,
+    base: Color = Shell.colors.ground,
+    texts: List<Color> = secondaryTexts(Shell.colors),
+): Color {
     val ground = base
     val seed = rememberArtworkSeedColor(url)
-    val target = if (seed == null) Shell.colors.surface2 else lerp(ground, seed, amount)
+    val mixed = if (seed == null) Shell.colors.surface2 else lerp(ground, seed, amount)
+    // Clamp the target, not the animated value: the animation then runs between two readable colors.
+    val target = remember(mixed, texts) { readableTint(mixed, texts) }
     val tint by animateColorAsState(target, tween(ShellMotion.TINT_MS, easing = ShellMotion.Emphasized))
     return tint
 }
+
+/**
+ * The text colors that can wash out on a tinted background: dimmed ink, ink2, index labels, and
+ * accent labels, which a same-hue cover tint can swallow.
+ */
+private fun secondaryTexts(c: ShellColors) = listOf(c.ink.copy(alpha = 0.7f), c.ink2, c.index, c.accent)
 
 internal fun formatTime(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(0)
@@ -336,7 +354,7 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
     val song = state.currentSong ?: return@ShellTheme
     val live = rememberLivePosition(controller, state.isPlaying, song.id)
     val duration = durationOf(state.durationMs, song)
-    val tint = artworkTint(song.displayThumbnailUrl, 0.45f)
+    val tint = artworkTint(song.displayThumbnailUrl, 0.45f, texts = listOf(c.ink.copy(alpha = 0.75f)))
     app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song.displayThumbnailUrl)
     val drag = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -481,7 +499,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
         .collectAsState(PlayerModes(false, 0, null))
     val live = rememberLivePosition(controller, state.isPlaying, song.id)
     val duration = durationOf(state.durationMs, song)
-    val tint = artworkTint(song.displayThumbnailUrl, 0.32f)
+    val tint = artworkTint(song.displayThumbnailUrl, 0.32f, texts = listOf(c.ink.copy(alpha = 0.75f), c.accent))
     val liked = SongLikeState.isLiked(song.id)
     var toast by remember { mutableStateOf<String?>(null) }
     val likedText = stringResource(Res.string.shell_liked_toast)
@@ -610,7 +628,9 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
     var resteered by remember { mutableStateOf(0) }
     LaunchedEffect(resteered) { if (resteered > 0) { delay(2200); resteered = 0 } }
     val familiarPct = (app.turtleplayer.bridge.infinityFamiliarShare(stop / 4.0) * 100).roundToInt()
-    Column(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(8.dp)).background(lerp(tint, Color.White, 0.06f)).padding(14.dp)) {
+    // The card is lighter than the tint under it, so its captions need their own check.
+    val card = remember(tint, c.ink, c.accent) { readableTint(lerp(tint, Color.White, 0.06f), listOf(c.ink.copy(alpha = 0.75f), c.accent)) }
+    Column(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(8.dp)).background(card).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(Res.string.shell_steer_title), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f))
             AnimatedContent(stop, transitionSpec = { quickFade }) { s -> IndexLabel(stringResource(labels[s]), color = c.accent) }
@@ -891,8 +911,10 @@ private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
         // Remember which full surface is showing so the exit animation keeps its content.
         val shown = remember { arrayOf(PlayerSurface.LYRICS) }
         if (surface == PlayerSurface.LYRICS) shown[0] = PlayerSurface.LYRICS else if (surface == PlayerSurface.QUEUE) shown[0] = PlayerSurface.QUEUE
+        // The queue draws ink2 and index labels, which the player's own tint check leaves out.
+        val backdrop = remember(tint, c) { readableTint(lerp(tint, Color.Black, 0.15f), secondaryTexts(c)) }
         Column(
-            Modifier.fillMaxSize().background(lerp(tint, Color.Black, 0.15f)).windowInsetsPadding(WindowInsets.statusBars)
+            Modifier.fillMaxSize().background(backdrop).windowInsetsPadding(WindowInsets.statusBars)
                 .windowInsetsPadding(WindowInsets.navigationBars).padding(horizontal = 20.dp),
         ) {
             SurfaceHeader(song.title, song.artists.joinToString(", ") { it.name }) { onSurface(null) }
