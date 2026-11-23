@@ -371,9 +371,11 @@ class InfinityMix(
         for (id in SongLikeState.likedSongIds) scored[id] = (scored[id] ?: 0.0) + LIKED_BONUS
         return scored.entries
             .filter { it.key !in taken && !SongLikeState.isDisliked(it.key) }
-            .sortedByDescending { it.value * (0.6 + random.nextDouble() * 0.8) }
+            // Draw each song's shuffle once: a key that changes between comparisons breaks the sort.
+            .map { it.key to it.value * (0.6 + random.nextDouble() * 0.8) }
+            .sortedByDescending { it.second }
             .take(FAMILIAR_POOL)
-            .mapNotNull { cache.get(it.key) }
+            .mapNotNull { cache.get(it.first) }
             .filter { it.artists.firstOrNull()?.name?.lowercase() !in passedArtists }
     }
 
