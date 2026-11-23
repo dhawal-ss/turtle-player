@@ -22,6 +22,16 @@ The product and engineering plan is the source of truth for what we build and wh
   changes.
 - Inject `Clock` and `Random` so engine behavior is deterministic under test.
 
+## Branches
+
+All work happens on one local branch, `main`. Don't create feature branches or extra worktrees for ongoing work.
+
+If a session needs isolation, merge its result into `main` straight away and delete the branch. Work left on side branches has been lost from builds, and fixed twice.
+
+Before starting, check `git branch` and `git worktree list`. Anything other than `main` should be merged, not worked on. Commit and push only when the owner asks.
+
+[Turtle status and handoff](docs/plans/2026-11-23-status.md) records where the work stands.
+
 ## Tests
 
 Unlike upstream, our engines are tested thoroughly: they are pure logic and the product depends

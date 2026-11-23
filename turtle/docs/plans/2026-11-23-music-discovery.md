@@ -2,6 +2,13 @@
 
 **Implementation handoff for Claude Opus 5.5 · 23 November 2026 · Proposed**
 
+> **Status, 23 November.**
+> - **Done:** steps 1 to 4b. Step 1 deferred the ranked chart.
+> - **Waiting on the owner:** steps 5 to 7, the country-chart decision.
+> - **Next:** steps 8a and 8b.
+>
+> See [Turtle status and handoff](2026-11-23-status.md) for commits, open decisions and known issues, and the [Spotify comparison](2026-11-23-spotify-comparison.md) for how charts and recommendations could follow Spotify's split.
+
 Give listeners two dependable ways into music. Home should offer something they would choose now. Explore should tell them what people in their country are playing. When they press play on either, the next few songs should make sense in the context they chose.
 
 **Build first.** Verify a source for a weekly country songs chart. In parallel, improve the opening tracks of Matched shelves and Infinity sessions. Those fixes can ship even if chart acquisition falls through. Keep the existing taste engine and YouTube playback. Reconsider a learned ranker once real listening evidence shows which decisions the current engine gets wrong.
