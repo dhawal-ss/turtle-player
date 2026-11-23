@@ -74,7 +74,8 @@ fun interface LocalTimeResolver {
  * inflate `msPlayed`. A new session starts after [sessionGapMs] without playback, including a long
  * pause in the middle of a track. When a track starts while another is still open, the previous one
  * is closed with a reason inferred from how the new one started: autoplay = completed, next button =
- * skipped, picking something else (tapped) = stopped, which is neutral rather than a skip.
+ * skipped, picking something else (tapped) = stopped, which is neutral rather than a skip. A change
+ * the player could not classify is unknown, never a skip.
  *
  * A track that never actually played (restored paused, then replaced) records nothing. Plays are
  * followed but stored only while [recording] is true, both at their start and at their end.
@@ -236,7 +237,8 @@ class ListeningSessionTracker(
             StartReason.USER_PREVIOUS -> EndReason.SKIPPED_BACK
             // Choosing something else to play is a change of plan, not a verdict on this track.
             StartReason.TAPPED, StartReason.REMOTE, StartReason.RESUMED -> if (nearlyDone) EndReason.COMPLETED else EndReason.STOPPED
-            StartReason.UNKNOWN -> if (nearlyDone) EndReason.COMPLETED else EndReason.SKIPPED
+            // Without the queue, a jump elsewhere looks the same as the next button: not evidence of a skip.
+            StartReason.UNKNOWN -> if (nearlyDone) EndReason.COMPLETED else EndReason.UNKNOWN
         }
     }
 

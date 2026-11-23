@@ -185,7 +185,11 @@ internal class ResultMerger(
         return groupByIdentity(candidates).mapNotNull { scoreTrackGroup(query, it) }
     }
 
-    /** Union-find over every identity a candidate has: its key, ISRC, YouTube id and canonical name key. */
+    /**
+     * Union-find over every identity a candidate has: its key, ISRC, YouTube id and canonical name key.
+     * The same upload or ISRC always merges, but a name match never joins an explicit upload with a
+     * clean one: "Hide explicit" drops a group's representative, so a merged pair could vanish whole.
+     */
     private fun groupByIdentity(candidates: List<Candidate>): List<List<Candidate>> {
         val parent = IntArray(candidates.size) { it }
         fun find(i: Int): Int {
@@ -198,18 +202,34 @@ internal class ResultMerger(
         }
         val owner = HashMap<String, Int>()
         candidates.forEachIndexed { i, c ->
-            for (key in identityKeys(c)) {
+            for (key in uploadKeys(c)) {
                 val other = owner[key]
                 if (other == null) owner[key] = i else parent[find(i)] = find(other)
+            }
+        }
+        // Flag per upload, not per candidate, so a stale clean copy of an explicit upload cannot bridge the two.
+        val explicitRoots = candidates.indices.filter { candidates[it].meta.explicit }.mapTo(HashSet()) { find(it) }
+        val nameOwner = HashMap<Pair<Boolean, String>, Int>()
+        candidates.forEachIndexed { i, c ->
+            val explicit = find(i) in explicitRoots
+            for (key in nameKeys(c)) {
+                val other = nameOwner[explicit to key]
+                if (other == null) nameOwner[explicit to key] = i else parent[find(i)] = find(other)
             }
         }
         return candidates.indices.groupBy { find(it) }.values.map { idx -> idx.map { candidates[it] } }
     }
 
-    private fun identityKeys(c: Candidate): List<String> = buildList {
-        add(c.meta.key.value)
+    /** Identities of one recording or upload. */
+    private fun uploadKeys(c: Candidate): List<String> = buildList {
+        if (c.meta.key.scheme != TrackKey.META) add(c.meta.key.value)
         c.meta.isrc?.takeIf { it.isNotBlank() }?.let { add(TrackKey.isrc(it).value) }
         c.meta.youtubeId?.takeIf { it.isNotBlank() }?.let { add(TrackKey.youtube(it).value) }
+    }
+
+    /** Name-based identities; a `meta:` key shares [canonicalIdentity]'s format on purpose. */
+    private fun nameKeys(c: Candidate): List<String> = buildList {
+        if (c.meta.key.scheme == TrackKey.META) add(c.meta.key.value)
         add(canonicalIdentity(c.meta.primaryArtist, c.canonical.base, c.canonical.versions))
     }
 

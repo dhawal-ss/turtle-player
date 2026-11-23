@@ -14,8 +14,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import java.io.File
 import java.io.IOException
+import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -34,6 +36,8 @@ class YouTubeFreshReleasesTest {
     private class FakeCatalog : ReleaseCatalog {
         val pages = mutableMapOf<String, List<ArtistRelease>>()
         var calls = 0
+
+        override suspend fun followedArtists() = emptyList<ArtistKey>()
 
         override suspend fun channelId(artist: ArtistKey): String? {
             calls++
@@ -115,6 +119,56 @@ class YouTubeFreshReleasesTest {
         now += 29 * DAY_MS
         assertTrue(restarted.fetch().isEmpty())
         restarted.awaitRefresh()
+        scope.cancel()
+        store.close()
+    }
+
+    /** Every artist is on YouTube; only [releasing] has a release, which YouTube badges as new. */
+    private class ManyArtistsCatalog(val releasing: ArtistKey) : ReleaseCatalog {
+        /** Artists whose page was read. */
+        val scanned: MutableList<ArtistKey> = Collections.synchronizedList(mutableListOf())
+
+        override suspend fun followedArtists() = emptyList<ArtistKey>()
+
+        override suspend fun channelId(artist: ArtistKey) = "UC-${artist.value}"
+
+        override suspend fun releases(channelId: String, artist: ArtistKey): List<ArtistRelease> {
+            scanned += artist
+            return if (artist == releasing) listOf(ArtistRelease("new-single", 2026, isNew = true)) else emptyList()
+        }
+
+        override suspend fun tracks(releaseId: String) =
+            listOf(SongItem("$releaseId-1", "Track 1", null, listOf(ArtistTiny("UC-last", "Artist 20")), null))
+    }
+
+    @Test
+    fun refreshesRotateThroughEveryRequestedArtistAcrossRestarts() = runTest {
+        val file = File.createTempFile("turtle-radar", ".db").apply { delete(); deleteOnExit() }
+        val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+        val wanted = (1..20).map { ArtistKey.of("Artist $it") }
+        val catalog = ManyArtistsCatalog(releasing = wanted.last())
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val since = now - 28 * DAY_MS
+
+        // Each refresh stays within the per-refresh budget, so the last artist waits its turn.
+        val first = radar(store, catalog, scope, mutableListOf())
+        first.freshReleases(wanted, since, 50)
+        first.awaitRefresh()
+        assertEquals(YouTubeFreshReleases.MAX_ARTISTS, catalog.scanned.size)
+        assertFalse(wanted.last() in catalog.scanned)
+
+        // After a restart the artists not checked yet come next, not the same top artists again.
+        catalog.scanned.clear()
+        val restarted = radar(store, catalog, scope, mutableListOf())
+        restarted.freshReleases(wanted, since, 50)
+        restarted.awaitRefresh()
+        assertTrue(catalog.scanned.size <= YouTubeFreshReleases.MAX_ARTISTS)
+        assertTrue(wanted.takeLast(5).all { it in catalog.scanned }, "unchecked artists first: ${catalog.scanned}")
+        assertEquals(listOf("new-single-1"), restarted.freshReleases(wanted, since, 50).map { it.youtubeId })
+
+        // Within one run the next refresh covers whoever is left.
+        restarted.awaitRefresh()
+        assertEquals(wanted.toSet(), catalog.scanned.toSet())
         scope.cancel()
         store.close()
     }

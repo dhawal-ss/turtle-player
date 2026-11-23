@@ -9,6 +9,7 @@ import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.taste.FreshReleaseSource
 import com.metrolist.shared.api.YouTubeRepository
 import com.metrolist.shared.db.MusicDatabase
+import com.metrolist.shared.db.entities.ArtistEntity
 import com.metrolist.shared.db.entities.toSongItem
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
@@ -45,8 +46,11 @@ internal data class ArtistRelease(
     val latest: Boolean = false,
 )
 
-/** The network side of Release Radar, so the freshness logic can be tested without YouTube. */
+/** Upstream's side of Release Radar, so the freshness logic can be tested without YouTube. */
 internal interface ReleaseCatalog {
+    /** Artists the listener follows in upstream's library, newest follow first. */
+    suspend fun followedArtists(): List<ArtistKey>
+
     /** The artist's YouTube channel id, or null when no artist matches. Throws on network failure. */
     suspend fun channelId(artist: ArtistKey): String?
 
@@ -58,8 +62,8 @@ internal interface ReleaseCatalog {
 }
 
 /**
- * Release Radar on YouTube Music: new albums and singles from the listener's top artists, for the
- * taste engine's Fresh for You shelf.
+ * Release Radar on YouTube Music: new albums and singles from the artists the listener follows and
+ * their top artists, for the taste engine's Fresh for You shelf.
  *
  * YouTube only gives a release's year, so freshness comes from when we first saw a release on the
  * artist's page, persisted in our pref table:
@@ -72,7 +76,9 @@ internal interface ReleaseCatalog {
  * The engine calls this under a 2 s budget, so it answers from memory and refreshes in the
  * background: at most [MAX_ARTISTS] artists, [PARALLELISM] requests at a time, each with a
  * timeout. Results are kept for [CACHE_MS] (failures retry after [RETRY_MS]); when a refresh
- * finds something, Home is rebuilt. Every failure is logged and swallowed.
+ * finds something, Home is rebuilt. Each refresh takes the next artists not checked lately, so
+ * every requested artist is checked within a few refreshes, restarts included. Every failure is
+ * logged and swallowed.
  */
 class YouTubeFreshReleases internal constructor(
     private val store: SqlitePlayEventStore,
@@ -104,12 +110,15 @@ class YouTubeFreshReleases internal constructor(
     private var loaded = false
     private val sightings = HashMap<String, Sighting>()
     private val artistStates = HashMap<ArtistKey, ArtistState>()
+
+    /** When each artist was last checked, failures included: the rotation across refreshes. */
+    private val checkedAt = HashMap<ArtistKey, Long>()
     private val releaseTracks = LinkedHashMap<String, List<SongItem>>()
 
     override suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int): List<TrackMeta> = try {
         val now = clock.nowMs()
         val found = mutex.withLock {
-            val stale = artists.take(MAX_ARTISTS).filter { entries[it]?.current(now) != true }
+            val stale = artists.filter { entries[it]?.current(now) != true }
             if (stale.isNotEmpty() && job?.isActive != true) job = scope.launch { refresh(stale, sinceMs) }
             artists.flatMap { entries[it]?.tracks.orEmpty() }
         }
@@ -126,14 +135,23 @@ class YouTubeFreshReleases internal constructor(
         emptyList()
     }
 
+    override suspend fun followedArtists(): List<ArtistKey> = try {
+        catalog.followedArtists()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        TurtleLog.error("release radar: could not read followed artists", e)
+        emptyList()
+    }
+
     /** Waits for a running background refresh; for tests. */
     internal suspend fun awaitRefresh() {
         mutex.withLock { job }?.join()
     }
 
-    private suspend fun refresh(artists: List<ArtistKey>, sinceMs: Long) {
+    private suspend fun refresh(stale: List<ArtistKey>, sinceMs: Long) {
         try {
-            val updated = withTimeoutOrNull(REFRESH_TIMEOUT_MS) { scan(artists, sinceMs) } ?: false
+            val updated = withTimeoutOrNull(REFRESH_TIMEOUT_MS) { scan(stale, sinceMs) } ?: false
             if (updated) onUpdated()
         } catch (e: CancellationException) {
             throw e
@@ -142,10 +160,11 @@ class YouTubeFreshReleases internal constructor(
         }
     }
 
-    /** One background pass over [artists]; true when it found fresh tracks. */
-    private suspend fun scan(artists: List<ArtistKey>, sinceMs: Long): Boolean {
+    /** One background pass over the next batch of [stale] artists; true when it found fresh tracks. */
+    private suspend fun scan(stale: List<ArtistKey>, sinceMs: Long): Boolean {
         load()
         val now = clock.nowMs()
+        val artists = nextBatch(stale)
         val windowYear = yearOf(sinceMs)
         val gate = Semaphore(PARALLELISM)
 
@@ -174,6 +193,7 @@ class YouTubeFreshReleases internal constructor(
         for (s in scans) if (s.releases == null && s.channelId != null) {
             artistStates[s.artist] = ArtistState(s.channelId, artistStates[s.artist]?.lastScanMs ?: 0)
         }
+        for (s in scans) checkedAt[s.artist] = now
 
         // 3. Tracks of fresh releases we have not loaded yet, bounded per refresh.
         val missing = freshByArtist.values.flatten().map { it.first }.filter { it !in releaseTracks }.distinct().take(MAX_RELEASES_PER_REFRESH)
@@ -201,6 +221,14 @@ class YouTubeFreshReleases internal constructor(
         TurtleLog.info("release radar: scanned ${scans.count { it.releases != null }}/${artists.size} artists, $found fresh tracks")
         return found > 0
     }
+
+    /**
+     * Up to [MAX_ARTISTS] of [stale], most wanted first, except that [ROTATING] are the ones checked
+     * longest ago. In-memory results are lost on restart, so without those the most wanted artists
+     * would take every refresh after a restart and the rest would never be checked.
+     */
+    private fun nextBatch(stale: List<ArtistKey>): List<ArtistKey> =
+        (stale.sortedBy { checkedAt[it] ?: 0L }.take(ROTATING) + stale).distinct().take(MAX_ARTISTS)
 
     private class ArtistScan(val artist: ArtistKey, val channelId: String?, val releases: List<ArtistRelease>?, val failed: Boolean)
 
@@ -245,18 +273,30 @@ class YouTubeFreshReleases internal constructor(
             val at = f.getOrNull(2)?.toLongOrNull()
             if (f.size == 3 && f[0].isNotEmpty() && at != null) artistStates[ArtistKey(f[0])] = ArtistState(f[1].ifEmpty { null }, at)
         }
+        store.pref(PREF_CHECKED)?.lineSequence()?.forEach { line ->
+            val f = line.split(FIELD)
+            val at = f.getOrNull(1)?.toLongOrNull()
+            if (f.size == 2 && f[0].isNotEmpty() && at != null) checkedAt[ArtistKey(f[0])] = at
+        }
     }
 
     private suspend fun save(now: Long) {
         val keep = sightings.entries.filter { now - it.value.firstSeenMs <= SIGHTING_TTL_MS }
             .sortedByDescending { it.value.firstSeenMs }.take(MAX_SIGHTINGS)
         sightings.keys.retainAll(keep.map { it.key }.toSet())
+        // An artist not checked for this long sorts like one never checked, so its time can go.
+        checkedAt.values.removeAll { now - it > KNOWN_ARTIST_MS }
         try {
             store.setPref(PREF_SEEN, keep.joinToString("\n") { (id, s) -> "$id$FIELD${s.firstSeenMs}$FIELD${if (s.fresh) 1 else 0}" })
             store.setPref(
                 PREF_ARTISTS,
                 artistStates.entries.filter { (k, _) -> FIELD !in k.value && '\n' !in k.value }
                     .joinToString("\n") { (k, s) -> "${k.value}$FIELD${s.channelId.orEmpty()}$FIELD${s.lastScanMs}" },
+            )
+            store.setPref(
+                PREF_CHECKED,
+                checkedAt.entries.filter { (k, _) -> FIELD !in k.value && '\n' !in k.value }
+                    .joinToString("\n") { (k, at) -> "${k.value}$FIELD$at" },
             )
         } catch (e: CancellationException) {
             throw e
@@ -267,6 +307,9 @@ class YouTubeFreshReleases internal constructor(
 
     internal companion object {
         const val MAX_ARTISTS = 15
+
+        /** Of each refresh's [MAX_ARTISTS], how many go to the artists checked longest ago. */
+        const val ROTATING = 5
         const val PARALLELISM = 3
         const val MAX_RELEASES_PER_ARTIST = 2
         const val MAX_RELEASES_PER_REFRESH = 12
@@ -285,6 +328,7 @@ class YouTubeFreshReleases internal constructor(
         const val SIGHTING_TTL_MS = 400 * DAY_MS
         const val PREF_SEEN = "release_radar_seen"
         const val PREF_ARTISTS = "release_radar_artists"
+        const val PREF_CHECKED = "release_radar_checked"
         const val FIELD = '\t'
 
         /** Whether a release seen for the first time counts as fresh. */
@@ -314,6 +358,9 @@ internal class YouTubeReleaseCatalog(
     private var libraryIds: Map<ArtistKey, String>? = null
     private var libraryIdsAtMs = 0L
 
+    override suspend fun followedArtists(): List<ArtistKey> =
+        followedRows().map { ArtistKey.of(it.name) }.distinct()
+
     override suspend fun channelId(artist: ArtistKey): String? =
         libraryChannelIds()[artist] ?: repository()
             .searchFiltered(artist.value, SearchFilter.ARTIST, allowOfflineFallback = false)
@@ -335,11 +382,17 @@ internal class YouTubeReleaseCatalog(
     override suspend fun tracks(releaseId: String): List<SongItem> =
         repository().getAlbum(releaseId, loadAllPages = false)?.songs.orEmpty()
 
-    /** Channel ids of artists in upstream's song table (library and history), rebuilt twice a day. */
+    /** Followed artists, newest follow first; podcast channels are followed shows, not artists. */
+    private suspend fun followedRows(): List<ArtistEntity> =
+        database().dao().artistsBookmarkedByCreateDateAsc().first()
+            .map { it.artist }.filter { !it.isPodcastChannel && it.name.isNotBlank() }.asReversed()
+
+    /** Channel ids of followed artists and of artists in upstream's song table (library and history), rebuilt twice a day. */
     private suspend fun libraryChannelIds(): Map<ArtistKey, String> = libraryLock.withLock {
         val now = Clock.System.nowMs()
         libraryIds?.takeIf { now - libraryIdsAtMs < YouTubeFreshReleases.CACHE_MS }?.let { return it }
         val ids = HashMap<ArtistKey, String>()
+        for (a in followedRows()) if (a.id.startsWith(CHANNEL_PREFIX)) ids.getOrPut(ArtistKey.of(a.name)) { a.id }
         for (row in database().dao().allSongs().first()) {
             val song = row.toSongItem()
             for (a in song.artists + song.canonicalArtists.orEmpty()) {

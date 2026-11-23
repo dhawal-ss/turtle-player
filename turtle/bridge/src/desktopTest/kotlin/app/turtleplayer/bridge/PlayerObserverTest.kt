@@ -6,6 +6,8 @@ import app.turtleplayer.events.ListeningSessionTracker
 import app.turtleplayer.events.Surface
 import com.metrolist.shared.model.ArtistTiny
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.ui.playback.PlaybackController
+import com.metrolist.shared.ui.playback.PlaybackUiState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
@@ -31,16 +34,59 @@ class PlayerObserverTest {
         id: String,
         podcastId: String? = null,
         videoType: String? = null,
+        duration: Long = 200,
     ) = SongItem(
         id = id,
         title = "Title $id",
         thumbnail = null,
         artists = listOf(ArtistTiny(null, "Artist $id")),
         album = null,
-        duration = 200,
+        duration = duration,
         podcastId = podcastId,
         musicVideoType = videoType,
     )
+
+    /** Shell's controller showing [queue], playing its first song; [sampled] completes once the observer reads it. */
+    private class ShellController(
+        queue: List<SongItem>,
+    ) : PlaybackController {
+        val sampled = CompletableDeferred<Unit>()
+        override val state: StateFlow<PlaybackUiState> =
+            MutableStateFlow(PlaybackUiState(currentSong = queue.first(), isPlaying = true, queue = queue, currentQueueIndex = 0))
+
+        override fun currentPositionMs(): Long {
+            sampled.complete(Unit)
+            return 5_000
+        }
+
+        override fun play(
+            song: SongItem,
+            queue: List<SongItem>,
+            songsOnly: Boolean,
+        ) = Unit
+
+        override fun shuffleQueue(
+            songs: List<SongItem>,
+            queueTitle: String?,
+            songsOnly: Boolean,
+        ) = Unit
+
+        override fun togglePlayPause() = Unit
+
+        override fun seekTo(positionMs: Long) = Unit
+
+        override fun skipToNext() = Unit
+
+        override fun skipToPrevious() = Unit
+
+        override fun setPlaybackSpeed(speed: Float) = Unit
+
+        override fun startRadio(song: SongItem) = Unit
+
+        override fun playNext(songs: List<SongItem>) = Unit
+
+        override fun addToQueue(songs: List<SongItem>) = Unit
+    }
 
     /** Waits until the observer has taken in the latest song (null: nothing it learns from is playing). */
     private suspend fun PlayerObserver.settle(id: String?) = withTimeout(5_000) { while (currentSong()?.id != id) delay(10) }
@@ -180,5 +226,78 @@ class PlayerObserverTest {
             observer.settle(null)
             assertEquals(listOf("infinity/library/f/familiar", "search/-/-"), store.since(0).map { it.surfaceDetail })
             assertEquals(listOf(Surface.AUTOPLAY, Surface.SEARCH), store.since(0).map { it.surface })
+        }
+
+    @Test
+    fun songChangesAfterShellIsGoneAreJudgedFromTheLastQueue() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val shell = ShellController(listOf(song("a"), song("b"), song("c")))
+            val hints = MutableStateFlow<PlaybackController?>(shell)
+            val observer =
+                PlayerObserver(
+                    ListeningSessionTracker(store),
+                    controller = { hints.value },
+                    isBookChapter = { false },
+                    spokenReady = {},
+                )
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            current.value = song("a")
+            observer.settle("a")
+            withTimeout(5_000) { shell.sampled.await() }
+            hints.value = null // Shell's composition disposed: Android Auto drives playback now
+
+            current.value = song("b") // next button
+            observer.settle("b")
+            current.value = song("x") // picked from Android Auto
+            observer.settle("x")
+            current.value = song("y") // outside any queue seen: cannot tell
+            observer.settle("y")
+            current.value = null
+            observer.settle(null)
+
+            val ends = store.since(0).map { it.endReason }
+            assertEquals(listOf(EndReason.SKIPPED, EndReason.STOPPED, EndReason.UNKNOWN, EndReason.STOPPED), ends)
+        }
+
+    @Test
+    fun aCrossfadeAfterShellIsGoneIsNotASkip() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            // 17 s songs: just outside the crossfade window when they start, inside it after a second of play.
+            val queue = listOf(song("a"), song("b", duration = 17), song("c", duration = 17), song("d"))
+            val shell = ShellController(queue)
+            val hints = MutableStateFlow<PlaybackController?>(shell)
+            val observer =
+                PlayerObserver(
+                    ListeningSessionTracker(store),
+                    controller = { hints.value },
+                    isBookChapter = { false },
+                    spokenReady = {},
+                )
+            val current = MutableStateFlow<SongItem?>(null)
+            val playing = MutableStateFlow(true)
+            observer.attach(scope, current, playing, MutableSharedFlow<Unit>())
+            current.value = queue[0]
+            observer.settle("a")
+            withTimeout(5_000) { shell.sampled.await() }
+            hints.value = null
+
+            current.value = queue[1] // next button
+            observer.settle("b")
+            delay(1_500)
+            current.value = queue[2] // crossfaded in near the end of b
+            observer.settle("c")
+            playing.value = false
+            delay(1_500) // paused time is not playing time
+            playing.value = true
+            current.value = queue[3] // next button
+            observer.settle("d")
+            current.value = null
+            observer.settle(null)
+
+            val ends = store.since(0).map { it.endReason }
+            assertEquals(listOf(EndReason.SKIPPED, EndReason.COMPLETED, EndReason.SKIPPED, EndReason.STOPPED), ends)
         }
 }

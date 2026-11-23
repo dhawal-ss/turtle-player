@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,6 +109,7 @@ import app.turtleplayer.ui.theme.LocalShellGround
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellTheme
+import com.metrolist.shared.generated.resources.link_copied_to_clipboard
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.BuiltinPlaylist
@@ -121,10 +124,13 @@ import com.metrolist.shared.turtle.HomeSlot
 import com.metrolist.shared.ui.navigation.LocalNavigator
 import com.metrolist.shared.turtle.NavigationSlot
 import com.metrolist.shared.ui.playback.LocalPlaybackController
+import com.metrolist.shared.ui.utils.setText
+import com.metrolist.shared.utils.ShareUrls
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
+import com.metrolist.shared.generated.resources.Res as SharedRes
 
 /** Desktop layout state that outlives screens (panel open, library collapsed, filter). */
 object ShellDesktop {
@@ -459,10 +465,14 @@ private fun LibraryRowView(row: LibraryRow, collapsed: Boolean, playing: Boolean
 
 /** Desktop services for Shell's surfaces: upstream's desktop lyrics, queue and timer state, via hook #30. */
 @Composable
-private fun rememberDesktopServices(library: DesktopLibrarySlot): ShellPlayerServices? {
+private fun rememberDesktopServices(library: DesktopLibrarySlot, onToast: (String) -> Unit): ShellPlayerServices? {
     val extras = TurtleUiSlots.desktopExtras ?: return null
     val controller = LocalPlaybackController.current
-    return remember(extras, library, controller) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val copiedText = stringResource(SharedRes.string.link_copied_to_clipboard)
+    val toast by rememberUpdatedState(onToast)
+    return remember(extras, library, controller, clipboard, scope, copiedText) {
         // Removal goes through hook #30 (the controller's index removal is a no-op on desktop); undo re-adds.
         val editor = ShellQueueEditor(
             remove = remove@{ indices ->
@@ -481,7 +491,13 @@ private fun rememberDesktopServices(library: DesktopLibrarySlot): ShellPlayerSer
             ensureLyrics = { song -> if (extras.lyricsSongId() != song.id && !extras.lyricsLoading()) extras.loadLyrics(song) },
             removeQueueIndex = extras.removeQueueIndex,
             addToPlaylist = extras.addToPlaylist,
-            share = null,
+            // Upstream's desktop shares by copying the link; there is no OS share sheet here.
+            share = { song ->
+                scope.launch {
+                    clipboard.setText(ShareUrls.song(song.id))
+                    toast(copiedText)
+                }
+            },
             download = null,
             isDownloaded = { false },
             openArtist = { id -> library.open(ArtistItem(id = id, title = "", thumbnail = null)) },
@@ -504,11 +520,11 @@ private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
     val song = state.currentSong ?: ShellDesktop.restoredSong ?: return
-    val services = rememberDesktopServices(library)
+    var toast by remember { mutableStateOf<String?>(null) }
+    val services = rememberDesktopServices(library) { toast = it }
     val tint = artworkTint(song.displayThumbnailUrl, 0.14f, base = c.panel)
     val requested = ShellDesktop.panel
     val mode = if (services == null && requested != DesktopPanel.DEVICES) DesktopPanel.NOW_PLAYING else requested
-    var toast by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(toast) { if (toast != null) { delay(2400); toast = null } }
     Box(modifier.clip(PanelShape).background(tint)) {
         Column(Modifier.fillMaxSize()) {

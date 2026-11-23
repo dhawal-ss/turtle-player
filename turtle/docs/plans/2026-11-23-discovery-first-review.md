@@ -419,9 +419,11 @@ The cause is the listening log:
 - **Unknown starts count as skips.** `ListeningSessionTracker` ends a song as `SKIPPED` when the next start is `UNKNOWN`. Choosing something else is meant to be a neutral `STOPPED`, and `PlayerObserver` is supposed to recognise that.
 - **The effect.** These false skips pull many artists below zero, which raises every row's disliked share.
 
+**Earlier fix on another branch.** The paper-review branch had already fixed most of this on 22 November in `91413ef4`. That fix makes the tracker record an unclassified change as `UNKNOWN`, never `SKIPPED`, and makes the observer classify changes against the last queue it saw when Shell is gone. It reached this line of work only when both branches were merged into `main` on 23 November. The change below was made without it and now works alongside it.
+
 **What changed in `PlayerObserver`:**
 - **Playing song missing from the queue.** The playhead sampler no longer saves a queue that does not contain the playing song: a new queue can arrive before its first song starts.
-- **Previous song missing from the saved queue.** That is now read as choosing another song (`TAPPED`, so the old song ends `STOPPED`), not `UNKNOWN`.
+- **Previous song missing from the saved queue.** With Shell on screen, that is read as choosing another song (`TAPPED`, so the old song ends `STOPPED`). Without Shell, the saved queue may be stale, so the change stays `UNKNOWN`, which the tracker no longer records as a skip.
 - **Diagnostics.** Each remaining case writes a line to the drive log: no controller, no queue seen yet, or previous song not in its queue.
 
 On the phone, tapping a second Home song eight seconds in was recorded as `STOPPED after 8s`.

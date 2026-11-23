@@ -197,7 +197,9 @@ class CollaborativeFilteringGenerator(
 }
 
 /**
- * New releases from artists the listener has affinity for (Release Radar style).
+ * New releases from artists the listener follows or has affinity for (Release Radar style).
+ * Followed artists they have not played come after the played ones, at most [followed] of them,
+ * newest follow first.
  *
  * A release counts as fresh only when its [TrackMeta.releasedAtMs] falls inside the window. Sources
  * that only know a year pass the time they first saw the release instead; a track with neither is
@@ -207,6 +209,7 @@ class FreshReleaseGenerator(
     private val releases: FreshReleaseSource,
     private val windowDays: Int = 28,
     private val artists: Int = 40,
+    private val followed: Int = 10,
 ) : CandidateGenerator {
     override val source = CandidateSource.FRESH_RELEASE
 
@@ -214,8 +217,12 @@ class FreshReleaseGenerator(
         if (request.seed != null) return emptyList()
         val controls = request.controls
         val affinity = request.profile.topArtists(artists).associate { it.artist to it.affinity }
-        val wanted = (affinity.keys + controls.boostedArtists + controls.onboardingArtists).distinct()
+        val base = (affinity.keys + controls.boostedArtists + controls.onboardingArtists).distinct()
             .filter { it !in controls.mutedArtists }
+        // Sources check the head of the list most often; hundreds of synced follows must not push
+        // out the artists the listener actually plays.
+        val wanted = base + releases.followedArtists()
+            .filter { it !in controls.mutedArtists && it !in base }.distinct().take(followed)
         if (wanted.isEmpty()) return emptyList()
         val since = request.nowMs - windowDays * DAY_MS
         val maxAff = affinity.values.maxOrNull()?.takeIf { it > 0 } ?: 1.0

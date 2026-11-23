@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
@@ -76,6 +77,7 @@ import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import com.metrolist.shared.api.lyrics.LyricsUtils
 import com.metrolist.shared.model.LyricsEntry
+import com.metrolist.shared.settings.Settings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import org.jetbrains.compose.resources.stringResource
@@ -223,23 +225,32 @@ private class LyricsMetrics(
     val skeletonBar: Dp,
 )
 
+/**
+ * Follows upstream's lyrics text size and line spacing settings as ratios of their defaults, so the
+ * default settings keep Shell's own sizes.
+ */
 @Composable
 private fun lyricsMetrics(compact: Boolean): LyricsMetrics {
     val type = Shell.type
-    return remember(type, compact) {
+    val settings = Settings.shared
+    val textSize = settings.lyricsTextSize
+    val lineSpacing = settings.lyricsLineSpacing
+    return remember(type, compact, textSize, lineSpacing) {
+        val size = textSize / settings.defaultValue(settings::lyricsTextSize)
+        val spacing = lineSpacing / settings.defaultValue(settings::lyricsLineSpacing)
         val line =
             if (compact) {
-                type.headline.copy(fontSize = 18.sp, lineHeight = 23.sp)
+                type.headline.copy(fontSize = 18.sp * size, lineHeight = 23.sp * size)
             } else {
-                type.headline.copy(fontSize = type.headline.fontSize * 0.9f, lineHeight = type.headline.lineHeight * 0.9f)
+                type.headline.copy(fontSize = type.headline.fontSize * 0.9f * size, lineHeight = type.headline.lineHeight * 0.9f * size)
             }
-        val sub = if (compact) type.bodySmall else type.body
+        val sub = (if (compact) type.bodySmall else type.body).let { it.copy(fontSize = it.fontSize * size, lineHeight = it.lineHeight * size) }
         LyricsMetrics(
             line = line,
             sub = sub,
             background = sub.copy(fontStyle = FontStyle.Italic),
-            gap = if (compact) 7.dp else 10.dp,
-            skeletonBar = if (compact) 16.dp else 22.dp,
+            gap = (if (compact) 7.dp else 10.dp) * spacing,
+            skeletonBar = (if (compact) 16.dp else 22.dp) * size,
         )
     }
 }
@@ -405,7 +416,8 @@ private fun SyncedLine(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         when {
-            line.blank -> Text("•  •  •", style = metrics.line, color = c.ink)
+            // An instrumental gap: the dots are decoration, not words to read out.
+            line.blank -> Text("•  •  •", style = metrics.line, color = c.ink, modifier = Modifier.clearAndSetSemantics {})
             line.isBackground -> Text(line.text, style = metrics.background, color = c.ink2)
             line.sweep != null && state == LineState.ACTIVE ->
                 SweepText(line.text, line.sweep, metrics.line, position, offsetMs)

@@ -135,6 +135,26 @@ class ListeningSessionTrackerTest {
     }
 
     @Test
+    fun unclassifiedChangeIsNotASkip() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val tracker = ListeningSessionTracker(store, clock)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(10_000)
+        // Changed from Android Auto with no queue to tell a jump from the next button.
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.UNKNOWN, Surface.QUEUE))
+        clock.advance(190_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("c"), StartReason.UNKNOWN, Surface.QUEUE))
+        tracker.flush()
+
+        val (a, b) = store.since(0)
+        assertEquals(EndReason.UNKNOWN, a.endReason)
+        assertFalse(a.isQuickSkip)
+        assertEquals(EndReason.COMPLETED, b.endReason)
+    }
+
+    @Test
     fun longPauseMidTrackStartsNewSession() = runTest {
         val clock = FakeClock()
         val store = InMemoryPlayEventStore()

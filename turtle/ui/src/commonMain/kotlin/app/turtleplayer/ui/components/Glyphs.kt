@@ -46,7 +46,8 @@ object Glyphs {
     val Check = vector("check", "M5 12l4 4 10-10", filled = false, stroke = 3f)
     val ChevronDown = vector("chevron_down", "M6 9l6 6 6-6", filled = false, stroke = 2f)
     val More = vector("more", "M5 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM12 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM19 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z", filled = true)
-    val Queue = vector("queue", "M4 6h12M4 12h12M4 18h8M18 15v6M15 18h6", filled = false)
+    /** What plays now, marked by a play triangle, then the lines of what comes next. */
+    val Queue = vector("queue", "M4 4.5v5l4.5-2.5zM12 7h8M4 13h16M4 18.5h16", filled = false, stroke = 2f)
     val Devices = vector("devices", "M6 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM18 8v8M21 6v12", filled = false)
     val Close = vector("close", "M6 6l12 12M18 6L6 18", filled = false, stroke = 2.4f)
     val Repeat = vector("repeat", "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3", filled = false, stroke = 2f)
@@ -66,7 +67,8 @@ object Glyphs {
 
     // Hearts, controls and pages.
     val HeartLine = vector("heart_line", "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", filled = false, stroke = 2f)
-    val Sparkle = vector("sparkle", "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z", filled = false, stroke = 1.8f)
+    /** A radar with a sweep and one blip: finding music that is new to you. */
+    val Discover = vector("discover", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM12 12l6.4-6.4M15.6 15.6v.2", filled = false, stroke = 1.8f)
     val Sliders = vector("sliders", "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4", filled = false, stroke = 2f)
     val ChevronRight =vector("chevron_right", "M9 6l6 6-6 6", filled = false, stroke = 2f)
     val ChevronUpDown = vector("chevron_up_down", "M8 9l4-4 4 4M8 15l4 4 4-4", filled = false, stroke = 2f)

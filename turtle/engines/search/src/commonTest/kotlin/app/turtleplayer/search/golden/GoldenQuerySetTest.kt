@@ -31,7 +31,9 @@ import kotlin.test.assertTrue
 /**
  * Runs every golden query through the full engine (local + lyrics + fake online + history
  * affinity) and checks top-1 and top-3 hit rates. Failures are printed with the actual top 3 so a
- * regression is easy to diagnose.
+ * regression is easy to diagnose. The CI gate: a regression over 2% blocks the merge. Golden values
+ * are the engine's rates when the gate was set; lower them only with a written reason in the PR,
+ * raise them when the engine improves.
  */
 class GoldenQuerySetTest {
     private val now = 1_790_000_000_000L
@@ -113,12 +115,12 @@ class GoldenQuerySetTest {
         println("Golden set: $n queries, top-1 ${rate1.fmt()}, top-3 ${rate3.fmt()}")
         perCategory.entries.sortedBy { it.key }.forEach { (c, v) -> println("  $c: ${v[1]}/${v[0]} top-1, ${v[2]}/${v[0]} top-3") }
         failures.forEach { println("  $it") }
-        assertTrue(rate3 >= TOP3_THRESHOLD, "top-3 hit rate $rate3 < $TOP3_THRESHOLD")
-        assertTrue(rate1 >= TOP1_THRESHOLD, "top-1 hit rate $rate1 < $TOP1_THRESHOLD")
+        assertTrue(rate3 >= GOLDEN_TOP3 * 0.98, "top-3 hit rate regressed: $rate3 < golden $GOLDEN_TOP3")
+        assertTrue(rate1 >= GOLDEN_TOP1 * 0.98, "top-1 hit rate regressed: $rate1 < golden $GOLDEN_TOP1")
     }
 
     private companion object {
-        const val TOP3_THRESHOLD = 0.98
-        const val TOP1_THRESHOLD = 0.96
+        const val GOLDEN_TOP1 = 1.0
+        const val GOLDEN_TOP3 = 1.0
     }
 }

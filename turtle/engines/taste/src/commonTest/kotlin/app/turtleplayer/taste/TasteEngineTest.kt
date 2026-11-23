@@ -169,6 +169,38 @@ class TasteEngineTest {
     }
 
     @Test
+    fun freshForYouCoversFollowedArtistsNeverPlayed() = runTest {
+        fun release(artist: String) = world.tracks.first().copy(
+            key = TrackKey("mbid:new-$artist"), title = "New single", artists = listOf(artist), album = "New single",
+            releasedAtMs = clock.now - 2 * DAY_MS,
+        )
+        val followed = release("Followed only")
+        val muted = release("Followed but muted")
+        listOf(followed, muted).forEach(world.catalog::put)
+        val source = object : FreshReleaseSource {
+            override suspend fun followedArtists() = listOf(followed.artistKey, muted.artistKey)
+            override suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int) =
+                listOf(followed, muted).filter { it.artistKey in artists }
+        }
+        val engine = engineWithHistory(controls = UserControls(mutedArtists = setOf(muted.artistKey)), fresh = source)
+        assertEquals(listOf(followed.key), engine.freshForYou()?.items?.map { it.key })
+
+        // Hundreds of synced follows do not crowd out the artists they play, for a source that only
+        // gets to the first artists it is asked about.
+        val top = engine.profile().topArtists(1).single().artist
+        val favorite = world.tracksOf(top).first().copy(
+            key = TrackKey("mbid:new-favorite"), title = "New single", album = "New single", releasedAtMs = clock.now - 2 * DAY_MS,
+        )
+        world.catalog.put(favorite)
+        val busy = object : FreshReleaseSource {
+            override suspend fun followedArtists() = (1..300).map { ArtistKey.of("Followed $it") }
+            override suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int) =
+                listOf(favorite).filter { it.artistKey in artists.take(15) }
+        }
+        assertEquals(listOf(favorite.key), engineWithHistory(fresh = busy).freshForYou()?.items?.map { it.key })
+    }
+
+    @Test
     fun homeShelvesCarryTypedReasons() = runTest {
         val fresh = world.tracksOf(user.favoriteArtists.first()).first().copy(
             key = TrackKey("mbid:fresh-single"), title = "New single", album = "New single", releasedAtMs = clock.now - 3 * DAY_MS,

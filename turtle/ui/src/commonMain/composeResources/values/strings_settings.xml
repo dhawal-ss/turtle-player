@@ -69,7 +69,18 @@
     <string name="shell_set_devtools_on">Developer tools are on</string>
     <string name="shell_set_gpl">Turtle is free software, licensed under the GNU General Public License v3.0 (GPL-3.0). You may use, study, share and change it under that license.</string>
     <string name="shell_set_gpl_link">Read the license</string>
-    <string name="shell_set_built_on">Built on Metrolist</string>
+    <string name="shell_set_credits">Credits</string>
+    <string name="shell_set_creator_name">Dhawal Ranka</string>
+    <string name="shell_set_creator_role">Creator of Turtle</string>
+    <string name="shell_set_github_handle">@%1$s</string>
+    <string name="shell_set_metrolist_team">The Metrolist team</string>
+    <string name="shell_set_metrolist_team_role">Creators of Metrolist</string>
+    <!-- About: the credits heart -->
+    <string name="shell_credit_metrolist_creator">Metrolist Creator</string>
+    <string name="shell_credit_turtle_creator">Turtle Creator</string>
+    <string name="shell_credit_innertune_creator">InnerTune Creator</string>
+    <string name="shell_credits_open">Open the credits heart full screen</string>
+    <string name="shell_credits_zoom_hint">Pinch to zoom, double-tap to zoom in</string>
     <string name="shell_set_built_on_body">Turtle is a fork of Metrolist. Thank you to the Metrolist team and its contributors.</string>
     <string name="shell_set_metrolist_source">Metrolist source code</string>
 

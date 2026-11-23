@@ -1265,7 +1265,8 @@ private fun TrackRow(
     val click = { if (enabled) onClick() else UnavailableSongTaps.tapped() }
     Row(
         modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RowShape).background(bg).hoverable(hover)
-            .shellPressable(click, onLongClick = longClick, label = null)
+            // Long press starts selection on some pages, so it is not announced as the menu.
+            .shellPressable(click, onLongClick = longClick, label = null, onLongClickLabel = null)
             .onSecondaryClick(onMenu)
             .padding(start = if (leading != null) 0.dp else 8.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

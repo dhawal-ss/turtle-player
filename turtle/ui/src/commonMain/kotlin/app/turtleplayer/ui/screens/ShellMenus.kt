@@ -257,7 +257,7 @@ private fun PrimaryTile(action: PlayerMenuAction, modifier: Modifier, compact: B
     }
     Column(
         modifier.height(if (compact) 64.dp else 76.dp).navigationPopupSource(shape).clip(shape).background(bg).hoverable(source)
-            .then(if (action.enabled) Modifier.shellPressable(action.onClick, label = action.title, onLongClick = action.onLongClick, focusShape = shape) else Modifier)
+            .then(if (action.enabled) Modifier.shellPressable(action.onClick, label = action.title, onLongClick = action.onLongClick, focusShape = shape, onLongClickLabel = null) else Modifier)
             .padding(horizontal = 6.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -327,6 +327,8 @@ private fun MenuRow(action: PlayerMenuAction, popup: Boolean) {
                         role = if (action.selected != null) Role.Switch else Role.Button,
                         onLongClick = action.onLongClick,
                         focusShape = shape,
+                        // Upstream's alternate action (another way to share), not a menu.
+                        onLongClickLabel = null,
                     )
                 } else {
                     Modifier
