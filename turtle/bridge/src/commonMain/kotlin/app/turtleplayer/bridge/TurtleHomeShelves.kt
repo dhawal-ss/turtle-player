@@ -56,6 +56,10 @@ class TurtleHomeShelves(
     var shelves: List<HomeShelf> by mutableStateOf(emptyList())
         private set
 
+    /** True once startup's shelves (restored, kept or none) are published. Compose state: Home holds its layout until then. */
+    var ready: Boolean by mutableStateOf(false)
+        private set
+
     /** Guards [restored], [savedSongIds], publishing and persisting. Not reentrant: the `Locked` functions do not take it. */
     private val refreshLock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
@@ -80,6 +84,7 @@ class TurtleHomeShelves(
                 } catch (e: Exception) {
                     TurtleLog.error("home: could not show the kept shelves", e)
                 }
+                ready = true
             }
             refresh()
             var playsSinceRefresh = 0
@@ -184,10 +189,10 @@ class TurtleHomeShelves(
     ): PlayOrigin {
         val shelf = engineShelf(homeKey)
         val item = shelf?.items?.firstOrNull { it.track.youtubeId == songId }
-        return PlayOrigin(PlayPlace.HOME_TURTLE, item?.source, item?.slot, shelf?.id ?: homeKey.removePrefix(HOME_KEY_PREFIX))
+        return PlayOrigin(PlayPlace.HOME_TURTLE, item?.source, item?.slot, shelf?.id ?: homeKey.removePrefix(TURTLE_SHELF_KEY_PREFIX))
     }
 
-    private fun homeKey(shelf: Shelf) = HOME_KEY_PREFIX + shelf.id
+    private fun homeKey(shelf: Shelf) = TURTLE_SHELF_KEY_PREFIX + shelf.id
 
     /** Upstream's shelves with ours inserted after Speed Dial (or at the top). */
     fun mergeInto(upstream: List<HomeShelf>): List<HomeShelf> {
@@ -234,7 +239,6 @@ class TurtleHomeShelves(
 
     private companion object {
         const val MIN_ITEMS = 4
-        const val HOME_KEY_PREFIX = "turtle:"
         const val MAX_ITEMS = 24
         const val PLAYS_PER_REFRESH = 8
         const val REFRESH_INTERVAL_MS = 2 * HOUR_MS

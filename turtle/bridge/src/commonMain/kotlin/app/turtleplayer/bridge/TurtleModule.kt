@@ -23,6 +23,7 @@ import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
@@ -126,9 +127,10 @@ val turtleModule: Module = module {
     }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get(), get()) }
+    single { TurtleHomeRows(get(), get(), get(), database = { get<MusicDatabase>() }, blockChanges = get<UpstreamBlocks>().changes) }
     single { InfinityMix(get(), get(), get(), get()) }
     single { PlaylistAddWatcher({ get<MusicDatabase>() }, get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -339,6 +341,38 @@ object TurtleBridge {
 
     /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
     val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()
+
+    /** False until startup's Turtle shelves are published; true when our module is absent (fail open). Compose state. */
+    val homeShelvesReady: Boolean get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.ready ?: true
+
+    private val homeRows: TurtleHomeRows? get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeRows>()
+
+    /**
+     * Home's Jump back in, newest first: null until first loaded, empty when our module is absent
+     * (fail open). Compose state: read it during composition and Home follows changes.
+     */
+    val homeJumpBackIn: List<SongItem>?
+        get() {
+            val rows = homeRows ?: return emptyList()
+            return rows.jumpBackIn
+        }
+
+    /** Which of YouTube's Home rows and grid suggestions match the listener's taste; null until scored. Compose state. */
+    val homeRowsPick: HomeRowsPick? get() = homeRows?.pick
+
+    /** Scores Home's candidate YouTube [rows] (HomeLayout.candidates) and grid suggestions [grid], off the calling thread. */
+    suspend fun scoreHomeRows(
+        rows: List<HomeShelf>,
+        grid: List<YTItem>,
+    ) {
+        try {
+            homeRows?.score(rows, grid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("home rows: could not score", e)
+        }
+    }
 
     /**
      * Smart Shuffle: [songs] shuffled with taste-matched recommendations mixed in (SmartShuffleBridge.kt).

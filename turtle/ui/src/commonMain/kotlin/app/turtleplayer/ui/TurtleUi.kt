@@ -4,6 +4,7 @@ import androidx.compose.material3.ColorScheme
 import app.turtleplayer.bridge.turtleModule
 import app.turtleplayer.ui.screens.ShellDesktopPlayerBar
 import app.turtleplayer.ui.screens.ShellHome
+import app.turtleplayer.ui.screens.ShellHomeRows
 import app.turtleplayer.ui.screens.ShellMiniPlayer
 import app.turtleplayer.ui.screens.ShellNavigation
 import app.turtleplayer.ui.screens.ShellNowPlaying
@@ -23,6 +24,7 @@ object TurtleUi {
 
     fun install() {
         app.turtleplayer.ui.theme.ShellPalettes.restore()
+        ShellHomeRows.restore()
         TurtleUiSlots.home = { ShellHome(it) }
         TurtleUiSlots.search = { ShellSearch(it) }
         TurtleUiSlots.miniPlayer = { ShellMiniPlayer(it) }

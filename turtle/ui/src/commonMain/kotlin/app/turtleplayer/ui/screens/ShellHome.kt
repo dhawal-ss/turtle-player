@@ -70,6 +70,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.turtleplayer.bridge.HiddenSet
+import app.turtleplayer.bridge.HomeLayout
+import app.turtleplayer.bridge.HomeRowsPick
+import app.turtleplayer.bridge.HomeYouTubeRows
 import app.turtleplayer.bridge.NotInterested
 import app.turtleplayer.bridge.TurtleBridge
 import app.turtleplayer.taste.PlayPlace
@@ -139,15 +142,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 
-/** Upstream's "Keep listening" shelf (HomeShelfBuilder), which Home shows as Spotify's "Jump back in" row. */
-private const val KEEP_LISTENING_KEY = "keep_listening"
-
-/** Shortcut tiles after Infinity and Liked Songs, so the grid stays 2×4 (4×2 when wide). */
-private const val SHORTCUT_TILES = 6
 private val MIX_TINTS = listOf(0xFFC4577A, 0xFF3E6FD8, 0xFF2E9E7A, 0xFFE8B04B, 0xFF8A4FD1, 0xFFD9704A, 0xFF2E7E9E).map { Color(it) }
 
 /** "Made for you" turns from a scrolling row into a grid of this many columns on wide desktop windows. */
 private const val MIX_GRID_COLUMNS = 5
+
+/** The longest Home holds its layout for Turtle's shelves at startup. */
+private const val SHELVES_WAIT_MS = 4_000L
 private const val NOTICE_MS = 2800L
 
 private enum class HomeFilter { ALL, MUSIC, MIXES, PODCASTS, AUDIOBOOKS }
@@ -155,53 +156,53 @@ private enum class HomeFilter { ALL, MUSIC, MIXES, PODCASTS, AUDIOBOOKS }
 /** One of our mixes with what its card needs, worked out once per shelf list rather than per frame. */
 private class MixEntry(val shelf: HomeShelf, val songs: List<SongItem>, val names: String, val tint: Color)
 
-/** Everything Home derives from the shelves; rebuilt only when the shelves or the feed change. */
+/** Home's Jump back in row key, for play attribution (not a Turtle "turtle:" shelf: its songs carry no engine origin). */
+private const val JUMP_BACK_IN_KEY = "turtle_jump_back_in"
+
+/**
+ * Everything Home draws, from the bridge's [HomeLayout] (the order, the grid and which YouTube rows
+ * show), plus what the cards need, worked out once per change rather than per frame.
+ */
 private class HomeLists(
+    val layout: HomeLayout,
     val mixes: List<MixEntry>,
-    val upstreamRows: List<HomeShelf>,
-    val shortcuts: List<YTItem>,
-    val shortcutSongs: List<SongItem>,
+    val gridSongs: List<SongItem>,
     val artUrls: List<String?>,
-    /** Recently played, as its own row under the grid (null when upstream has none or it is hidden). */
+    /** Turtle's recents not already in the grid, as their own row (null when too few). Titled by Home. */
     val jumpBackIn: HomeShelf?,
 ) {
     companion object {
         fun of(
             shelves: List<HomeShelf>,
             s: HomeUiState,
+            jumpBackIn: List<SongItem>?,
+            pick: HomeRowsPick?,
+            mode: HomeYouTubeRows?,
             hidden: HiddenSet,
         ): HomeLists {
-            // What the listener marked "Not interested" leaves Home at once, before the next refresh.
-            fun HomeShelf.visible() = copy(items = items.filterNot(hidden::hides))
-            val ours =
-                shelves
-                    .filter { it.key.startsWith("turtle:") && !hidden.hidesShelf(it.key) }
-                    .distinctBy { it.key }
-                    .map { it.visible() }
-            val mixes = ours.mapIndexed { i, shelf ->
-                val songs = shelf.items.filterIsInstance<SongItem>()
-                val names = songs.flatMap { song -> song.artists.map { it.name } }.distinct().take(3).joinToString(", ")
-                MixEntry(shelf, songs, names, MIX_TINTS[i % MIX_TINTS.size])
-            }
-            val speedDial = shelves.firstOrNull { it.style == HomeShelfStyle.SPEED_DIAL }?.items.orEmpty()
-            val recents = shelves.firstOrNull { it.key == KEEP_LISTENING_KEY && it.items.isNotEmpty() }
-            val jumpBackIn = recents?.visible()?.takeIf { it.items.isNotEmpty() }
-            val upstreamRows = shelves
-                .filter { !it.key.startsWith("turtle:") && it.style != HomeShelfStyle.SPEED_DIAL && it.items.isNotEmpty() && it !== recents }
-                .distinctBy { it.key }
-                .map { it.visible() }
-                .filter { it.items.isNotEmpty() }
-            // Recents get their own row; without one (too few, or hidden in Home settings) they stay in the grid.
-            val recentIds = jumpBackIn?.items.orEmpty().mapTo(HashSet()) { it.id }
-            val pool = if (jumpBackIn != null) speedDial + s.quickPicks else speedDial + s.keepListening + s.quickPicks
-            val shortcuts =
-                pool
-                    .filterNot(hidden::hides)
-                    .distinctBy { it.id }
-                    .sortedBy { it.id in recentIds }
-                    .take(SHORTCUT_TILES)
-            val artUrls = (ours.flatMap { it.items } + s.quickPicks).map { it.displayThumbnailUrl }.distinct().take(9)
-            return HomeLists(mixes, upstreamRows, shortcuts, shortcuts.filterIsInstance<SongItem>(), artUrls, jumpBackIn)
+            // HomeLayout applies what the listener marked "Not interested" before anything takes a tile.
+            val layout = HomeLayout.of(shelves, s, jumpBackIn, pick, mode, hidden)
+            val mixes =
+                layout.mixes.mapIndexed { i, shelf ->
+                    val songs = shelf.items.filterIsInstance<SongItem>()
+                    val names =
+                        songs
+                            .flatMap { song -> song.artists.map { it.name } }
+                            .distinct()
+                            .take(3)
+                            .joinToString(", ")
+                    MixEntry(shelf, songs, names, MIX_TINTS[i % MIX_TINTS.size])
+                }
+            val artUrls =
+                ((layout.mixes + layout.moreLike).flatMap { it.items } + s.quickPicks)
+                    .map { it.displayThumbnailUrl }
+                    .distinct()
+                    .take(9)
+            val recents =
+                layout.jumpBackIn.takeIf { it.isNotEmpty() }?.let {
+                    HomeShelf(key = JUMP_BACK_IN_KEY, title = "", items = it, style = HomeShelfStyle.CAROUSEL)
+                }
+            return HomeLists(layout, mixes, layout.grid.filterIsInstance<SongItem>(), artUrls, recents)
         }
     }
 }
@@ -210,9 +211,10 @@ private class HomeLists(
 private object LikedSongsTile
 
 /**
- * Shell's Home, in Spotify's familiar order: filter chips, a 2×4 grid of shortcuts (Infinity Mix
- * first), the Infinity card, our mixes, then a few of upstream's rows. Upstream's callbacks are kept,
- * so navigation, menus and the like behave exactly as before.
+ * Shell's Home, the listener's own music first: filter chips, a 2×4 grid of shortcuts (Infinity Mix
+ * first), Made for you, the Infinity card, Jump back in, More like X, then at most a few of YouTube's
+ * rows that match their taste ("YouTube Music suggestions on Home" chooses how many). Upstream's
+ * callbacks are kept, so navigation, menus and the like behave exactly as before.
  */
 @Composable
 fun ShellHome(slot: HomeSlot) = ShellTheme {
@@ -251,16 +253,20 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         ShellInfinity.sheetOpen = true
     }
 
-    // Songs in the shortcut grid record that they were played from it.
-    fun openShortcut(item: YTItem) {
+    // Songs in the shortcut grid record that they were played from it, and where the tile came from.
+    fun openShortcut(
+        item: YTItem,
+        origin: String,
+    ) {
         if (item !is SongItem) return slot.onItemClick(item)
-        ShellHomeFeedback.play(PlayPlace.HOME_GRID, null, listOf(item)) { slot.onItemClick(item) }
+        ShellHomeFeedback.play(PlayPlace.HOME_GRID, origin, listOf(item)) { slot.onItemClick(item) }
     }
 
     fun playShortcuts(
         song: SongItem,
         songs: List<SongItem>,
-    ) = ShellHomeFeedback.play(PlayPlace.HOME_GRID, null, songs) { playback.play(song, songs) }
+        origin: String,
+    ) = ShellHomeFeedback.play(PlayPlace.HOME_GRID, origin, songs) { playback.play(song, songs) }
     InfinitySheetHost()
     if (ShellAppearance.open) ShellThemeSheet()
 
@@ -279,8 +285,14 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
     // A hidden Podcasts chip (upstream's "hide podcasts" setting) falls back to All.
     val current = filter.takeUnless { it == HomeFilter.PODCASTS.ordinal && Settings.shared.hidePodcasts } ?: HomeFilter.ALL.ordinal
     LaunchedEffect(playback) { ShellSpoken.track(playback) }
-    // All and Music both show every upstream row, so both page in more as you near the end.
-    LoadMoreNearEnd(slot, enabled = current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal)
+    val mode = ShellHomeRows.mode
+    // All and Music show YouTube's rows, so both page in more as you near the end: each page brings
+    // more rows to score. Random chip feeds load only under the All setting; Off pages nothing.
+    LoadMoreNearEnd(
+        slot,
+        enabled = (current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal) && mode != HomeYouTubeRows.OFF,
+        allowChipFeeds = mode == HomeYouTubeRows.ALL,
+    )
     // Android's upstream scrolls Home to the top when its tab is tapped again; desktop's doesn't.
     if (desktop) OnTabReselected("home") { slot.listState.animateScrollToItem(0) }
     val likedTitle = stringResource(Res.string.shell_liked_songs)
@@ -301,12 +313,33 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         val cache = slot.shelfCache ?: localCache
         val ui = slot.uiState
         val shelves = cache.build(ui, slot.text, maxWidth)
+        // Bridge and setting state, read here so a change recomposes Home.
         val hidden = TurtleBridge.hiddenSet
-        val lists = remember(shelves, ui, hidden) { HomeLists.of(shelves, ui, hidden) }
-        val noContent = lists.shortcuts.isEmpty() && lists.upstreamRows.isEmpty() && lists.jumpBackIn == null
+        val recents = TurtleBridge.homeJumpBackIn
+        val pick = TurtleBridge.homeRowsPick
+        val lists = remember(shelves, ui, recents, pick, mode, hidden) { HomeLists.of(shelves, ui, recents, pick, mode, hidden) }
+        val layout = lists.layout
+        // The bridge scores YouTube's rows off the UI thread whenever upstream's rows change.
+        val candidates = remember(shelves, ui, mode) { HomeLayout.candidates(shelves, ui, mode ?: HomeYouTubeRows.MATCHED) }
+        val gridCandidates = remember(shelves, ui) { HomeLayout.gridCandidates(shelves, ui) }
+        // From upstream's state: the grid is mostly Turtle's recents now, so it can't tell whether YouTube loaded.
+        val noContent = !ui.hasHomeFeedContent()
         val failed = noContent && !ui.error.isNullOrBlank()
         val waiting = noContent && !failed &&
             (ui.isLoading || ui.isContentLoading || ui.isAllContentPending || ui.isRestoringCache || (ui.data == null && ui.sections.isEmpty()))
+        // Not while YouTube is still loading: a pick for that empty input would mark a short grid ready,
+        // and its suggestions would then pop in after first paint.
+        LaunchedEffect(candidates, gridCandidates, mode, waiting) {
+            if (mode == HomeYouTubeRows.MATCHED && !waiting) TurtleBridge.scoreHomeRows(candidates, gridCandidates)
+        }
+        // Turtle's mixes sit between the grid and everything below it, so the layout waits for them
+        // (capped) instead of letting them push the Infinity card and rows down after first paint.
+        var shelvesWaitOver by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            delay(SHELVES_WAIT_MS)
+            shelvesWaitOver = true
+        }
+        val shelvesReady = TurtleBridge.homeShelvesReady || shelvesWaitOver
         val wide = maxWidth > 840.dp
         val gridColumns = if (wide) 4 else 2
         val mixGrid = desktop && maxWidth - 16.dp >= 900.dp
@@ -349,14 +382,13 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 item(key = "offline") { OfflineCard(Modifier.riseIn(rise, "offline", 1)) }
             }
 
-            if (waiting) {
+            if (waiting || !layout.gridReady || !shelvesReady) {
                 item(key = "shortcuts_loading") { PlaceholderShortcuts(gridColumns) }
-                item(key = "infinity_loading") { PlaceholderInfinity(wide) }
             } else {
                 item(key = "shortcuts") {
                     val now = calm.value
-                    // Infinity first, then Liked Songs (as in Spotify's grid), then upstream's shortcuts.
-                    val tiles = remember(lists) { listOf<Any?>(null, LikedSongsTile) + lists.shortcuts }
+                    // Infinity first, then Liked Songs (as in Spotify's grid), then pins, recents and suggestions.
+                    val tiles = remember(lists) { listOf<Any?>(null, LikedSongsTile) + layout.grid }
                     Column(Modifier.riseIn(rise, "shortcuts", 1).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         tiles.chunked(gridColumns).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -383,13 +415,14 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                                             onHover = { if (it) { glowInfinity = true; glowArt = null } },
                                         )
                                     } else {
+                                        val origin = layout.gridOrigin(item)
                                         ShortcutTile(
                                             title = item.title,
                                             art = { m -> ShellArt(item.displayThumbnailUrl, m, shape = RectangleShape) },
                                             playing = now.isPlaying && now.currentSong?.id == item.id,
-                                            onClick = { openShortcut(item) },
+                                            onClick = { openShortcut(item, origin) },
                                             modifier = Modifier.weight(1f),
-                                            onPlay = (item as? SongItem)?.let { s -> { playShortcuts(s, lists.shortcutSongs) } },
+                                            onPlay = (item as? SongItem)?.let { s -> { playShortcuts(s, lists.gridSongs, origin) } },
                                             onHover = { if (it) { glowInfinity = false; glowArt = item.displayThumbnailUrl } },
                                             onLongClick = slot.onItemLongClick?.let { f -> { ShellHomeFeedback.openMenu(item, f) } },
                                         )
@@ -400,23 +433,12 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                         }
                     }
                 }
-
-                item(key = "infinity") {
-                    InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 2), onOpen = ::openInfinity)
-                }
             }
 
-            val jumpBackIn = lists.jumpBackIn
-            if (current != HomeFilter.MIXES.ordinal && jumpBackIn != null) {
-                item(key = "jump_back_in") {
-                    val title = stringResource(Res.string.shell_home_jump_back_in)
-                    ItemRow(jumpBackIn, slot, wide, Modifier.riseIn(rise, "jump_back_in", 3), PlayPlace.HOME_RECENT, title = title)
-                }
-            }
-
-            if (current != HomeFilter.MUSIC.ordinal && lists.mixes.isNotEmpty()) {
+            // Made for you sits right under the grid, so the mixes are reachable without scrolling on a phone.
+            if (lists.mixes.isNotEmpty()) {
                 item(key = "made_for_you") {
-                    Column(Modifier.riseIn(rise, "made_for_you", 3)) {
+                    Column(Modifier.riseIn(rise, "made_for_you", 2)) {
                         Spacer(Modifier.height(24.dp))
                         HomeSectionTitle(stringResource(Res.string.shell_made_for_you))
                         Spacer(Modifier.height(12.dp))
@@ -438,10 +460,35 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 }
             }
 
-            if (current != HomeFilter.MIXES.ordinal) {
-                lists.upstreamRows.forEachIndexed { i, shelf ->
+            if (waiting || !shelvesReady) {
+                item(key = "infinity_loading") { PlaceholderInfinity(wide) }
+                if (!shelvesReady) return@LazyColumn
+            } else {
+                item(key = "infinity") {
+                    InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 3), onOpen = ::openInfinity)
+                }
+            }
+
+            val music = current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal
+            val jumpBackIn = lists.jumpBackIn
+            if (music && jumpBackIn != null) {
+                item(key = "jump_back_in") {
+                    val title = stringResource(Res.string.shell_home_jump_back_in)
+                    ItemRow(jumpBackIn, slot, wide, Modifier.riseIn(rise, "jump_back_in", 4), PlayPlace.HOME_RECENT, title = title)
+                }
+            }
+
+            layout.moreLike.forEachIndexed { i, shelf ->
+                val key = "more_like:${shelf.key}"
+                item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, 5 + i), PlayPlace.HOME_TURTLE) }
+            }
+
+            if (music) {
+                // W7: "Top in your country" row goes here
+                layout.youtubeRows.forEachIndexed { i, shelf ->
                     val key = "row:${shelf.key}"
-                    item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, 4 + i), PlayPlace.HOME_YOUTUBE) }
+                    val rank = 5 + layout.moreLike.size + i
+                    item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, rank), PlayPlace.HOME_YOUTUBE) }
                 }
                 val retry = slot.onLoadMore
                 if (ui.loadMoreError && retry != null) {
@@ -461,14 +508,18 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
     }
 }
 
-/** Upstream's paging, for the filter that shows all of its rows: load the next page near the end. */
+/**
+ * Upstream's paging, for the filters that show YouTube's rows: load the next page near the end.
+ * Without [allowChipFeeds], paging stops once YouTube's own Home continuation runs out: upstream then
+ * falls back to random chip feeds, which only the All setting brings to Home.
+ */
 @Composable
-private fun LoadMoreNearEnd(slot: HomeSlot, enabled: Boolean) {
+private fun LoadMoreNearEnd(slot: HomeSlot, enabled: Boolean, allowChipFeeds: Boolean) {
     val state by rememberUpdatedState(slot.uiState)
     val loadMore by rememberUpdatedState(slot.onLoadMore)
     if (!enabled || slot.onLoadMore == null) return
     val list = slot.listState
-    LaunchedEffect(list, slot.uiState.selectedChip, slot.uiState.isRefreshing) {
+    LaunchedEffect(list, slot.uiState.selectedChip, slot.uiState.isRefreshing, allowChipFeeds) {
         val trigger = HomePaginationTrigger()
         var revision = 0L
         var previous = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset
@@ -480,7 +531,8 @@ private fun LoadMoreNearEnd(slot: HomeSlot, enabled: Boolean) {
             // Only a forward scroll asks for another page after the first, as upstream does.
             if (position.first > previous.first || (position.first == previous.first && position.second > previous.second)) revision++
             previous = position
-            if (trigger.shouldLoad(current, nearEnd, revision)) loadMore?.invoke()
+            // The check comes first: shouldLoad records the page it allows.
+            if ((allowChipFeeds || current.continuation != null) && trigger.shouldLoad(current, nearEnd, revision)) loadMore?.invoke()
         }
     }
 }

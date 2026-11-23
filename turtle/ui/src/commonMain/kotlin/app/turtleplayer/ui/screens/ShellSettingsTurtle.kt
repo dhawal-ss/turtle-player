@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.turtleplayer.bridge.HomeYouTubeRows
 import app.turtleplayer.bridge.InfinityGenres
 import app.turtleplayer.bridge.TurtleBridge
 import app.turtleplayer.ui.components.Glyph
@@ -75,6 +76,11 @@ import app.turtleplayer.ui.generated.resources.shell_set_group_privacy
 import app.turtleplayer.ui.generated.resources.shell_set_group_turtle
 import app.turtleplayer.ui.generated.resources.shell_set_hidden
 import app.turtleplayer.ui.generated.resources.shell_set_hidden_sub
+import app.turtleplayer.ui.generated.resources.shell_set_home_youtube
+import app.turtleplayer.ui.generated.resources.shell_set_home_youtube_all
+import app.turtleplayer.ui.generated.resources.shell_set_home_youtube_body
+import app.turtleplayer.ui.generated.resources.shell_set_home_youtube_matched
+import app.turtleplayer.ui.generated.resources.shell_set_home_youtube_off
 import app.turtleplayer.ui.generated.resources.shell_set_infinity_sub
 import app.turtleplayer.ui.generated.resources.shell_set_integrations_sub
 import app.turtleplayer.ui.generated.resources.shell_set_metrolist_source
@@ -330,6 +336,17 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
     val newBody = stringResource(Res.string.shell_set_recs_new_body)
     val tuningTitle = stringResource(Res.string.shell_set_recs_tuning_title)
     val tuningBody = stringResource(Res.string.shell_set_recs_tuning_body)
+    val homeYouTubeLabels =
+        HomeYouTubeRows.entries.associateWith { m ->
+            stringResource(
+                when (m) {
+                    HomeYouTubeRows.MATCHED -> Res.string.shell_set_home_youtube_matched
+                    HomeYouTubeRows.ALL -> Res.string.shell_set_home_youtube_all
+                    HomeYouTubeRows.OFF -> Res.string.shell_set_home_youtube_off
+                },
+            )
+        }
+    val homeYouTube = ShellHomeRows.mode ?: HomeYouTubeRows.MATCHED
     val recommendations =
         turtlePage(
             SettingsPageId.PLAYER_ARTWORK,
@@ -357,6 +374,22 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                     stringResource(Res.string.shell_set_recs_dial),
                     listOf(customItem("discoveryDial", stringResource(Res.string.shell_set_recs_dial)) { SteerItem() }),
                     description = stringResource(Res.string.shell_set_recs_dial_body),
+                ),
+                group(
+                    "homeYouTube",
+                    "",
+                    listOf(
+                        SettingsItemRegistration(
+                            id = "homeYouTubeRows",
+                            title = stringResource(Res.string.shell_set_home_youtube),
+                            description = stringResource(Res.string.shell_set_home_youtube_body),
+                            control = SettingsControl.CHOICE,
+                            valueLabel = homeYouTubeLabels.getValue(homeYouTube),
+                            choices = HomeYouTubeRows.entries.map { SettingsChoice(it.prefValue, homeYouTubeLabels.getValue(it)) },
+                            selectedChoiceId = homeYouTube.prefValue,
+                            onChoiceSelected = { id -> ShellHomeRows.choose(HomeYouTubeRows.fromPref(id)) },
+                        ),
+                    ),
                 ),
                 group(
                     "tune",

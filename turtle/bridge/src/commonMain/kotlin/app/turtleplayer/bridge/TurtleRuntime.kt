@@ -60,6 +60,7 @@ class TurtleRuntime(
     private val history: MetrolistHistoryImport,
     private val playlistAdds: PlaylistAddWatcher,
     private val blocks: UpstreamBlocks,
+    private val homeRows: TurtleHomeRows,
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private val started = AtomicBoolean(false)
@@ -100,7 +101,17 @@ class TurtleRuntime(
             infinity.restore()
             // Before the first profile build, so a listener coming from Metrolist is not cold.
             runCatching { history.runOnce() }.onFailure { if (it is CancellationException) throw it else TurtleLog.error("history import failed", it) }
+            // A listener coming from Metrolist sees the imported plays without waiting for their next play.
+            homeRows.refreshJumpBackIn()
             runCatching { taste.refresh() }
+            // Home may have been scored on the profile from before the import: score it again.
+            homeRows.invalidate()
+        }
+        // After the saved controls are back, so the first Jump back in already leaves out muted artists.
+        // Its own launch: Home's grid waits for Jump back in, so a failed restore must not stop it.
+        scope.launch {
+            tasteRestored.await()
+            homeRows.start(scope)
         }
         taste.observe(scope)
         coListening.start(scope, taste)
@@ -218,6 +229,7 @@ class TurtleRuntime(
         publishHidden()
         infinity.feedback(song, liked = false)
         if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
+        refreshHome()
     }
 
     /**
@@ -252,6 +264,7 @@ class TurtleRuntime(
         saveTasteState()
         rememberHidden(entry)
         publishHidden()
+        refreshHome()
     }
 
     /** "Show again" on the Hidden page: takes the entry back, play-level marks included. */
@@ -283,6 +296,12 @@ class TurtleRuntime(
         saveTasteState()
         saveHiddenRecords()
         publishHidden()
+        refreshHome()
+    }
+
+    /** Home follows the listener's new controls in the background: callers (the player's skip) must not wait on it. */
+    private fun refreshHome() {
+        turtleScope.scope.launch { homeRows.onControlsChanged() }
     }
 
     private fun songEntry(song: SongItem) =

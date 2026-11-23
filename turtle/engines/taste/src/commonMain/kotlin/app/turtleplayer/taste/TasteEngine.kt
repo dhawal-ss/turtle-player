@@ -53,6 +53,8 @@ data class TasteConfig(
     /** Upstream radio (network) calls per shelf refresh, and tracks asked per call. */
     val shelfUpstreamSeeds: Int = 5,
     val shelfUpstreamPerSeed: Int = 50,
+    /** Which of upstream's Home rows are kept, and how they are scored ([TasteEngine.selectHomeRows]). */
+    val homeRows: HomeRowConfig = HomeRowConfig(),
 )
 
 /**
@@ -581,6 +583,52 @@ class TasteEngine(
         ensureLoaded()
         val request = GenerationRequest(profile, controls, clock.nowMs(), sessionVector = profile.longTermVector)
         rankLocked(autoplayCollector, request).filter { includeHeard || !profile.hasHeard(it.candidate.track) }.take(limit)
+    }
+
+    // ---- Home rows -----------------------------------------------------------------------------
+
+    /** How well a Home row's [items] match the listener's taste. */
+    suspend fun scoreRow(items: List<RowItem>): RowScore = mutex.withLock {
+        ensureLoaded()
+        homeRowScorerLocked().score(items)
+    }
+
+    /**
+     * Which of upstream's Home rows to show, in order: at most [HomeRowConfig.maxRows] that match the
+     * listener's taste, the [sticky] rows already on screen keeping their slots while they still pass.
+     * Below [TasteConfig.coldStartPlays] finished plays, the first rows in input order, unscored.
+     */
+    suspend fun selectHomeRows(
+        candidates: List<RowCandidate>,
+        sticky: List<String> = emptyList(),
+    ): RowSelection = mutex.withLock {
+        ensureLoaded()
+        homeRowScorerLocked().select(candidates, sticky, coldStart = profile.finishedPlays < config.coldStartPlays)
+    }
+
+    /** For each item, whether it matches the listener's taste (known, liked, not disliked); all true at cold start. */
+    suspend fun matchesTaste(items: List<RowItem>): List<Boolean> = mutex.withLock {
+        ensureLoaded()
+        if (profile.finishedPlays < config.coldStartPlays) return@withLock items.map { true }
+        val scorer = homeRowScorerLocked()
+        items.map(scorer::matches)
+    }
+
+    private fun homeRowScorerLocked() = RowScorer(profile, controls, config.homeRows)
+
+    /**
+     * The listener's most recent distinct finished songs, newest first; reads the event log directly,
+     * without the engine lock. Covers the last [days] days of plays recorded here or imported from
+     * Metrolist (both on-device), minus ruled-out songs and muted artists.
+     */
+    suspend fun jumpBackIn(
+        limit: Int,
+        days: Int = 30,
+    ): List<TrackMeta> {
+        // Deliberately outside the mutex: a profile refresh holds it for seconds. [controls] is safe to
+        // read from any thread, and [songs] is not, so a local identity cache is used.
+        val recent = events.since(clock.nowMs() - days * DAY_MS)
+        return jumpBackInOf(recent.sortedBy { it.startedAtMs }, controls, limit, SongKeys())
     }
 
     // ---- Persistence ---------------------------------------------------------------------------
