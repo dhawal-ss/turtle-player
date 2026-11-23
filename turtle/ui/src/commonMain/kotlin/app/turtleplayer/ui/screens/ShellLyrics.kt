@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
@@ -405,7 +406,8 @@ private fun SyncedLine(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         when {
-            line.blank -> Text("•  •  •", style = metrics.line, color = c.ink)
+            // An instrumental gap: the dots are decoration, not words to read out.
+            line.blank -> Text("•  •  •", style = metrics.line, color = c.ink, modifier = Modifier.clearAndSetSemantics {})
             line.isBackground -> Text(line.text, style = metrics.background, color = c.ink2)
             line.sweep != null && state == LineState.ACTIVE ->
                 SweepText(line.text, line.sweep, metrics.line, position, offsetMs)

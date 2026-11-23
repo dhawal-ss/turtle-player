@@ -56,6 +56,7 @@ import app.turtleplayer.ui.components.cardHover
 import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_more
 import app.turtleplayer.ui.generated.resources.shell_sp_book_failed
 import app.turtleplayer.ui.generated.resources.shell_sp_book_playlist
 import app.turtleplayer.ui.generated.resources.shell_sp_books_empty
@@ -217,7 +218,12 @@ private fun BookCard(book: SpokenBook, progress: BookProgress?, slot: HomeSlot, 
         else -> null
     }
     Column(
-        modifier.hoverable(hover).shellPressable(play, label = book.title, onLongClick = longClick).cardHover(hovered),
+        modifier.hoverable(hover)
+            .shellPressable(
+                play, label = book.title, onLongClick = longClick,
+                onLongClickLabel = if (video != null) stringResource(Res.string.shell_more) else null,
+            )
+            .cardHover(hovered),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f)) {

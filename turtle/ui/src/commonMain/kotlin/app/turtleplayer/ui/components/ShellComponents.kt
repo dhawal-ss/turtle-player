@@ -81,6 +81,7 @@ import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_more
 import app.turtleplayer.ui.generated.resources.shell_play
 import org.jetbrains.compose.resources.stringResource
 import coil3.compose.AsyncImage
@@ -88,8 +89,9 @@ import coil3.compose.AsyncImage
 /**
  * Press feedback shared by every tappable Shell element: scale to 0.96 over the tap duration, a hand
  * cursor on desktop, and a lime focus ring in [focusShape] for keyboard users (H-Search's focus
- * language). [onLongClick] opens the item menu on phones, so cards never need `combinedClickable`.
- * Tabs and chips pass [selected] so screen readers announce which one is on.
+ * language). [onLongClick] opens the item menu on phones, so cards never need `combinedClickable`;
+ * screen readers announce it as [onLongClickLabel], which callers whose long press does something
+ * else override. Tabs and chips pass [selected] so screen readers announce which one is on.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -100,6 +102,8 @@ fun Modifier.shellPressable(
     onLongClick: (() -> Unit)? = null,
     focusShape: Shape = RoundedCornerShape(8.dp),
     selected: Boolean? = null,
+    onClickLabel: String? = null,
+    onLongClickLabel: String? = if (onLongClick != null) stringResource(Res.string.shell_more) else null,
 ): Modifier {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -109,7 +113,10 @@ fun Modifier.shellPressable(
         .graphicsLayer { scaleX = scale; scaleY = scale }
         .then(if (focused) Modifier.border(2.dp, Shell.colors.accent, focusShape) else Modifier)
         .pointerHoverIcon(PointerIcon.Hand)
-        .combinedClickable(interactionSource = interaction, indication = null, role = role, onLongClick = onLongClick, onClick = onClick)
+        .combinedClickable(
+            interactionSource = interaction, indication = null, role = role, onClickLabel = onClickLabel,
+            onLongClickLabel = onLongClickLabel, onLongClick = onLongClick, onClick = onClick,
+        )
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
         .then(if (selected != null) Modifier.semantics { this.selected = selected } else Modifier)
 }

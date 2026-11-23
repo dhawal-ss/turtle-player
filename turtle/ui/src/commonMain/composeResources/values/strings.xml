@@ -44,6 +44,7 @@
     <string name="shell_playing_from">PLAYING FROM</string>
     <string name="shell_now_playing_label">NOW PLAYING</string>
     <string name="shell_close_player">Minimize player</string>
+    <string name="shell_open_player">Open player</string>
     <string name="shell_more">More options</string>
     <string name="shell_like">Save to Liked Songs</string>
     <string name="shell_unlike">Remove from Liked Songs</string>

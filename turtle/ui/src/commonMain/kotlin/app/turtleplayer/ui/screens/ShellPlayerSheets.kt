@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import app.turtleplayer.ui.components.ShellSnackbar
@@ -102,6 +103,8 @@ import app.turtleplayer.ui.generated.resources.shell_np_now_playing
 import app.turtleplayer.ui.generated.resources.shell_np_queue_empty
 import app.turtleplayer.ui.generated.resources.shell_np_remove_from_queue
 import app.turtleplayer.ui.generated.resources.shell_np_share
+import app.turtleplayer.ui.generated.resources.shell_pause
+import app.turtleplayer.ui.generated.resources.shell_play
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_cancel
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_end_of_song
 import app.turtleplayer.ui.generated.resources.shell_np_sleep_on
@@ -303,7 +306,12 @@ private fun QueueRow(
     SwipeToRemove(enabled = onRemove != null && !ShellPlatform.desktop, onRemove = { onRemove?.invoke() == true }, modifier = modifier) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(source)
-                .shellPressable(onClick, label = song.title).semantics { if (actions.isNotEmpty()) customActions = actions }
+                // The playing row pauses and resumes, so it says so rather than "activate".
+                .shellPressable(
+                    onClick, label = song.title,
+                    onClickLabel = if (playing) stringResource(if (isPlaying) Res.string.shell_pause else Res.string.shell_play) else null,
+                )
+                .semantics { if (actions.isNotEmpty()) customActions = actions }
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -454,7 +462,8 @@ internal fun ShellDevices(state: PlaybackUiState, controller: PlaybackController
     }
     val cast = state.castState
     val connected = cast.status == CastConnectionStatus.CONNECTED
-    ActionRow(Glyphs.Devices, stringResource(Res.string.shell_np_this_device), accent = !connected && cast.status != CastConnectionStatus.CONNECTING) {
+    val local = !connected && cast.status != CastConnectionStatus.CONNECTING
+    ActionRow(Glyphs.Devices, stringResource(Res.string.shell_np_this_device), accent = local, selected = local) {
         if (cast.device != null) controller.disconnectCast()
     }
     state.castDevices.forEach { device ->
@@ -495,7 +504,7 @@ private fun SheetHeader(song: SongItem) {
 }
 
 @Composable
-private fun ActionRow(glyph: ImageVector?, label: String, accent: Boolean = false, enabled: Boolean = true, trailing: String? = null, onClick: () -> Unit) {
+private fun ActionRow(glyph: ImageVector?, label: String, accent: Boolean = false, enabled: Boolean = true, trailing: String? = null, selected: Boolean? = null, onClick: () -> Unit) {
     val c = Shell.colors
     val (source, hovered) = rememberHover()
     val bg by animateColorAsState(if (hovered) c.ink.copy(alpha = 0.06f) else Color.Transparent, ShellMotion.emphasized())
@@ -506,7 +515,10 @@ private fun ActionRow(glyph: ImageVector?, label: String, accent: Boolean = fals
     }
     Row(
         Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp)).background(bg).hoverable(source)
-            .then(if (enabled) Modifier.shellPressable(onClick, label = label) else Modifier).padding(horizontal = 12.dp),
+            .then(if (enabled) Modifier.shellPressable(onClick, label = label, selected = selected) else Modifier)
+            // The label replaces the row's text for screen readers, so the trailing status is said as its state.
+            .then(if (enabled && trailing != null) Modifier.semantics { stateDescription = trailing } else Modifier)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (glyph != null) {

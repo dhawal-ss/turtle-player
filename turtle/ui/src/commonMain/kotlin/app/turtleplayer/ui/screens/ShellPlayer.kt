@@ -20,6 +20,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,6 +46,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,8 +68,10 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
@@ -117,6 +121,7 @@ import app.turtleplayer.ui.generated.resources.shell_new
 import app.turtleplayer.ui.generated.resources.shell_next
 import app.turtleplayer.ui.generated.resources.shell_now_playing_label
 import app.turtleplayer.ui.generated.resources.shell_now_playing_view
+import app.turtleplayer.ui.generated.resources.shell_open_player
 import app.turtleplayer.ui.generated.resources.shell_pause
 import app.turtleplayer.ui.generated.resources.shell_play
 import app.turtleplayer.ui.generated.resources.shell_playing_from
@@ -140,6 +145,7 @@ import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.ShellTheme
+import com.metrolist.shared.generated.resources.playback_position_time
 import com.metrolist.shared.model.RepeatMode
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.displayThumbnailUrl
@@ -159,6 +165,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.roundToInt
+import com.metrolist.shared.generated.resources.Res as SharedRes
 
 /** Ground tinted with a share of the artwork's color: every song feels different, chrome stays calm. */
 @Composable
@@ -190,7 +197,7 @@ private fun repeatState(mode: RepeatMode): String = stringResource(
 )
 
 @Composable
-private fun onOffState(on: Boolean): String = stringResource(if (on) Res.string.shell_state_on else Res.string.shell_state_off)
+internal fun onOffState(on: Boolean): String = stringResource(if (on) Res.string.shell_state_on else Res.string.shell_state_off)
 
 /** The song's length, falling back to its metadata while the player has not reported one yet. */
 private fun durationOf(reportedMs: Long, song: SongItem?): Long =
@@ -212,7 +219,8 @@ internal fun GlyphButton(glyph: ImageVector, label: String, onClick: () -> Unit,
 /**
  * Thin bar with a knob: follows your finger with no delay, seeks on release or tap ([live] seeks
  * while dragging, for volume). The bar is drawn, not laid out, so the position tick only redraws it.
- * On desktop the knob appears and the fill turns lime on hover (H-Motion 08).
+ * On desktop the knob appears and the fill turns lime on hover (H-Motion 08). With [spokenTime],
+ * screen readers hear the elapsed and total time instead of a percentage.
  */
 @Composable
 private fun ShellSeekBar(
@@ -224,6 +232,7 @@ private fun ShellSeekBar(
     track: Color,
     fill: Color,
     live: Boolean = false,
+    spokenTime: Boolean = false,
 ) {
     val c = Shell.colors
     val seek by rememberUpdatedState(onSeek)
@@ -243,11 +252,6 @@ private fun ShellSeekBar(
     val fraction = { dragging ?: if (durationMs > 0) (position().toFloat() / durationMs).coerceIn(0f, 1f) else 0f }
     Box(
         modifier.height(20.dp).hoverable(source)
-            .semantics {
-                contentDescription = label
-                progressBarRangeInfo = ProgressBarRangeInfo(fraction(), 0f..1f)
-                setProgress { v -> seek((v.coerceIn(0f, 1f) * durationMs).toLong()); true }
-            }
             .pointerInput(durationMs) { detectTapGestures { o -> seek(((o.x / size.width).coerceIn(0f, 1f) * durationMs).toLong()) } }
             .pointerInput(durationMs, live) {
                 detectHorizontalDragGestures(
@@ -273,7 +277,32 @@ private fun ShellSeekBar(
             if (x > start) drawLine(fillColor, Offset(start, y), Offset(x, y), strokeWidth = h, cap = StrokeCap.Round)
             if (knob > 0f) drawCircle(knobColor, radius = 6.dp.toPx() * knob, center = Offset(x, y))
         }
+        SeekSemantics(label, fraction, { v -> seek((v * durationMs).toLong()) }, if (spokenTime) position else null, durationMs)
     }
+}
+
+/**
+ * The seek bar's screen-reader node. It is its own composable so that the spoken time recomposes
+ * only this node, and only when the second changes, never the bar.
+ */
+@Composable
+private fun BoxScope.SeekSemantics(
+    label: String,
+    fraction: () -> Float,
+    onSeek: (Float) -> Unit,
+    position: (() -> Long)?,
+    durationMs: Long,
+) {
+    val elapsed by remember(position) { derivedStateOf { position?.let { formatTime(it()) } } }
+    val time = elapsed?.let { stringResource(SharedRes.string.playback_position_time, it, formatTime(durationMs)) }
+    Box(
+        Modifier.matchParentSize().semantics {
+            contentDescription = label
+            if (time != null) stateDescription = time
+            progressBarRangeInfo = ProgressBarRangeInfo(fraction(), 0f..1f)
+            setProgress { v -> onSeek(v.coerceIn(0f, 1f)); true }
+        },
+    )
 }
 
 /** A time label that reads the live position itself, so only this text recomposes each tick. */
@@ -312,6 +341,9 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
     val drag = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val track = c.ink.copy(alpha = 0.25f)
+    // Screen readers can't swipe: skipping is offered as actions on the player instead.
+    val nextLabel = stringResource(Res.string.shell_next)
+    val previousLabel = stringResource(Res.string.shell_previous)
     Box(
         slot.modifier.fillMaxWidth().padding(horizontal = 8.dp).height(56.dp).clip(RoundedCornerShape(8.dp)).background(tint)
             .pointerInput(song.id) {
@@ -324,7 +356,13 @@ fun ShellMiniPlayer(slot: MiniPlayerSlot) = ShellTheme {
                     },
                 ) { _, amount -> scope.launch { drag.snapTo(drag.value + amount) } }
             }
-            .shellPressable(slot.onExpand)
+            .shellPressable(slot.onExpand, onClickLabel = stringResource(Res.string.shell_open_player))
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction(nextLabel) { controller.skipToNext(); true },
+                    CustomAccessibilityAction(previousLabel) { controller.skipToPrevious(); true },
+                )
+            }
             // The progress line is drawn from the live position: no recomposition per tick.
             .drawBehind {
                 val inset = 8.dp.toPx()
@@ -514,7 +552,7 @@ fun ShellNowPlaying(slot: PlayerSlot) = ShellTheme {
                 }
             }
             Spacer(Modifier.height(14.dp))
-            ShellSeekBar({ live.ms }, duration, { controller.seekTo(it); live.ms = it }, stringResource(Res.string.shell_seek), Modifier.fillMaxWidth(), track = c.ink.copy(alpha = 0.25f), fill = c.ink)
+            ShellSeekBar({ live.ms }, duration, { controller.seekTo(it); live.ms = it }, stringResource(Res.string.shell_seek), Modifier.fillMaxWidth(), track = c.ink.copy(alpha = 0.25f), fill = c.ink, spokenTime = true)
             Row(Modifier.fillMaxWidth()) {
                 TimeText({ live.ms }, c.ink.copy(alpha = 0.75f))
                 Spacer(Modifier.weight(1f))
@@ -593,7 +631,7 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
                                 // Heard within a song: the mix's queued songs are rebuilt with the new blend.
                                 if (i != stop && ShellInfinity.resteer(controller)) resteered++
                             }
-                        }, label = stringResource(labels[i]), focusShape = segment),
+                        }, label = stringResource(labels[i]), focusShape = segment, selected = i == stop),
                 )
             }
         }
@@ -705,12 +743,12 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
                 // The Infinity Mix, one click from anywhere (H-Desktop's transport row).
                 GlyphButton(Glyphs.Infinity, infinityTitle, {
                     if (infinityOn) controller.togglePlayPause() else ShellActions.playInfinity(controller, infinityTitle)
-                }, if (infinityOn) c.accent else c.ink2, size = 36.dp, iconSize = 20.dp, dot = infinityOn)
+                }, if (infinityOn) c.accent else c.ink2, size = 36.dp, iconSize = 20.dp, dot = infinityOn, state = onOffState(infinityOn))
             }
             Row(Modifier.widthIn(max = 620.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 TimeText({ live.ms }, c.ink2)
                 Spacer(Modifier.width(8.dp))
-                ShellSeekBar({ live.ms }, duration, { controller.seekTo(it); live.ms = it }, stringResource(Res.string.shell_seek), Modifier.weight(1f), track = c.hairline, fill = c.ink)
+                ShellSeekBar({ live.ms }, duration, { controller.seekTo(it); live.ms = it }, stringResource(Res.string.shell_seek), Modifier.weight(1f), track = c.hairline, fill = c.ink, spokenTime = true)
                 Spacer(Modifier.width(8.dp))
                 Text(formatTime(duration), style = Shell.type.index, color = c.ink2)
             }
@@ -888,5 +926,5 @@ private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
 private fun PanelButton(glyph: ImageVector, label: String, mode: DesktopPanel, showing: DesktopPanel?) {
     val c = Shell.colors
     val on = showing == mode
-    GlyphButton(glyph, label, { ShellDesktop.toggle(mode) }, if (on) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = on)
+    GlyphButton(glyph, label, { ShellDesktop.toggle(mode) }, if (on) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = on, state = onOffState(on))
 }

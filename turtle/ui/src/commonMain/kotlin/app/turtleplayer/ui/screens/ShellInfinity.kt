@@ -466,7 +466,7 @@ internal fun InfinityThumbs(
             val now = com.metrolist.shared.state.SongLikeState.toggleLike(song)
             if (now) scope.launch { pop.snapTo(0.8f); pop.animateTo(1f, ShellMotion.spring()) }
             onFeedback(now)
-        }, if (liked) c.accent else tint, size = size, iconSize = iconSize, dot = liked)
+        }, if (liked) c.accent else tint, size = size, iconSize = iconSize, dot = liked, state = onOffState(liked))
     }
 }
 
