@@ -17,6 +17,7 @@ import app.turtleplayer.taste.Hidden
 import app.turtleplayer.taste.LessLikeThis
 import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.Served
 import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
 import app.turtleplayer.taste.hidden
@@ -165,29 +166,55 @@ class TurtleRuntime(
      * taste engine. Keeps upstream's page whenever we cannot do better in time.
      */
     suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage {
-        if (page.songs.size < 2) return page
+        if (page.songs.size < 2) return page.also { tagServed(it, Served.PROVIDER) }
         return try {
             // Radio pages often load as playback starts, before the observer has seen a song.
             val seed = observer.currentSong() ?: page.songs.first()
-            val result = withTimeoutOrNull(RANK_TIMEOUT_MS) {
-                cache.putAll(page.songs)
-                coListening.observeRadio(seed.toTrackMeta(), page.songs)
-                val byId = page.songs.associateBy { it.id }
-                val ranked = taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() })
-                val ordered = ranked.mapNotNull { item ->
-                    val song = item.track.youtubeId?.let(byId::get)
-                    song?.also { observer.tag(it.id, SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, item.source, item.slot))) }
+            val ranked =
+                withTimeoutOrNull(RANK_TIMEOUT_MS) {
+                    cache.putAll(page.songs)
+                    coListening.observeRadio(seed.toTrackMeta(), page.songs)
+                    val byId = page.songs.associateBy { it.id }
+                    taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() }).mapNotNull { item ->
+                        item.track.youtubeId?.let(byId::get)?.let { song ->
+                            song to SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, item.source, item.slot, served = Served.RANKED))
+                        }
+                    }
                 }
-                page.copy(songs = ordered)
+            if (ranked == null) {
+                TurtleLog.info("radio: kept upstream order (ranking exceeded ${RANK_TIMEOUT_MS}ms)")
+                tagServed(page, Served.TIMEOUT)
+                return page
             }
-            if (result == null) TurtleLog.info("radio: kept upstream order (ranking exceeded ${RANK_TIMEOUT_MS}ms)")
-            else TurtleLog.info("radio: ranked ${result.songs.size} of ${page.songs.size} candidates")
-            result ?: page
+            // Tagged only once ranking is done, so a timeout never leaves songs marked as ranked.
+            for ((song, tag) in ranked) observer.tag(song.id, tag)
+            TurtleLog.info("radio: ranked ${ranked.size} of ${page.songs.size} candidates")
+            page.copy(songs = ranked.map { it.first })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             TurtleLog.error("radio: ranking failed, kept upstream order", e)
+            tagServed(page, Served.FAILED)
             page
+        }
+    }
+
+    /**
+     * Tags a radio page we return unranked with why ([served]); no source or slot, so per-source
+     * learning ignores it. Bounded and never throws: the observer's lock can be busy saving a play.
+     */
+    private suspend fun tagServed(
+        page: RadioQueuePage,
+        served: Served,
+    ) {
+        val detail = SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, served = served))
+        try {
+            withTimeoutOrNull(TAG_TIMEOUT_MS) { page.songs.forEach { observer.tag(it.id, detail) } }
+                ?: TurtleLog.info("radio: could not tag ${page.songs.size} songs as ${served.tag} in time")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("radio: could not tag songs as ${served.tag}", e)
         }
     }
 
@@ -463,6 +490,7 @@ class TurtleRuntime(
 
     private companion object {
         const val RANK_TIMEOUT_MS = 1_500L
+        const val TAG_TIMEOUT_MS = 200L
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
         const val PREF_DIAL = "discovery_dial"

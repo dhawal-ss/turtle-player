@@ -7,6 +7,7 @@ import app.turtleplayer.taste.CandidateSource
 import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.taste.QueueItem
+import app.turtleplayer.taste.Served
 import app.turtleplayer.taste.SlotKind
 import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
@@ -142,6 +143,12 @@ class InfinityMix(
     // Queue items of the "for you" songs picked in the current batch, for their play attribution.
     private val forYouPicked = HashMap<String, QueueItem>()
 
+    /** How each pooled genre and "more like" song was ordered, by [servedKey]; only songs still in a pool. */
+    private val servedBy = HashMap<String, Served>()
+
+    // How the genre and "more like" songs picked in the current batch were ordered, for their play attribution.
+    private val discoveryPicked = HashMap<String, Served>()
+
     /** Everything served this session, so nothing repeats. */
     private val served = LinkedHashSet<String>()
     private val passedArtists = HashSet<String>()
@@ -245,6 +252,7 @@ class InfinityMix(
         likedSeeds.clear()
         moreLike.clear()
         forYou.clear()
+        servedBy.clear()
         served.clear()
         passedArtists.clear()
         _state.value = InfinityState()
@@ -280,6 +288,7 @@ class InfinityMix(
         val familiar = familiarCandidates(taken).toCollection(ArrayDeque())
         fillBudget = FILLS_PER_BATCH
         forYouPicked.clear()
+        discoveryPicked.clear()
         var acc = if (familiarShare >= 0.5) 0.5 else 0.0
         var attempts = 0
         withTimeoutOrNull(BATCH_TIMEOUT_MS) {
@@ -301,7 +310,8 @@ class InfinityMix(
             }
         }
         served.addAll(picks.map { it.id })
-        for ((id, reason) in why) observer.tag(id, SurfaceTag.format(originOf(reason, forYouPicked[id])))
+        pruneServedBy()
+        for ((id, reason) in why) observer.tag(id, SurfaceTag.format(originOf(reason, forYouPicked[id], discoveryPicked[id])))
         val merged = LinkedHashMap(_state.value.why).apply { putAll(why) }
         while (merged.size > MAX_WHY) merged.remove(merged.keys.first())
         _state.value = _state.value.copy(why = merged)
@@ -309,15 +319,58 @@ class InfinityMix(
         return picks
     }
 
-    /** Where an Infinity pick came from; a "for you" pick carries the generator and slot of its [item]. */
+    /**
+     * Where an Infinity pick came from; a "for you" pick carries the generator and slot of its [item],
+     * a genre or "more like" pick how its pool was ordered ([how]).
+     */
     private fun originOf(
         why: InfinityWhy,
         item: QueueItem?,
-    ) = when (why) {
-        InfinityWhy.Familiar -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.LIBRARY, SlotKind.FAMILIAR, "familiar")
-        InfinityWhy.ForYou -> PlayOrigin(PlayPlace.INFINITY, item?.source, item?.slot, "foryou")
-        is InfinityWhy.Genre -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, "genre:${why.id}")
-        is InfinityWhy.MoreLike -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, "morelike")
+        how: Served?,
+    ): PlayOrigin {
+        val radio = PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, served = how)
+        return when (why) {
+            InfinityWhy.Familiar -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.LIBRARY, SlotKind.FAMILIAR, "familiar")
+            InfinityWhy.ForYou -> PlayOrigin(PlayPlace.INFINITY, item?.source, item?.slot, "foryou")
+            is InfinityWhy.Genre -> radio.copy(row = "genre:${why.id}")
+            is InfinityWhy.MoreLike -> radio.copy(row = "morelike")
+        }
+    }
+
+    /** [servedBy]'s key: a song can sit in two pools (two genres, or a genre and "more like") ordered differently. */
+    private fun servedKey(
+        pool: String,
+        id: String,
+    ) = "$pool/$id"
+
+    /**
+     * Notes how [song] entered [pool]. While the pool still holds an [earlier] copy, that copy is taken
+     * first, so its entry stays; otherwise any entry is a leftover from a copy purged since and is replaced.
+     */
+    private fun noteServed(
+        pool: String,
+        song: SongItem,
+        how: Served,
+        earlier: Boolean,
+    ) {
+        val key = servedKey(pool, song.id)
+        if (earlier) servedBy.getOrPut(key) { how } else servedBy[key] = how
+    }
+
+    /** Moves a picked song's entry from [servedBy] to [discoveryPicked]. */
+    private fun pickedFrom(
+        pool: String,
+        song: SongItem,
+    ) {
+        servedBy.remove(servedKey(pool, song.id))?.let { discoveryPicked[song.id] = it }
+    }
+
+    /** Drops [servedBy] entries of songs no longer in any pool (passed, ruled out, dropped genres), so it stays pool-sized. */
+    private fun pruneServedBy() {
+        val pooled = HashSet<String>()
+        for ((g, pool) in pools) pool.forEach { pooled += servedKey(g, it.id) }
+        moreLike.forEach { pooled += servedKey(MORE_LIKE_POOL, it.first.id) }
+        servedBy.keys.retainAll(pooled)
     }
 
     /**
@@ -391,14 +444,22 @@ class InfinityMix(
             fillMoreLike()
             moreLike.removeAll { it.first.id in taken || ruledOut(it.first, ruled) }
             val i = moreLike.indexOfFirst { it.first.artists.firstOrNull()?.name !in recentArtists }
-            if (i >= 0) moreLike.removeAt(i).let { (song, seed) -> return song to InfinityWhy.MoreLike(seed) }
+            if (i >= 0) {
+                moreLike.removeAt(i).let { (song, seed) ->
+                    pickedFrom(MORE_LIKE_POOL, song)
+                    return song to InfinityWhy.MoreLike(seed)
+                }
+            }
         }
         if (genres.isNotEmpty()) {
             val order = weightedOrder(genres)
             for (g in order) {
                 val stocked = pools[g]?.size ?: 0
                 val pool = if (stocked >= POOL_LOW || fillBudget-- > 0) fillGenre(g, taken) else pools[g] ?: continue
-                takeSpaced(pool, taken, recentArtists, ruled)?.let { return it to InfinityWhy.Genre(g) }
+                takeSpaced(pool, taken, recentArtists, ruled)?.let {
+                    pickedFrom(g, it)
+                    return it to InfinityWhy.Genre(g)
+                }
             }
         }
         if (forYou.isEmpty()) {
@@ -442,7 +503,11 @@ class InfinityMix(
                 cache.putAll(top)
                 // Search hits are the genre's best-known songs: a couple go straight in, two seed radios.
                 addAll(top.shuffled(random).take(SEEDS_PER_FILL - size))
-                top.filter { it.id !in taken }.shuffled(random).take(2).forEach { pool.addLast(it) }
+                top.filter { it.id !in taken }.shuffled(random).take(2).forEach { song ->
+                    val earlier = pool.any { it.id == song.id }
+                    pool.addLast(song)
+                    noteServed(id, song, Served.DIRECT, earlier)
+                }
             }
             val radios = seeds.flatMap { seed -> runCatching { repo.startRadio(seed.id) }.getOrDefault(emptyList()) }
                 .filter { !it.isLive }
@@ -453,8 +518,12 @@ class InfinityMix(
                 // New music for the discovery slots: skip what the listener already plays a lot.
                 .filter { (heard?.track(TrackKey.youtube(it.id))?.plays ?: 0) < 3 }
                 .filter { it.artists.firstOrNull()?.name?.lowercase() !in passedArtists }
-            val ranked = rankByTaste(seeds.firstOrNull(), fresh)
-            ranked.forEach { pool.addLast(it) }
+            val (ranked, how) = rankByTaste(seeds.firstOrNull(), fresh)
+            ranked.forEach { song ->
+                val earlier = pool.any { it.id == song.id }
+                pool.addLast(song)
+                noteServed(id, song, how, earlier)
+            }
             TurtleLog.info("infinity: genre $id stocked with ${ranked.size} songs")
         } catch (e: CancellationException) {
             throw e
@@ -470,18 +539,33 @@ class InfinityMix(
         val songs = runCatching { repository().startRadio(seed.id) }.getOrDefault(emptyList())
             .filter { it.id != seed.id && !it.isLive }
         cache.putAll(songs)
-        rankByTaste(seed, songs).take(MORE_LIKE_TAKE).forEach { moreLike.addLast(it to seed.title) }
+        val (ranked, how) = rankByTaste(seed, songs)
+        ranked.take(MORE_LIKE_TAKE).forEach { song ->
+            val earlier = moreLike.any { it.first.id == song.id }
+            moreLike.addLast(song to seed.title)
+            noteServed(MORE_LIKE_POOL, song, how, earlier)
+        }
         likedSeeds.addFirst(seed)
     }
 
-    /** Taste order for new candidates, falling back to YouTube's order if ranking takes too long. */
-    private suspend fun rankByTaste(seed: SongItem?, songs: List<SongItem>): List<SongItem> {
-        if (seed == null || songs.size < 2) return songs
+    /**
+     * Taste order for new candidates, falling back to YouTube's order if ranking takes too long or
+     * fails; also says which of those happened, for the songs' play attribution.
+     */
+    private suspend fun rankByTaste(
+        seed: SongItem?,
+        songs: List<SongItem>,
+    ): Pair<List<SongItem>, Served> {
+        if (seed == null || songs.size < 2) return songs to Served.PROVIDER
         val byId = songs.associateBy { it.id }
+        var failed = false
         val ranked = withTimeoutOrNull(RANK_TIMEOUT_MS) {
-            runCatching { taste.rankExternal(seed.toTrackMeta(), songs.map { it.toTrackMeta() }) }.getOrNull()
-        } ?: return songs
-        return ranked.mapNotNull { it.track.youtubeId?.let(byId::get) }
+            // The timeout cancels a suspended ranking with a CancellationException: that is a timeout, not a failure.
+            runCatching { taste.rankExternal(seed.toTrackMeta(), songs.map { it.toTrackMeta() }) }
+                .onFailure { failed = it !is CancellationException }
+                .getOrNull()
+        } ?: return songs to if (failed) Served.FAILED else Served.TIMEOUT
+        return ranked.mapNotNull { it.track.youtubeId?.let(byId::get) } to Served.RANKED
     }
 
     private companion object {
@@ -513,5 +597,8 @@ class InfinityMix(
         const val BATCH_TIMEOUT_MS = 20_000L
         const val RANK_TIMEOUT_MS = 1_500L
         const val FOR_YOU_BATCH = 20
+
+        /** [servedKey]'s pool name for "more like" songs; genre ids never take it. */
+        const val MORE_LIKE_POOL = "morelike"
     }
 }

@@ -18,6 +18,7 @@ import app.turtleplayer.taste.CoListeningStore
 import app.turtleplayer.taste.EmbeddingStore
 import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.Served
 import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
@@ -266,7 +267,9 @@ object TurtleBridge {
 
     /**
      * Shell: [songs] are about to play from [place] (row [row], a Home row key, or null). Call right
-     * before starting playback. HOME_TURTLE rows carry each song's generator and slot. Fails open.
+     * before starting playback. HOME_TURTLE rows carry each song's generator and slot. A YouTube
+     * row's tags record each song's 1-based position in [songs], the row's songs in display order (a
+     * repeated id keeps its first). Fails open.
      */
     fun attributePlay(
         place: PlayPlace,
@@ -277,16 +280,21 @@ object TurtleBridge {
             val koin = GlobalContext.getOrNull() ?: return
             val observer = koin.getOrNull<PlayerObserver>() ?: return
             val home = koin.getOrNull<TurtleHomeShelves>()
-            val tags =
-                songs.associate { song ->
-                    val origin =
-                        if (place == PlayPlace.HOME_TURTLE && row != null && home != null) {
-                            home.originOf(row, song.id)
-                        } else {
-                            PlayOrigin(place, row = row)
-                        }
-                    song.id to SurfaceTag.format(origin)
-                }
+            // Home shows YouTube's rows in the order YouTube sent them, so where a song sits in the row
+            // is the baseline for reordering it. Other Home callers pass one tile or a whole mix queue.
+            val youtubeRow = place == PlayPlace.HOME_YOUTUBE
+            val served = if (youtubeRow) Served.PROVIDER else null
+            val tags = LinkedHashMap<String, String>()
+            songs.forEachIndexed { i, song ->
+                if (song.id in tags) return@forEachIndexed
+                val origin =
+                    if (place == PlayPlace.HOME_TURTLE && row != null && home != null) {
+                        home.originOf(row, song.id)
+                    } else {
+                        PlayOrigin(place, row = row, served = served)
+                    }
+                tags[song.id] = SurfaceTag.format(if (youtubeRow) origin.copy(position = i + 1) else origin)
+            }
             observer.attribute(tags)
         } catch (e: Exception) {
             TurtleLog.error("could not attribute a play to $place", e)

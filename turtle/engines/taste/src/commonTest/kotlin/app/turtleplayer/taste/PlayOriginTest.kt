@@ -27,6 +27,31 @@ class PlayOriginTest {
     }
 
     @Test
+    fun servingPathAndPositionRoundTripWithoutChangingSourceOrSlot() {
+        assertEquals("radio+ranked/upstream/d", SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, served = Served.RANKED)))
+        assertEquals("radio+timeout/-/-", SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, served = Served.TIMEOUT)))
+        assertEquals("home-yt+provider@3/-/-/section_Throwbacks_0", SurfaceTag.format(PlayOrigin(PlayPlace.HOME_YOUTUBE, row = "section_Throwbacks_0", served = Served.PROVIDER, position = 3)))
+        for (row in listOf(null, "genre:hiphop", "daily_mix:artist:ac/dc", "section #3: a/b/c", "a+b@2")) {
+            for (served in listOf(null) + Served.entries) {
+                for (position in listOf(null, 1, 12)) {
+                    val o = PlayOrigin(PlayPlace.HOME_TURTLE, CandidateSource.LIBRARY, SlotKind.FAMILIAR, row, served, position)
+                    assertEquals(o, SurfaceTag.parse(SurfaceTag.format(o)))
+                }
+            }
+        }
+        assertEquals(CandidateSource.COLLABORATIVE, SurfaceTag.parse("infinity+ranked/cf/d/genre:pop")!!.source)
+        assertEquals(SlotKind.DISCOVERY, SurfaceTag.parse("infinity+direct/upstream/d/genre:pop")!!.slot)
+        assertEquals(Surface.RADIO, SurfaceTag.parse("radio+failed/-/-")!!.surface)
+    }
+
+    @Test
+    fun malformedServingPathOrPositionIsNotATag() {
+        for (d in listOf("radio+/-/-", "radio+bogus/-/-", "radio@/-/-", "radio@0/-/-", "radio@-2/-/-", "radio@x/-/-", "+ranked/-/-", "radio@2+ranked/-/-", "infinity+ranked/familiar")) {
+            assertNull(SurfaceTag.parse(d), d)
+        }
+    }
+
+    @Test
     fun legacyInfinityTagsParse() {
         assertEquals(PlayOrigin(PlayPlace.INFINITY, CandidateSource.LIBRARY, SlotKind.FAMILIAR, "familiar"), SurfaceTag.parse("infinity/familiar"))
         assertEquals(PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, "genre:pop"), SurfaceTag.parse("infinity/genre:pop"))

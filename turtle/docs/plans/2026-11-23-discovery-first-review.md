@@ -298,10 +298,10 @@ Below 32 the JDK uses insertion sort, which does not check the contract.
 ## What this changes in the plan
 
 - **Step 1** is done; the decision is above. Steps 5–7 wait for the owner.
-- **Step 2:** add the visible row position to `HOME_YOUTUBE` play tags. Record which path served each radio page (ranked, timeout, exception or single song) and each Infinity pick (direct hit or ranked).
+- **Step 2:** done in the working tree; see [Step 2 baseline](#step-2-baseline) below.
 - **Step 3:** score and order only visible songs; use the per-song `matches` and skip signals.
 - **Step 4a:**
-  - draw jitter once per item, which also removes the intermittent empty batch. This is done in the working tree but not committed: `familiarCandidates` now draws each song's shuffle before sorting;
+  - draw jitter once per item, which also removes the intermittent empty batch. Done in commit `adfbd029`: `familiarCandidates` now draws each song's shuffle before sorting;
   - put purged hits into a "ruled out" set so they stop re-entering and starving the pool;
   - check recording identity, not video ID;
   - inject `Clock` and `Random` through Koin.
@@ -314,3 +314,53 @@ Below 32 the JDK uses insertion sort, which does not check the contract.
   - credits for unlinked artists.
 
   Both affect charts and existing Home and history behavior. Each needs its own owner decision.
+
+## Step 2 baseline
+
+Play tags now say how a suggested song was ordered, so local history can separate the paths the replay cases compare.
+
+**Tag format.** `PlayEvent.surfaceDetail` tags gain an optional serving path and position in their first field: `<place>[+<served>][@<position>]/<source>/<slot>[/<row>]`. Existing tags and their `source` and `slot` are unchanged, so learning is unaffected. Builds from before this change read a tag with `+` or `@` as unattributed.
+
+| Served | Meaning | Written by |
+| --- | --- | --- |
+| `ranked` | ordered by Turtle's taste ranking | radio pages ranked in time; Infinity genre and "more like" songs ranked in time |
+| `direct` | a provider search hit queued as it came | Infinity's two search hits per genre fill |
+| `provider` | the provider's order by design, or nothing to rank | Home's YouTube rows; one-song radio pages; Infinity fills with no seed or fewer than two songs |
+| `timeout` | provider order because ranking ran out of time | radio and Infinity |
+| `failed` | provider order because ranking threw | radio and Infinity |
+
+Position is the song's 1-based place among the songs of the YouTube row the listener tapped (`home-yt+provider@3/-/-/<row>`). Other places carry no position: the session's own position already orders radio and Infinity plays, and other Home callers pass one tile or a whole mix queue.
+
+**Report.** `OriginReporter` (`turtle/engines/taste/.../eval/OriginReport.kt`) groups local plays by place, serving path, row position and listener maturity. Maturity is cold below the engine's `coldStartPlays` (50) finished plays, light below 500, and established after that. For each group it reports started, quick-skipped and finished plays, the untagged share, and the plan's early-skip rate. The KDoc defines a run, a deliberate start and eligibility. To print it for a copy of a phone's database, as aggregates only:
+
+```bash
+adb exec-out run-as com.metrolist.music.debug.t2 cat databases/turtle.db > /tmp/turtle-copy.db
+```
+
+```bash
+./gradlew :turtle-bridge:desktopTest --tests '*LocalOriginReportProbe*' -PturtleOriginReportDb=/tmp/turtle-copy.db
+```
+
+Opening the copy migrates it in place, so never point the probe at a live database.
+
+**First reading.** The probe was run on 23 November against a copy of the test phone's history. Every tagged play predates this change, so none carries a serving path yet.
+
+| Measure | Result |
+| --- | --- |
+| Local plays | 284 |
+| Untagged | 198 (70%) |
+| Early-skip rate, Infinity | 16 of 23 (70%) |
+| Early-skip rate, Turtle's Home rows | 5 of 6 (83%) |
+| Early-skip rate, engine Up Next | 11 of 22 |
+| Early-skip rate, radio | 0 of 5 |
+
+The samples are small. Treat these figures as a starting point, not a finding.
+
+**Golden gates.** Unchanged before and after: recall@50 0.587 and NDCG@10 0.868 for all finished plays, and 0.960 and 0.641 for new tracks only.
+
+**Known limits.**
+- **Leftover radio tags.** Radio songs that are tagged but never queued keep their pending tag until 500 newer tags push it out. Desktop queues four to six songs of a page. A later play of such a song from the library or an artist page is then recorded with that radio tag. This already happened on the ranked path. It now also happens for `timeout`, `failed` and `provider` pages. Fixing it needs `PlayerObserver` to expire tags, which is not part of this change.
+- **App start.** `StartReason.UNKNOWN` also follows app start, which therefore reads as a deliberate start.
+- **Home row into radio.** A Home row whose queue continues into upstream's radio opens a second, radio run.
+- **Untagged paths.** Desktop's first Start radio page never passes through `rankRadio`, so its plays stay untagged.
+- **Thin history.** The phone's local history held 265 plays on 23 November, almost none with radio or YouTube-row tags. The new tags only accumulate from this build on, so the synthetic replay remains the comparison for step 3 until real history builds up.

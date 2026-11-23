@@ -56,3 +56,13 @@ kotlin {
         }
     }
 }
+
+// Opt-in LocalOriginReportProbe: the path of a copied turtle.db to report on. Never set in CI. The
+// report is printed, and the probe reruns for each new copy, which Gradle cannot see as an input.
+tasks.named<Test>("desktopTest") {
+    providers.gradleProperty("turtleOriginReportDb").orNull?.let { db ->
+        systemProperty("turtleOriginReportDb", db)
+        testLogging.showStandardStreams = true
+        outputs.upToDateWhen { false }
+    }
+}

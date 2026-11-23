@@ -54,12 +54,40 @@ enum class PlayPlace(val tag: String, val surface: Surface) {
     }
 }
 
-/** Where a play came from: the place, the generator and slot that proposed the track (when one did), and the row. */
+/**
+ * Who put a suggested song in that order: Turtle's taste ranking, or the provider's list as it came.
+ * [tag] is persisted in [app.turtleplayer.events.PlayEvent.surfaceDetail]: never rename.
+ */
+enum class Served(val tag: String) {
+    /** Ordered by Turtle's taste ranking from a provider's list. */
+    RANKED("ranked"),
+    /** A provider search hit queued as it came, without ranking (Infinity's genre hits). */
+    DIRECT("direct"),
+    /** The provider's order by design or because there was nothing to rank (Home's YouTube rows, a one-song page). */
+    PROVIDER("provider"),
+    /** The provider's order because ranking ran out of time. */
+    TIMEOUT("timeout"),
+    /** The provider's order because ranking failed. */
+    FAILED("failed"),
+    ;
+
+    companion object {
+        fun fromTag(tag: String): Served? = entries.firstOrNull { it.tag == tag }
+    }
+}
+
+/**
+ * Where a play came from: the place, the generator and slot that proposed the track (when one did),
+ * the row, who ordered it ([served], when a provider list was involved) and its 1-based [position]
+ * among the songs of the row the listener tapped (Home only: elsewhere the session position says it).
+ */
 data class PlayOrigin(
     val place: PlayPlace,
     val source: CandidateSource? = null,
     val slot: SlotKind? = null,
     val row: String? = null,
+    val served: Served? = null,
+    val position: Int? = null,
 ) {
     val surface: Surface get() = place.surface
 }
@@ -67,9 +95,10 @@ data class PlayOrigin(
 /**
  * The string the app stores in `PlayEvent.surfaceDetail` for plays it can attribute, so later
  * events can be attributed to a place, a generator (per-source skip rates) and a discovery slot
- * (exploration feedback). Format: `<place>/<source|->/<slot|->`, then `/<row>` when there is a row.
- * The row keeps its own slashes; line breaks and tabs in it become spaces. Legacy Infinity tags
- * (`infinity/<pick>`) still parse; anything else Turtle did not write parses to null.
+ * (exploration feedback). Format: `<place>[+<served>][@<position>]/<source|->/<slot|->`, then
+ * `/<row>` when there is a row. The row keeps its own slashes; line breaks and tabs in it become
+ * spaces. Legacy Infinity tags (`infinity/<pick>`) still parse; anything else Turtle did not write
+ * parses to null. Builds before [Served] read a tag with `+` or `@` as unattributed.
  */
 object SurfaceTag {
     private const val NONE = "-"
@@ -77,7 +106,9 @@ object SurfaceTag {
     fun format(source: CandidateSource, slot: SlotKind): String = format(PlayOrigin(PlayPlace.ENGINE, source, slot))
 
     fun format(origin: PlayOrigin): String {
-        val head = "${origin.place.tag}/${origin.source?.tag ?: NONE}/${origin.slot?.tag ?: NONE}"
+        val served = origin.served?.let { "+${it.tag}" }.orEmpty()
+        val position = origin.position?.takeIf { it > 0 }?.let { "@$it" }.orEmpty()
+        val head = "${origin.place.tag}$served$position/${origin.source?.tag ?: NONE}/${origin.slot?.tag ?: NONE}"
         val row = origin.row?.replace('\n', ' ')?.replace('\r', ' ')?.replace('\t', ' ')
         return if (row.isNullOrEmpty()) head else "$head/$row"
     }
@@ -85,12 +116,28 @@ object SurfaceTag {
     fun parse(detail: String?): PlayOrigin? {
         if (detail.isNullOrEmpty()) return null
         val parts = detail.split('/', limit = 4)
-        val place = PlayPlace.fromTag(parts[0]) ?: return null
-        if (parts.size == 2) return if (place == PlayPlace.INFINITY) legacyInfinity(parts[1]) else null
+        val head = parseHead(parts[0]) ?: return null
+        val place = head.place
+        if (parts.size == 2) return if (place == PlayPlace.INFINITY && head.plain) legacyInfinity(parts[1]) else null
         if (parts.size < 3) return null
         val source = if (parts[1] == NONE) null else CandidateSource.fromTag(parts[1]) ?: return null
         val slot = if (parts[2] == NONE) null else SlotKind.entries.firstOrNull { it.tag == parts[2] } ?: return null
-        return PlayOrigin(place, source, slot, parts.getOrNull(3)?.takeIf { it.isNotEmpty() })
+        return PlayOrigin(place, source, slot, parts.getOrNull(3)?.takeIf { it.isNotEmpty() }, head.served, head.position)
+    }
+
+    private class Head(val place: PlayPlace, val served: Served?, val position: Int?) {
+        val plain get() = served == null && position == null
+    }
+
+    /** `<place>[+<served>][@<position>]`; null when any part is not one Turtle writes. */
+    private fun parseHead(head: String): Head? {
+        val at = head.indexOf('@')
+        val position = if (at < 0) null else head.substring(at + 1).toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val rest = if (at < 0) head else head.substring(0, at)
+        val plus = rest.indexOf('+')
+        val served = if (plus < 0) null else Served.fromTag(rest.substring(plus + 1)) ?: return null
+        val place = PlayPlace.fromTag(if (plus < 0) rest else rest.substring(0, plus)) ?: return null
+        return Head(place, served, position)
     }
 
     /** `infinity/<pick>`, written before plays carried a full origin. "foryou" never stored its generator. */
