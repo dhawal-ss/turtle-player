@@ -1,92 +1,113 @@
 package app.turtleplayer.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import app.turtleplayer.ui.components.Glyphs
+import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_credits_zoom_hint
+import app.turtleplayer.ui.generated.resources.shell_np_close
 import app.turtleplayer.ui.theme.Shell
-import kotlin.math.PI
-import kotlin.math.cos
+import org.jetbrains.compose.resources.stringResource
+import kotlin.math.abs
 import kotlin.math.min
-import kotlin.math.sin
+import kotlin.math.sqrt
 
-/** One name in the credits heart, with a word or two on what they did. */
-internal data class HeartCredit(val name: String, val role: String)
+/** One person in the credits heart; the creators also carry their [role]. */
+internal data class HeartCredit(val name: String, val role: String? = null)
 
 /**
- * A heart outline with the people in [credits] set inside it, each named once and followed by a word
- * or two on what they did. The words flow row by row: a name never breaks, but its role words may
- * continue on the next row. The text size is the largest at which everyone fits, so the heart is
- * full whatever the number of people, and each row is justified to the heart's shape.
+ * A fat heart drawn only with the names in [credits], each written once and never split. The names
+ * are set at one size, the largest at which everyone fits, and each row is spread from edge to edge
+ * of the heart, so the names themselves draw its outline.
  */
 @Composable
-internal fun CreditsHeart(credits: List<HeartCredit>, modifier: Modifier = Modifier) {
+internal fun CreditsHeart(credits: List<HeartCredit>, modifier: Modifier = Modifier, maxSide: Dp = MAX_SIDE) {
     val c = Shell.colors
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    // The shortest entry goes last: it lands in the narrow rows near the point, where it stays readable.
+    // The shortest entry goes last: it lands in the narrow rows at the point.
     val unique = remember(credits) {
-        val distinct = credits.distinctBy { it.name }
-        val shortest = distinct.minByOrNull { it.name.length + it.role.length }
+        val distinct = credits.distinctBy { it.name.lowercase() }
+        val shortest = distinct.minByOrNull { it.name.length + (it.role?.length ?: 0) }
         distinct.filter { it != shortest } + listOfNotNull(shortest)
     }
-    val description = remember(unique) { unique.joinToString(", ") { "${it.name}, ${it.role}" } }
+    val description = remember(unique) { unique.joinToString(", ") { credit -> listOfNotNull(credit.name, credit.role).joinToString(", ") } }
     BoxWithConstraints(modifier.fillMaxWidth().padding(vertical = 12.dp).semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
-        val side = min(maxWidth.value, MAX_SIDE_DP).dp
-        val sidePx = with(density) { side.toPx() }
+        // Pixels straight from the layout: a dialog's window can report another density than the app's.
+        val sidePx = min(constraints.maxWidth.toFloat(), with(density) { maxSide.toPx() })
         val gapPx = with(density) { GAP_DP.dp.toPx() }
-        val strokePx = with(density) { OUTLINE_DP.dp.toPx() }
         val base = Shell.type.bodySmall
-        val nameStyle = base.copy(color = c.ink, fontWeight = FontWeight.SemiBold)
-        val roleStyle = base.copy(color = c.ink2, fontWeight = FontWeight.Normal)
-        val inner = remember(sidePx) { HeartShape.inner.map { Offset(it.x * sidePx, it.y * sidePx) } }
-        val placed = remember(unique, inner, gapPx, nameStyle, roleStyle) {
-            val tokens = unique.flatMap { credit -> listOf(credit.name to nameStyle) + credit.role.split(' ').filter { it.isNotBlank() }.map { it to roleStyle } }
-            fun measure(sizeSp: Float) = tokens.map { (text, style) ->
-                measurer.measure(text, style.copy(fontSize = sizeSp.sp, lineHeight = (sizeSp * LINE_HEIGHT).sp), maxLines = 1, softWrap = false)
-            }
-            // Whether the words fit jumps as rows come and go with the size, so sizes are scanned, not
-            // bisected, and the one that reaches furthest down wins. The scan runs on widths scaled from
-            // one measurement (text width grows with its size), then the best size is measured for real.
-            val reference = measure(REFERENCE_SP)
-            var best = MIN_SP / REFERENCE_SP
-            var bestFill = -1f
-            var scale = MAX_SP / REFERENCE_SP
-            while (scale >= MIN_SP / REFERENCE_SP) {
-                val f = layoutHeart(reference.map { it.size.width * scale }, reference.first().size.height * scale, inner, gapPx * scale)?.fill ?: 0f
-                if (f > bestFill + 0.01f) {
-                    best = scale
-                    bestFill = f
+        // Colour and weight only: the size comes from the search below.
+        val nameStyle = SpanStyle(color = c.ink, fontWeight = FontWeight.Medium)
+        val creatorStyle = SpanStyle(color = c.ink, fontWeight = FontWeight.Bold)
+        val roleStyle = SpanStyle(color = c.ink2, fontWeight = FontWeight.Normal)
+        val placed = remember(unique, sidePx, gapPx, base, nameStyle, creatorStyle, roleStyle) {
+            val area = FatHeart.Area(sidePx)
+            val entries = unique.map { credit ->
+                buildAnnotatedString {
+                    withStyle(if (credit.role != null) creatorStyle else nameStyle) { append(credit.name) }
+                    credit.role?.let { role ->
+                        append(' ')
+                        withStyle(roleStyle) { append(role) }
+                    }
                 }
-                if (bestFill >= GOOD_FILL) break
-                scale *= SIZE_STEP
             }
+            fun measure(sizeSp: Float) = entries.map { text ->
+                measurer.measure(text, base.copy(fontSize = sizeSp.sp, lineHeight = (sizeSp * LINE_HEIGHT).sp), maxLines = 1, softWrap = false)
+            }
+            // Text width and height both grow with its size, so the text's area grows with its square:
+            // start a little above the size whose text would cover the heart, then step down.
+            val reference = measure(REFERENCE_SP)
+            val referenceInk = reference.sumOf { (it.size.width + gapPx).toDouble() } * reference.first().size.height
+            var sizeSp = min(MAX_SP, REFERENCE_SP * sqrt(area.areaPx / referenceInk).toFloat() * START_ABOVE)
+            // Whether everyone fits jumps as rows come and go, so sizes are stepped, not bisected,
+            // and the first that fits and reaches near the point is kept.
             var result: List<Pair<TextLayoutResult, Placed>>? = null
             var resultFill = -1f
-            var sizeSp = REFERENCE_SP * best * 1.02f
-            while (sizeSp >= REFERENCE_SP * best * 0.9f && sizeSp >= MIN_SP) {
+            while (sizeSp >= MIN_SP) {
                 val texts = measure(sizeSp)
-                val layout = layoutHeart(texts.map { it.size.width.toFloat() }, texts.first().size.height.toFloat(), inner, gapPx * sizeSp / REFERENCE_SP)
-                if (layout != null && layout.fill > resultFill + 0.01f) {
+                val layout = layoutHeart(texts.map { it.size.width.toFloat() }, texts.first().size.height.toFloat(), area, gapPx * sizeSp / REFERENCE_SP)
+                if (layout != null && layout.fill > resultFill) {
                     result = layout.words.map { texts[it.index] to it }
                     resultFill = layout.fill
                 }
@@ -95,73 +116,115 @@ internal fun CreditsHeart(credits: List<HeartCredit>, modifier: Modifier = Modif
             }
             result.orEmpty()
         }
-        val outlineColor = c.accent
-        Canvas(Modifier.size(side, side * HeartShape.heightRatio)) {
-            val inset = strokePx / 2f
-            val reach = size.width - strokePx
-            val outline = Path().apply {
-                HeartShape.outline.forEachIndexed { i, p ->
-                    val x = inset + p.x * reach
-                    val y = inset + p.y * reach
-                    if (i == 0) moveTo(x, y) else lineTo(x, y)
-                }
-                close()
-            }
-            drawPath(outline, outlineColor, style = Stroke(width = strokePx, join = StrokeJoin.Round))
-            placed.forEach { (text, word) ->
-                if (word.scale == 1f) {
-                    drawText(text, topLeft = word.at)
-                } else {
-                    scale(word.scale, pivot = word.at) { drawText(text, topLeft = word.at) }
-                }
-            }
+        Canvas(
+            Modifier.layout { measurable, _ ->
+                val width = sidePx.toInt()
+                val height = (sidePx * FatHeart.heightRatio).toInt()
+                val placeable = measurable.measure(Constraints.fixed(width, height))
+                layout(width, height) { placeable.place(0, 0) }
+            },
+        ) {
+            placed.forEach { (text, word) -> drawText(text, topLeft = word.at) }
         }
     }
 }
 
-/** The words placed in the heart, and how far down its text area they reach (1 is the bottom). */
+/**
+ * The credits heart across the whole screen, to read every name: pinch to zoom and drag to move, or
+ * double-tap to zoom in and back out.
+ */
+@Composable
+internal fun CreditsHeartFullScreen(credits: List<HeartCredit>, onClose: () -> Unit) {
+    val c = Shell.colors
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        var zoom by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        Box(Modifier.fillMaxSize().background(c.ground).safeDrawingPadding()) {
+            Box(
+                Modifier.fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, gestureZoom, _ ->
+                            zoom = (zoom * gestureZoom).coerceIn(1f, MAX_ZOOM)
+                            offset = if (zoom == 1f) Offset.Zero else offset + pan
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = { tap ->
+                            if (zoom > 1f) {
+                                zoom = 1f
+                                offset = Offset.Zero
+                            } else {
+                                // Zoom in on the tapped spot.
+                                zoom = DOUBLE_TAP_ZOOM
+                                offset = (Offset(size.width / 2f, size.height / 2f) - tap) * DOUBLE_TAP_ZOOM
+                            }
+                        })
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                CreditsHeart(
+                    credits,
+                    Modifier.padding(horizontal = 12.dp).graphicsLayer {
+                        scaleX = zoom
+                        scaleY = zoom
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+                    maxSide = Dp.Infinity,
+                )
+            }
+            // Solid backings keep the controls readable over the names when zoomed in.
+            Box(Modifier.align(Alignment.TopEnd).padding(8.dp).clip(CircleShape).background(c.surface2)) {
+                GlyphButton(Glyphs.Close, stringResource(Res.string.shell_np_close), onClose, c.ink)
+            }
+            Text(
+                stringResource(Res.string.shell_credits_zoom_hint),
+                style = Shell.type.bodySmall,
+                color = c.ink2,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp).clip(RoundedCornerShape(50))
+                    .background(c.surface2).padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+/** The entries placed in the heart, and how far down it they reach (1 is the bottom). */
 private class HeartLayout(val words: List<Placed>, val fill: Float)
 
-/** A word of the heart: which one, where its top-left goes, how much it is scaled down, and its row. */
-private class Placed(val index: Int, val at: Offset, val scale: Float, val row: Int)
+/** An entry of the heart: which one, where its top-left goes, and its row. */
+private class Placed(val index: Int, val at: Offset, val row: Int)
 
 /**
- * Flows the words in order through [area], row by row and span by span, or returns null when they
- * don't all fit. A span too narrow for the next word is left empty. Each span's words are justified
- * across it.
+ * Flows the entries in order through the heart [area], row by row and span by span, all at one size,
+ * or returns null when they don't all fit. A span too narrow for the next entry is left empty. A
+ * span's entries are spread across it, edge to edge, so the rows trace the heart; a lone entry is
+ * centred.
  */
-private fun layoutHeart(widths: List<Float>, rowHeight: Float, area: List<Offset>, gap: Float): HeartLayout? {
+private fun layoutHeart(widths: List<Float>, rowHeight: Float, area: FatHeart.Area, gap: Float): HeartLayout? {
     if (widths.isEmpty()) return HeartLayout(emptyList(), 1f)
-    val top = area.minOf { it.y }
-    val bottom = area.maxOf { it.y }
-    val widest = area.maxOf { it.x } - area.minOf { it.x }
-    val rows = ((bottom - top) / rowHeight).toInt()
+    val rows = (area.heightPx / rowHeight).toInt()
     val out = ArrayList<Placed>(widths.size)
     var next = 0
     var lastRow = 0
     for (row in 0 until rows) {
-        for ((left, right) in spans(area, top + (row + 0.5f) * rowHeight)) {
+        for ((left, right) in area.spans((row + 0.5f) * rowHeight)) {
             if (next == widths.size) break
-            val span = right - left
-            // Narrow rows set a little smaller, so the words reach further into the point.
-            val scale = (span / (TAPER_FROM * widest)).coerceIn(MIN_TAPER, 1f)
             val first = next
             var used = 0f
             while (next < widths.size) {
-                val needed = used + (if (next == first) 0f else gap * scale) + widths[next] * scale
-                if (needed > span) break
+                val needed = used + (if (next == first) 0f else gap) + widths[next]
+                if (needed > right - left) break
                 used = needed
                 next++
             }
             if (next == first) continue
-            val words = first until next
-            val textWidth = words.sumOf { widths[it].toDouble() }.toFloat() * scale
-            val spacing = if (next - first > 1) (span - textWidth) / (next - first - 1) else 0f
-            var x = if (next - first > 1) left else left + (span - textWidth) / 2f
-            val y = top + row * rowHeight + rowHeight * (1f - scale) / 2f
-            for (w in words) {
-                out += Placed(w, Offset(x, y), scale, row)
-                x += widths[w] * scale + spacing
+            val count = next - first
+            val textWidth = (first until next).sumOf { widths[it].toDouble() }.toFloat()
+            val spacing = if (count > 1) (right - left - textWidth) / (count - 1) else 0f
+            var x = if (count > 1) left else left + (right - left - textWidth) / 2f
+            for (w in first until next) {
+                out += Placed(w, Offset(x, row * rowHeight), row)
+                x += widths[w] + spacing
             }
             lastRow = row
         }
@@ -169,64 +232,70 @@ private fun layoutHeart(widths: List<Float>, rowHeight: Float, area: List<Offset
     return if (next == widths.size) HeartLayout(out, (lastRow + 1f) / rows) else null
 }
 
-/** The stretches of the row at height [y] that lie inside the polygon [area]: one, or two between the lobes. */
-private fun spans(area: List<Offset>, y: Float): List<Pair<Float, Float>> {
-    val xs = ArrayList<Float>()
-    for (i in area.indices) {
-        val p = area[i]
-        val q = area[(i + 1) % area.size]
-        if ((p.y <= y && y < q.y) || (q.y <= y && y < p.y)) xs += p.x + (y - p.y) / (q.y - p.y) * (q.x - p.x)
-    }
-    xs.sort()
-    return xs.chunked(2).filter { it.size == 2 }.map { it[0] to it[1] }
-}
-
 /**
- * The classic heart curve x = 16 sin³t, y = 13 cos t − 5 cos 2t − 2 cos 3t − cos 4t, scaled to a
- * width of 1 with y pointing down. [inner] is the same heart shrunk toward its centre: the text area,
- * which keeps the words clear of the outline.
+ * The fat heart of a heart emoji: a square turned 45° with a round lobe on each upper side. Sizes are
+ * in units of the heart's width, with x centred and y pointing down.
  */
-private object HeartShape {
-    val outline: List<Offset>
-    val inner: List<Offset>
-    val heightRatio: Float
+private object FatHeart {
+    /** The turned square's side: two lobes plus the square span exactly one width. */
+    private val side = (1.0 / (1.0 + 1.0 / sqrt(2.0))).toFloat()
+    private val halfDiagonal = side / sqrt(2f)
+    private val lobeRadius = side / 2f
+    private val lobeOffset = side / (2f * sqrt(2f))
+    private val top = -(lobeOffset + lobeRadius)
 
-    init {
-        val raw = (0 until POINTS).map { i ->
-            val t = 2.0 * PI * i / POINTS
-            val s = sin(t)
-            Offset(
-                (16.0 * s * s * s).toFloat(),
-                -(13.0 * cos(t) - 5.0 * cos(2 * t) - 2.0 * cos(3 * t) - cos(4 * t)).toFloat(),
-            )
-        }
-        val minX = raw.minOf { it.x }
-        val minY = raw.minOf { it.y }
-        val width = raw.maxOf { it.x } - minX
-        outline = raw.map { Offset((it.x - minX) / width, (it.y - minY) / width) }
-        heightRatio = outline.maxOf { it.y }
-        val centre = Offset(0.5f, heightRatio / 2f)
-        inner = outline.map { centre + (it - centre) * TEXT_INSET }
+    /** The heart's height over its width. */
+    val heightRatio = halfDiagonal - top
+
+    private fun inside(x: Float, y: Float): Boolean {
+        fun inLobe(cx: Float) = (x - cx) * (x - cx) + (y + lobeOffset) * (y + lobeOffset) <= lobeRadius * lobeRadius
+        return abs(x) + abs(y) <= halfDiagonal || inLobe(-lobeOffset) || inLobe(lobeOffset)
     }
 
-    private const val POINTS = 360
+    /** The heart [widthPx] pixels wide, measured from its top. */
+    class Area(private val widthPx: Float) {
+        val heightPx = heightRatio * widthPx
+
+        /** The heart's area in square pixels. */
+        val areaPx: Double = (0 until AREA_ROWS).sumOf { i ->
+            spans((i + 0.5f) * heightPx / AREA_ROWS).sumOf { (l, r) -> (r - l).toDouble() }
+        } * heightPx / AREA_ROWS
+
+        /** The stretches of the row at pixel height [yPx] inside the heart: one, or two between the lobes. */
+        fun spans(yPx: Float): List<Pair<Float, Float>> {
+            val y = yPx / widthPx + top
+            val result = ArrayList<Pair<Float, Float>>()
+            var start = Float.NaN
+            for (i in 0..SAMPLES) {
+                val x = -0.5f + i.toFloat() / SAMPLES
+                val inside = inside(x, y)
+                if (inside && start.isNaN()) start = x
+                if ((!inside || i == SAMPLES) && !start.isNaN()) {
+                    result += (start + 0.5f) * widthPx to (x + 0.5f) * widthPx
+                    start = Float.NaN
+                }
+            }
+            return result
+        }
+    }
+
+    private const val SAMPLES = 400
+    private const val AREA_ROWS = 200
 }
 
-private const val MAX_SIDE_DP = 360f
-private const val GAP_DP = 4f
-private const val OUTLINE_DP = 1.5f
+private val MAX_SIDE = 360.dp
+private const val GAP_DP = 9f
 private const val REFERENCE_SP = 12f
-private const val MIN_SP = 6f
+private const val MIN_SP = 2f
 private const val MAX_SP = 22f
-private const val SIZE_STEP = 0.995f
+private const val SIZE_STEP = 0.99f
+private const val LINE_HEIGHT = 1.15f
 
-/** A layout reaching this far down the text area is full enough to stop looking for a better size. */
-private const val GOOD_FILL = 0.9f
-private const val LINE_HEIGHT = 1.25f
+/** How far above the size whose text would exactly cover the heart the search starts. */
+private const val START_ABOVE = 1.15f
 
-/** How much of the heart the text may use; the rest is clear space inside the outline. */
-private const val TEXT_INSET = 0.84f
+/** A layout reaching this far down the heart is full enough to stop looking for a better size. */
+private const val GOOD_FILL = 0.94f
 
-/** Rows narrower than this share of the text area's width are set smaller, down to [MIN_TAPER]. */
-private const val TAPER_FROM = 0.4f
-private const val MIN_TAPER = 0.7f
+private const val MAX_ZOOM = 12f
+private const val DOUBLE_TAP_ZOOM = 4f

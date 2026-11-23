@@ -61,7 +61,10 @@ import app.turtleplayer.ui.generated.resources.shell_set_advanced_sub
 import app.turtleplayer.ui.generated.resources.shell_set_app_name
 import app.turtleplayer.ui.generated.resources.shell_set_built_on_body
 import app.turtleplayer.ui.generated.resources.shell_set_content
+import app.turtleplayer.ui.generated.resources.shell_credit_innertune_creator
+import app.turtleplayer.ui.generated.resources.shell_credit_metrolist_creator
 import app.turtleplayer.ui.generated.resources.shell_credit_turtle_creator
+import app.turtleplayer.ui.generated.resources.shell_credits_open
 import app.turtleplayer.ui.generated.resources.shell_set_creator_name
 import app.turtleplayer.ui.generated.resources.shell_set_creator_role
 import app.turtleplayer.ui.generated.resources.shell_set_credits
@@ -583,8 +586,22 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                         add(
                             customItem("credits", creatorName, "$creatorRole $metrolistTeam $metrolistTeamRole") {
                                 Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                                    val turtleCreator = HeartCredit(creatorName, stringResource(Res.string.shell_credit_turtle_creator))
-                                    CreditsHeart(listOf(turtleCreator) + MetrolistContributors.all.map { HeartCredit(it.name, stringResource(it.role)) })
+                                    val turtleCreatorRole = stringResource(Res.string.shell_credit_turtle_creator)
+                                    val metrolistCreatorRole = stringResource(Res.string.shell_credit_metrolist_creator)
+                                    val innerTuneCreatorRole = stringResource(Res.string.shell_credit_innertune_creator)
+                                    val heart = remember(creatorName, turtleCreatorRole, metrolistCreatorRole, innerTuneCreatorRole) {
+                                        listOf(HeartCredit(creatorName, turtleCreatorRole)) +
+                                            MetrolistContributors.everyone.map { name ->
+                                                when (name) {
+                                                    MetrolistContributors.CREATOR -> HeartCredit(name, metrolistCreatorRole)
+                                                    MetrolistContributors.INNERTUNE_CREATOR -> HeartCredit(name, innerTuneCreatorRole)
+                                                    else -> HeartCredit(name)
+                                                }
+                                            }
+                                    }
+                                    var fullScreen by remember { mutableStateOf(false) }
+                                    CreditsHeart(heart, Modifier.shellPressable({ fullScreen = true }, label = stringResource(Res.string.shell_credits_open)))
+                                    if (fullScreen) CreditsHeartFullScreen(heart) { fullScreen = false }
                                     CreditRow(creatorName, creatorRole, stringResource(Res.string.shell_set_github_handle, TURTLE_CREATOR_GITHUB)) {
                                         runCatching { uriHandler.openUri("https://github.com/$TURTLE_CREATOR_GITHUB") }
                                     }
