@@ -184,9 +184,13 @@ private val KEEP_WINDOW = listOf("systemWindowFrame", "disableWaylandScaleFix", 
 private val KEEP_NAVIGATION =
     listOf("defaultOpenTab", "showHomeTab", "showSearchTab", "showLibraryTab", "forceBottomNavBar", "swipeToSong", "swipeToRemoveSong", "haptics")
 
-/** Lyrics: Shell draws its own lyrics, so only fetching settings apply (plus the sources, AI and romanization pages). */
+/**
+ * Lyrics: Shell draws its own lyrics, so only fetching settings and the text size and line spacing it
+ * reads apply (plus the sources, AI and romanization pages).
+ */
 private val KEEP_LYRICS_BEHAVIOR = setOf("preferWordSyncedLyrics")
-private val HIDE_LYRICS_GROUPS = setOf("alignment", "display", "accessibility")
+private val KEEP_LYRICS_DISPLAY = setOf("lyricsTextSize", "lyricsLineSpacing")
+private val HIDE_LYRICS_GROUPS = setOf("alignment", "accessibility")
 
 /** Metrolist's Sentry crash reports go to Metrolist's servers. */
 private val HIDE_PRIVACY = setOf("sentry")
@@ -476,7 +480,14 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                 groups =
                     page.groups
                         .filter { it.id !in HIDE_LYRICS_GROUPS }
-                        .map { g -> if (g.id == "behavior") g.copy(items = g.items.filter { it.id in KEEP_LYRICS_BEHAVIOR }) else g }
+                        .map { g ->
+                            when (g.id) {
+                                "behavior" -> g.copy(items = g.items.filter { it.id in KEEP_LYRICS_BEHAVIOR })
+                                // A new id keeps pinsLyricsPreview() off: upstream's preview is not what Shell draws.
+                                "display" -> g.copy(id = "textSize", items = g.items.filter { it.id in KEEP_LYRICS_DISPLAY })
+                                else -> g
+                            }
+                        }
                         .filter { it.items.isNotEmpty() },
             )
         }

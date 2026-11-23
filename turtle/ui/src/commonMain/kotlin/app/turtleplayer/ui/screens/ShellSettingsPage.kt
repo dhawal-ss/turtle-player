@@ -82,7 +82,10 @@ private sealed class SettingsEntry(val key: String, val type: String) {
     class Note(val text: String) : SettingsEntry("main-switch-note", "note")
 }
 
-/** Upstream's Lyrics page pins its live preview; Turtle's Lyrics page drops the display settings, and with them the preview. */
+/**
+ * Upstream's Lyrics page pins its live preview. Turtle's Lyrics page keeps only the text size and spacing
+ * under another group id, so it shows no preview of upstream's renderer.
+ */
 internal fun SettingsPageRegistration.pinsLyricsPreview(): Boolean = id == SettingsPageId.LYRICS && groups.any { it.id == "display" }
 
 private fun settingsEntries(groups: List<SettingsGroupRegistration>, mainSwitch: SettingsItemRegistration?): List<SettingsEntry> {
