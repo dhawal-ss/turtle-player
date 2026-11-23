@@ -27,6 +27,9 @@ interface TrackCatalog {
 interface FreshReleaseSource {
     /** Releases by any of [artists] on or after [sinceMs], newest first. */
     suspend fun freshReleases(artists: List<ArtistKey>, sinceMs: Long, limit: Int): List<TrackMeta>
+
+    /** Artists the listener follows in the app, whether or not they have played them, newest follow first. */
+    suspend fun followedArtists(): List<ArtistKey> = emptyList()
 }
 
 /**
