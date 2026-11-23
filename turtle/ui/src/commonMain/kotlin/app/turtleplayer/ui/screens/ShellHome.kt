@@ -76,6 +76,7 @@ import app.turtleplayer.bridge.HomeYouTubeRows
 import app.turtleplayer.bridge.NotInterested
 import app.turtleplayer.bridge.TurtleBridge
 import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.Served
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.HoverPlayButton
@@ -320,7 +321,11 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         val lists = remember(shelves, ui, recents, pick, mode, hidden) { HomeLists.of(shelves, ui, recents, pick, mode, hidden) }
         val layout = lists.layout
         // The bridge scores YouTube's rows off the UI thread whenever upstream's rows change.
-        val candidates = remember(shelves, ui, mode) { HomeLayout.candidates(shelves, ui, mode ?: HomeYouTubeRows.MATCHED) }
+        // Without what the listener hid, so rows are picked and ordered on the songs they will show.
+        val candidates =
+            remember(shelves, ui, mode, hidden) {
+                HomeLayout.candidates(HomeLayout.visible(shelves, hidden), ui, mode ?: HomeYouTubeRows.MATCHED)
+            }
         val gridCandidates = remember(shelves, ui) { HomeLayout.gridCandidates(shelves, ui) }
         // From upstream's state: the grid is mostly Turtle's recents now, so it can't tell whether YouTube loaded.
         val noContent = !ui.hasHomeFeedContent()
@@ -488,7 +493,15 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 layout.youtubeRows.forEachIndexed { i, shelf ->
                     val key = "row:${shelf.key}"
                     val rank = 5 + layout.moreLike.size + i
-                    item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, rank), PlayPlace.HOME_YOUTUBE) }
+                    val order =
+                        when (shelf.key) {
+                            in layout.orderedRows -> Served.RANKED
+                            in layout.comparisonRows -> Served.PROVIDER
+                            else -> null
+                        }
+                    item(key = key) {
+                        ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, rank), PlayPlace.HOME_YOUTUBE, youtubeOrder = order)
+                    }
                 }
                 val retry = slot.onLoadMore
                 if (ui.loadMoreError && retry != null) {
@@ -618,6 +631,7 @@ private fun ItemRow(
     modifier: Modifier,
     place: PlayPlace,
     title: String = shelf.title,
+    youtubeOrder: Served? = null,
 ) {
     val c = Shell.colors
     val playback = LocalPlaybackController.current
@@ -633,7 +647,9 @@ private fun ItemRow(
             items(unique, key = { it.id }) { item ->
                 val round = item is ArtistItem
                 val (hover, hovered) = rememberHover()
-                val play = { song: SongItem -> ShellHomeFeedback.play(place, shelf.key, songs) { playback.play(song, songs) } }
+                val play = { song: SongItem ->
+                    ShellHomeFeedback.play(place, shelf.key, songs, youtubeOrder) { playback.play(song, songs) }
+                }
                 val open: () -> Unit = { if (item is SongItem) play(item) else slot.onItemClick(item) }
                 // YouTube's rows keep upstream's menu as it is; Turtle's own rows offer "Not interested" in it.
                 val longClick =

@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.turtleplayer.events.PlayEventStore
+import app.turtleplayer.taste.SongSupport
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.db.entities.toSongItem
@@ -144,7 +145,10 @@ class TurtleHomeRows(
             val selection = taste.selectHomeRows(rows.map { it.toRowCandidate() }, sticky)
             val matches = taste.matchesTaste(grid.map { it.toRowItem() })
             val gridIds = grid.filterIndexed { i, _ -> matches.getOrElse(i) { false } }.mapTo(LinkedHashSet()) { it.id }
-            pick = HomeRowsPick(selection.ids, gridIds, scored = !selection.coldStart)
+            val picked = rows.filter { it.key in selection.ids }
+            val songSupport = if (selection.coldStart) emptyMap() else songSupport(picked)
+            val orderToday = songSupport.keys.filterTo(LinkedHashSet()) { taste.ordersRow(it) }
+            pick = HomeRowsPick(selection.ids, gridIds, scored = !selection.coldStart, songSupport = songSupport, orderToday = orderToday)
             // The data for tuning HomeRowConfig's thresholds on device.
             val scores =
                 rows.joinToString("; ") { row ->
@@ -152,7 +156,8 @@ class TurtleHomeRows(
                     "${row.key} value=${s.value.r2()} known=${s.knownArtistShare.r2()} disliked=${s.dislikedShare.r2()}"
                 }
             val how = if (selection.coldStart) "cold start" else "scored"
-            TurtleLog.info("home rows: $how, kept ${selection.ids} of [$scores], grid ${gridIds.size}/${grid.size}")
+            val tiles = "grid ${gridIds.size}/${grid.size}"
+            TurtleLog.info("home rows: $how, kept ${selection.ids} of [$scores], $tiles, ordering $orderToday of ${songSupport.keys}")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -162,6 +167,18 @@ class TurtleHomeRows(
         }
         lastInput = rows to grid
         lastSignature = signature
+    }
+
+    /** Each of [rows] to its songs' support by id, ordered today or not; nothing at cold start. */
+    private suspend fun songSupport(rows: List<HomeShelf>): Map<String, Map<String, SongSupport>> {
+        val byRow = LinkedHashMap<String, Map<String, SongSupport>>()
+        for (row in rows) {
+            val songs = row.items.filterIsInstance<SongItem>().distinctBy { it.id }
+            if (songs.isEmpty()) continue
+            val supports = taste.rowSongSupport(songs.map { it.toTrackMeta() }) ?: continue
+            byRow[row.key] = songs.zip(supports) { song, support -> song.id to support }.toMap()
+        }
+        return byRow
     }
 
     private fun Double.r2(): String = (round(this * 100) / 100).toString()

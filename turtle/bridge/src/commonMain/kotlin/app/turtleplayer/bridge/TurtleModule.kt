@@ -269,21 +269,23 @@ object TurtleBridge {
      * Shell: [songs] are about to play from [place] (row [row], a Home row key, or null). Call right
      * before starting playback. HOME_TURTLE rows carry each song's generator and slot. A YouTube
      * row's tags record each song's 1-based position in [songs], the row's songs in display order (a
-     * repeated id keeps its first). Fails open.
+     * repeated id keeps its first) and [youtubeOrder]: who ordered that row, or null for a row Turtle
+     * never orders. Fails open.
      */
     fun attributePlay(
         place: PlayPlace,
         row: String?,
         songs: List<SongItem>,
+        youtubeOrder: Served? = null,
     ) {
         try {
             val koin = GlobalContext.getOrNull() ?: return
             val observer = koin.getOrNull<PlayerObserver>() ?: return
             val home = koin.getOrNull<TurtleHomeShelves>()
-            // Home shows YouTube's rows in the order YouTube sent them, so where a song sits in the row
-            // is the baseline for reordering it. Other Home callers pass one tile or a whole mix queue.
+            // Where a song sits in a YouTube row, in YouTube's order or Turtle's, is what reordering is
+            // measured by. Other Home callers pass one tile or a whole mix queue.
             val youtubeRow = place == PlayPlace.HOME_YOUTUBE
-            val served = if (youtubeRow) Served.PROVIDER else null
+            val served = if (youtubeRow) youtubeOrder else null
             val tags = LinkedHashMap<String, String>()
             songs.forEachIndexed { i, song ->
                 if (song.id in tags) return@forEachIndexed

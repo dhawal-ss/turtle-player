@@ -614,6 +614,30 @@ class TasteEngine(
         items.map(scorer::matches)
     }
 
+    /**
+     * How well the profile supports each of a row's [tracks], for [orderRowSongs]; null below
+     * [TasteConfig.coldStartPlays] finished plays, where rows keep their provider order.
+     */
+    suspend fun rowSongSupport(tracks: List<TrackMeta>): List<SongSupport>? = mutex.withLock {
+        ensureLoaded()
+        if (profile.finishedPlays < config.coldStartPlays) return@withLock null
+        val scorer = RowScorer(profile, controls, config.homeRows, songs)
+        val now = clock.nowMs()
+        tracks.map { scorer.support(it, now) }
+    }
+
+    /**
+     * Whether the Matched row [rowKey] shows its songs reordered today ([HomeRowConfig.songOrder]).
+     * With [SongOrder.ALTERNATE] each row flips between ordered and provider order every local day,
+     * about half the rows in each arm on any day, so plays from both orders get collected.
+     */
+    fun ordersRow(rowKey: String): Boolean =
+        when (config.homeRows.songOrder) {
+            SongOrder.OFF -> false
+            SongOrder.ON -> true
+            SongOrder.ALTERNATE -> (rowKey.hashCode().toLong() + localDay(clock.nowMs())).mod(2L) == 0L
+        }
+
     private fun homeRowScorerLocked() = RowScorer(profile, controls, config.homeRows)
 
     /**

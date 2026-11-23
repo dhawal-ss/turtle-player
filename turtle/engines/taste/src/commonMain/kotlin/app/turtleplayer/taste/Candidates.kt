@@ -63,7 +63,11 @@ enum class Served(val tag: String) {
     RANKED("ranked"),
     /** A provider search hit queued as it came, without ranking (Infinity's genre hits). */
     DIRECT("direct"),
-    /** The provider's order by design or because there was nothing to rank (Home's YouTube rows, a one-song page). */
+    /**
+     * The provider's order by design or because there was nothing to rank: a one-song page, and a
+     * YouTube row on Home that Turtle could order but leaves in YouTube's order today (the comparison
+     * arm). A YouTube row Turtle never orders carries no serving path.
+     */
     PROVIDER("provider"),
     /** The provider's order because ranking ran out of time. */
     TIMEOUT("timeout"),

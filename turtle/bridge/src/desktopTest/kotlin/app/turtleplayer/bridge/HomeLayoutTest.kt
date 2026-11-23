@@ -1,8 +1,11 @@
 package app.turtleplayer.bridge
 
 import app.turtleplayer.core.ArtistKey
+import app.turtleplayer.core.TrackKey
 import app.turtleplayer.taste.RowItem
+import app.turtleplayer.taste.SongSupport
 import com.metrolist.shared.model.AlbumItem
+import com.metrolist.shared.model.AlbumTiny
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.ArtistTiny
 import com.metrolist.shared.model.Chip
@@ -23,12 +26,13 @@ class HomeLayoutTest {
         id: String,
         artist: String = "Queen",
         podcastId: String? = null,
+        album: AlbumTiny? = null,
     ) = SongItem(
         id = id,
         title = "t$id",
         thumbnail = null,
         artists = listOf(ArtistTiny(null, artist)),
-        album = null,
+        album = album,
         duration = 200,
         podcastId = podcastId,
     )
@@ -159,5 +163,63 @@ class HomeLayoutTest {
         assertEquals(RowItem.Collection(listOf(ArtistKey.of("Queen"))), album.toRowItem())
         assertEquals(RowItem.Artist(ArtistKey.of("Queen")), ArtistItem("UC1", "Queen", null).toRowItem())
         assertEquals(RowItem.Collection(emptyList()), PlaylistItem("pl", "P", null).toRowItem())
+    }
+
+    @Test
+    fun matchedRowsAreReorderedOnlyWhenEverySongShownIsSupported() {
+        fun support(
+            id: String,
+            artist: String,
+            score: Double,
+        ) = id to SongSupport(score, heard = true, disliked = false, artist = ArtistKey.of(artist), song = TrackKey.youtube(id))
+
+        val supports = mapOf(support("a1", "A", 0.1), support("b1", "B", 0.9))
+
+        fun layout(
+            vararg items: YTItem,
+            songSupport: Map<String, SongSupport> = supports,
+            orderToday: Set<String> = setOf("mix"),
+        ): HomeLayout {
+            val pick =
+                HomeRowsPick(
+                    rowKeys = listOf("mix"),
+                    gridIds = emptySet(),
+                    scored = true,
+                    songSupport = mapOf("mix" to songSupport),
+                    orderToday = orderToday,
+                )
+            return HomeLayout.of(listOf(shelf("mix", *items)), HomeUiState(), emptyList(), pick, HomeYouTubeRows.MATCHED)
+        }
+
+        fun order(layout: HomeLayout) =
+            layout.youtubeRows
+                .single()
+                .items
+                .map { it.id }
+
+        val reordered = layout(song("a1", "A"), song("b1", "B"))
+        assertEquals(listOf("b1", "a1"), order(reordered))
+        assertEquals(setOf("mix"), reordered.orderedRows)
+        assertEquals(emptySet(), reordered.comparisonRows)
+        // Not its day: YouTube's order, marked as the comparison.
+        val comparison = layout(song("a1", "A"), song("b1", "B"), orderToday = emptySet())
+        assertEquals(listOf("a1", "b1"), order(comparison))
+        assertEquals(emptySet(), comparison.orderedRows)
+        assertEquals(setOf("mix"), comparison.comparisonRows)
+
+        // An album card in the row, a song the pick never saw, one album's tracks: YouTube's order.
+        val withAlbum = layout(song("a1", "A"), song("b1", "B"), album)
+        assertEquals(listOf("a1", "b1", "al1"), order(withAlbum))
+        assertEquals(emptySet(), withAlbum.orderedRows)
+        assertEquals(emptySet(), withAlbum.comparisonRows)
+        val stale = layout(song("a1", "A"), song("b1", "B"), songSupport = mapOf(support("b1", "B", 0.9)))
+        assertEquals(listOf("a1", "b1"), order(stale))
+        assertEquals(emptySet(), stale.orderedRows)
+        assertEquals(emptySet(), stale.comparisonRows)
+        val oneAlbum = AlbumTiny("alb1", "A")
+        val sequence = layout(song("a1", "A", album = oneAlbum), song("b1", "B", album = oneAlbum))
+        assertEquals(listOf("a1", "b1"), order(sequence))
+        assertEquals(emptySet(), sequence.orderedRows)
+        assertEquals(emptySet(), sequence.comparisonRows)
     }
 }

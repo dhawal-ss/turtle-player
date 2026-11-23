@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import app.turtleplayer.bridge.NotInterested
 import app.turtleplayer.bridge.TurtleBridge
 import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.Served
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.rememberHover
@@ -52,14 +53,15 @@ internal object ShellHomeFeedback {
     // Outlives the menu: hiding must finish after the menu that started it has closed.
     private val scope = MainScope()
 
-    /** Attributes [songs] to [place]/[row], then runs [play] (which starts playback). */
+    /** Attributes [songs] to [place]/[row] (a YouTube row ordered by [youtubeOrder], null when Turtle never orders it), then runs [play] (which starts playback). */
     fun play(
         place: PlayPlace,
         row: String?,
         songs: List<SongItem>,
+        youtubeOrder: Served? = null,
         play: () -> Unit,
     ) {
-        TurtleBridge.attributePlay(place, row, songs)
+        TurtleBridge.attributePlay(place, row, songs, youtubeOrder)
         play()
     }
 

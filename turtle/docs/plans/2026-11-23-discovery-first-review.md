@@ -299,7 +299,7 @@ Below 32 the JDK uses insertion sort, which does not check the contract.
 
 - **Step 1** is done; the decision is above. Steps 5–7 wait for the owner.
 - **Step 2:** done in the working tree; see [Step 2 baseline](#step-2-baseline) below.
-- **Step 3:** score and order only visible songs; use the per-song `matches` and skip signals.
+- **Step 3:** done in the working tree; see [Step 3: ordered Matched rows](#step-3-ordered-matched-rows) below.
 - **Step 4a:**
   - draw jitter once per item, which also removes the intermittent empty batch. Done in commit `adfbd029`: `familiarCandidates` now draws each song's shuffle before sorting;
   - put purged hits into a "ruled out" set so they stop re-entering and starving the pool;
@@ -325,11 +325,11 @@ Play tags now say how a suggested song was ordered, so local history can separat
 | --- | --- | --- |
 | `ranked` | ordered by Turtle's taste ranking | radio pages ranked in time; Infinity genre and "more like" songs ranked in time |
 | `direct` | a provider search hit queued as it came | Infinity's two search hits per genre fill |
-| `provider` | the provider's order by design, or nothing to rank | Home's YouTube rows; one-song radio pages; Infinity fills with no seed or fewer than two songs |
+| `provider` | the provider's order by design, or nothing to rank | Matched YouTube rows Turtle could order but leaves in YouTube's order today (the comparison arm, from step 3); one-song radio pages; Infinity fills with no seed or fewer than two songs |
 | `timeout` | provider order because ranking ran out of time | radio and Infinity |
 | `failed` | provider order because ranking threw | radio and Infinity |
 
-Position is the song's 1-based place among the songs of the YouTube row the listener tapped (`home-yt+provider@3/-/-/<row>`). Other places carry no position: the session's own position already orders radio and Infinity plays, and other Home callers pass one tile or a whole mix queue.
+Position is the song's 1-based place among the songs of the YouTube row the listener tapped, as displayed (`home-yt+provider@3/-/-/<row>`). Since step 3, a YouTube row Turtle never orders (All mode, cold start, rows with album or playlist cards, one album's tracks, a stale pick) carries a position but no serving path. Other places carry no position: the session's own position already orders radio and Infinity plays, and other Home callers pass one tile or a whole mix queue.
 
 **Report.** `OriginReporter` (`turtle/engines/taste/.../eval/OriginReport.kt`) groups local plays by place, serving path, row position and listener maturity. Maturity is cold below the engine's `coldStartPlays` (50) finished plays, light below 500, and established after that. For each group it reports started, quick-skipped and finished plays, the untagged share, and the plan's early-skip rate. The KDoc defines a run, a deliberate start and eligibility. To print it for a copy of a phone's database, as aggregates only:
 
@@ -364,3 +364,43 @@ The samples are small. Treat these figures as a starting point, not a finding.
 - **Home row into radio.** A Home row whose queue continues into upstream's radio opens a second, radio run.
 - **Untagged paths.** Desktop's first Start radio page never passes through `rankRadio`, so its plays stay untagged.
 - **Thin history.** The phone's local history held 265 plays on 23 November, almost none with radio or YouTube-row tags. The new tags only accumulate from this build on, so the synthetic replay remains the comparison for step 3 until real history builds up.
+
+## Step 3: ordered Matched rows
+
+Matched YouTube rows on Home can now show their songs in Turtle's order, so a song the listener skips no longer leads a shelf picked for them. The first review's case 1 is the acceptance test: the row `[x1, n1, n2, lv1]` now reads `[lv1, n1, n2, x1]`.
+
+**What gets ordered.** Only these rows are ordered:
+- Matched mode, after the cold start (50 finished plays) and after a successful scoring;
+- rows of two or more songs and nothing else;
+- not all from one album;
+- every shown song covered by the scoring pick.
+
+Ordering runs after hidden songs and grid tiles leave the row, so the rules below hold on what is shown. Scoring now also sees the row without hidden songs. Playback follows the displayed order. All mode, Off mode, charts, Explore rows and Turtle's own mixes are untouched.
+
+**How a song is scored** (`RowScorer.support`, `HomeRowConfig`). Scores use the listener's taste profile.
+
+| Song | Score | Order |
+| --- | --- | --- |
+| Played on this upload | its own normalized affinity, which already includes quick-skip penalties; halved while positive if heard within the last 3 hours, by the clock | by score |
+| Another upload of a played song | 0 | its own record is not visible |
+| Never heard | its best artist's normalized affinity × 0.3; 0 when no artist is known | by score; × 0.3 so it does not outrank a song finished once |
+| Disliked: Not interested, a muted or marked artist, or an artist the listener is net negative on | none | last, never dropped |
+
+A song the listener likes is not disliked just because its artist's other songs were skipped.
+
+**How a row is ordered** (`orderRowSongs`). The best supported song comes first, and ties keep YouTube's order. The first three hold one song per artist (`- Topic` included) and per recording. Those three are supported songs first, then neutral ones, never a song with a negative score. When none of the three is new to the listener, the best supported unheard song takes the third slot. A row with nothing supported or disliked keeps YouTube's order.
+
+**Alternating rows** (owner's choice). `HomeRowConfig.songOrder` defaults to `ALTERNATE`: each row is ordered on alternate local days, chosen from its key and the day, so about half the rows are ordered on any day. The tag says which happened:
+
+| Tag | Meaning |
+| --- | --- |
+| `home-yt+ranked@n` | Turtle ordered the row |
+| `home-yt+provider@n` | Turtle could have ordered the row but kept YouTube's order today |
+| `home-yt@n` | Turtle never orders the row |
+
+The probe can therefore compare early skips for `ranked` against `provider`. `ON` and `OFF` are the other settings, with no UI.
+
+**Known limits.**
+- **Reshuffles.** A row can change order without any action from the listener: when upstream refreshes Home and rescoring lands, or when the day changes at the next rescore.
+- **Another upload of a skipped or Not-interested song** scores 0 rather than inheriting that song's record. The record is kept per upload.
+- **No device check yet.** Ordering has not been checked on a device. The phone was locked.

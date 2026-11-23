@@ -1,9 +1,12 @@
 package app.turtleplayer.bridge
 
 import app.turtleplayer.core.ArtistKey
+import app.turtleplayer.taste.HomeRowConfig
 import app.turtleplayer.taste.RowCandidate
 import app.turtleplayer.taste.RowItem
 import app.turtleplayer.taste.ShelfKind
+import app.turtleplayer.taste.SongSupport
+import app.turtleplayer.taste.orderRowSongs
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.SongItem
@@ -44,6 +47,10 @@ data class HomeRowsPick(
     val rowKeys: List<String>,
     val gridIds: Set<String>,
     val scored: Boolean,
+    /** Row key, then song id, to the song's support, for every picked row once scored. */
+    val songSupport: Map<String, Map<String, SongSupport>> = emptyMap(),
+    /** Picked rows the taste engine orders today ([app.turtleplayer.taste.TasteEngine.ordersRow]); the others are the comparison. */
+    val orderToday: Set<String> = emptySet(),
 )
 
 /**
@@ -62,6 +69,10 @@ class HomeLayout(
     val youtubeRows: List<HomeShelf>,
     /** Each grid tile's source by canonical id, see [gridOrigin]. */
     private val origins: Map<String, String> = emptyMap(),
+    /** Keys of [youtubeRows] whose songs show in Turtle's order rather than YouTube's. */
+    val orderedRows: Set<String> = emptySet(),
+    /** Keys of [youtubeRows] Turtle could order but leaves in YouTube's order today, to compare against [orderedRows]. */
+    val comparisonRows: Set<String> = emptySet(),
 ) {
     /** Where a grid tile came from, for play attribution: "pin", "recent" or "youtube:<row key>". */
     fun gridOrigin(item: YTItem): String = origins[canonicalHomeItemId(item)] ?: ORIGIN_RECENT
@@ -138,6 +149,15 @@ class HomeLayout(
             state: HomeUiState,
         ) = item.id in state.speedDialPinnedIds || canonicalHomeItemId(item) in state.speedDialPinnedIds
 
+        /** [shelves] without what the listener hid: hidden Turtle rows, and hidden items from every row. */
+        fun visible(
+            shelves: List<HomeShelf>,
+            hidden: HiddenSet,
+        ): List<HomeShelf> =
+            shelves
+                .filterNot { it.key.startsWith(TURTLE_SHELF_KEY_PREFIX) && hidden.hidesShelf(it.key) }
+                .map { shelf -> shelf.copy(items = shelf.items.filterNot(hidden::hides)) }
+
         /** [hidden]: W9's TurtleBridge.hiddenSet, applied before the grid is filled. */
         fun of(
             shelves: List<HomeShelf>,
@@ -148,10 +168,7 @@ class HomeLayout(
             hidden: HiddenSet = HiddenSet(),
         ): HomeLayout {
             // What the listener hid leaves Home at once: it never takes a tile, and a row it empties disappears.
-            val visible =
-                shelves
-                    .filterNot { it.key.startsWith(TURTLE_SHELF_KEY_PREFIX) && hidden.hidesShelf(it.key) }
-                    .map { shelf -> shelf.copy(items = shelf.items.filterNot(hidden::hides)) }
+            val visible = visible(shelves, hidden)
             val recents = jumpBackIn?.filterNot(hidden::hides)
 
             val turtle = visible.filter { it.key.startsWith(TURTLE_SHELF_KEY_PREFIX) && it.items.isNotEmpty() }.distinctBy { it.key }
@@ -217,13 +234,51 @@ class HomeLayout(
                         emptyList()
                     }
                 }
-            val youtubeRows =
+            val deduped =
                 shown
                     .map { row -> row.copy(items = row.items.filterNot { canonicalHomeItemId(it) in gridIds }) }
                     .filter { it.items.isNotEmpty() }
+            // Ordered after the grid takes its tiles, so the opener's caps hold on the songs actually shown.
+            val ordered = LinkedHashSet<String>()
+            val comparison = LinkedHashSet<String>()
+            val youtubeRows =
+                if (mode != HomeYouTubeRows.MATCHED) {
+                    deduped
+                } else {
+                    deduped.map { row ->
+                        val songs = orderedSongs(row, pick?.songSupport?.get(row.key)) ?: return@map row
+                        if (row.key !in pick?.orderToday.orEmpty()) {
+                            comparison += row.key
+                            return@map row
+                        }
+                        ordered += row.key
+                        row.copy(items = songs)
+                    }
+                }
 
-            return HomeLayout(grid, gridReady, mixes, moreLike, jumpBackInRow, youtubeRows, origins)
+            return HomeLayout(grid, gridReady, mixes, moreLike, jumpBackInRow, youtubeRows, origins, ordered, comparison)
         }
+
+        /**
+         * [row]'s songs in Turtle's order, or null to keep YouTube's: a row with anything but songs,
+         * fewer than two, one album's tracks (a sequence), or a song [supports] does not cover (the
+         * pick predates the row's current items).
+         */
+        private fun orderedSongs(
+            row: HomeShelf,
+            supports: Map<String, SongSupport>?,
+        ): List<SongItem>? {
+            if (supports == null) return null
+            val songs = row.items.filterIsInstance<SongItem>()
+            if (songs.size < 2 || songs.size != row.items.size) return null
+            val albums = songs.map { it.album?.id }
+            if (albums.all { it != null && it == albums.first() }) return null
+            val support = songs.map { supports[it.id] ?: return null }
+            return orderRowSongs(support, OPENER_SIZE).map(songs::get)
+        }
+
+        // TasteEngine keeps its config private; the app builds it with the default one.
+        private val OPENER_SIZE = HomeRowConfig().openerSize
     }
 }
 
