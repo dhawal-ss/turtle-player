@@ -300,11 +300,7 @@ Below 32 the JDK uses insertion sort, which does not check the contract.
 - **Step 1** is done; the decision is above. Steps 5–7 wait for the owner.
 - **Step 2:** done in the working tree; see [Step 2 baseline](#step-2-baseline) below.
 - **Step 3:** done in the working tree; see [Step 3: ordered Matched rows](#step-3-ordered-matched-rows) below.
-- **Step 4a:**
-  - draw jitter once per item, which also removes the intermittent empty batch. Done in commit `adfbd029`: `familiarCandidates` now draws each song's shuffle before sorting;
-  - put purged hits into a "ruled out" set so they stop re-entering and starving the pool;
-  - check recording identity, not video ID;
-  - inject `Clock` and `Random` through Koin.
+- **Step 4a:** the jitter fix is in commit `adfbd029`; the rest is in the working tree. See [Step 4a: qualified genre picks](#step-4a-qualified-genre-picks) below.
 - **Step 4b:**
   - apply the merged controls on every fallback path, on both platforms;
   - pass the station seed;
@@ -435,3 +431,42 @@ On the phone, tapping a second Home song eight seconds in was recorded as `STOPP
 - genuine Next presses change queue detail too.
 
 Those false skips fade at the profile's 90-day half-life. A read-time correction in the engine remains possible once the logs show the cause.
+
+## Step 4a: qualified genre picks
+
+The Infinity Mix's genre picks now pass the same checks as everything else it plays (`InfinityMix.kt`).
+
+**One eligibility rule** applies to direct search hits, radio results, "more like" songs, "for you" and favourites.
+
+- **Ruled out.** These never play, never enter a pool and never seed a radio:
+  - a disliked song;
+  - a Not-interested song, and every upload of it the profile or song cache knows or the same response brings;
+  - a song by a muted or blocked artist;
+  - a song by an artist passed this session.
+- **Already used.** These never play again but may still seed a radio, so a genre whose top hits have all played keeps finding new songs:
+  - taken this batch;
+  - queued;
+  - served this session, by upload or recording.
+- **Liked seeds too.** A song the listener liked and later ruled out seeds nothing, and passing on a song drops it from the liked seeds.
+
+**Recording identity.** Songs are compared by recording (`SongKeys`, as the taste engine does), so an upload twin such as `X - Topic` counts as the same song. Live and remix versions stay distinct. A twin of a song the listener has heard is not new. Artists are compared by `ArtistKey`, which strips `- Topic`. A song with no artist is never spaced, passed or excluded as an artist.
+
+**Pools.** Unusable songs leave a pool before the mix decides whether to refill it, so a pool of ruled-out songs no longer blocks a refill. This applies to genre, "more like" and "for you" pools. Step-2 attribution is unchanged: the same `Served` tags, with the same source, slot and row.
+
+**Test seams.** `InfinityMix` takes an internal `InfinitySource` for search and radio, `SongVotes` for likes and dislikes, a `Random` and the core `Clock`. Production defaults are unchanged, and so is the Koin line.
+
+**Tests** (`InfinityMixTest`, bridge desktop tests):
+
+| Test | What it shows |
+| --- | --- |
+| Seed stability | a fixed seed gives the same batch |
+| Ruled-out hits | disliked, Not-interested, muted hits and a never-played Not-interested song's `- Topic` twin never play or seed a radio |
+| Ruled-out pool | a pool that became wholly ruled out still yields an eligible song |
+| Played hits | a genre whose hits have all played keeps seeding radios |
+| Liked seed | a liked song marked Not interested afterwards seeds nothing |
+
+Removing the exclusion filter, the twin check, twin learning or the liked-seed check makes a test fail. The ruled-out-pool test would also pass without the purge-first change, because the batch retries and refills on its next attempt. Purging first saves that wasted attempt.
+
+**Known limits.**
+- **Unknown blocked songs.** A twin of a blocked song is caught only when the profile, the song cache or the same response knows the blocked one.
+- **Muted taste clusters.** These are still checked only when the taste engine ranks a pool. Direct hits and provider-order fallbacks skip that check.
