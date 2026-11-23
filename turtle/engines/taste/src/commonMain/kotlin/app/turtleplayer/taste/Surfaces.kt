@@ -1,6 +1,6 @@
 package app.turtleplayer.taste
 
-/** Home and player surfaces. The UI maps each kind and [Reason] to localized text. */
+/** Home and player surfaces. The UI maps each kind and [Reason] to localized text. Persisted by name in [TasteState]; never rename. */
 enum class ShelfKind {
     /** Autoplay / Up Next: session model, re-ranked on every play event. */
     UP_NEXT,
@@ -19,7 +19,7 @@ enum class ShelfKind {
      * radios of their top tracks, never-heard artists first. Refresh Mondays.
      */
     WEEKLY_DISCOVERY,
-    /** New releases from affinity artists. Refresh Fridays. */
+    /** New releases from affinity artists. Refresh daily. */
     FRESH_FOR_YOU,
     /** Loved but unheard for 60+ days. Refresh daily. */
     REDISCOVER,
@@ -48,7 +48,8 @@ val QueueItem.lessLikeThis: LessLikeThis get() = LessLikeThis.Track(key, track.a
 /**
  * How long a home shelf stays as built, as in Spotify: mixes are the day's mixes, discovery is the
  * week's. Kept shelves still drop tracks the listener marks "less like this" or artists they mute.
- * On repeat is not listed: it follows the listening live.
+ * On repeat is not listed: it follows the listening live. Persisted by name in [TasteState]; never
+ * rename.
  */
 enum class ShelfCadence(val weekly: Boolean) {
     /** Daily Mixes (artist mixes without vectors). */

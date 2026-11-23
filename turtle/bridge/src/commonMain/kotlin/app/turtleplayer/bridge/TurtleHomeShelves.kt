@@ -20,14 +20,17 @@ import app.turtleplayer.taste.Reason
 import app.turtleplayer.taste.Shelf
 import app.turtleplayer.taste.ShelfKind
 import app.turtleplayer.taste.TasteEngine
+import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.ui.screens.HomeShelf
 import com.metrolist.shared.ui.screens.HomeShelfHeaderAction
 import com.metrolist.shared.ui.screens.HomeShelfStyle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
 import org.jetbrains.compose.resources.getString
 
 /**
@@ -36,19 +39,40 @@ import org.jetbrains.compose.resources.getString
  * Shelves live in Compose state: upstream builds Home during composition, so reading [shelves]
  * there recomposes Home whenever we refresh. Refreshes happen at start, every few plays and on a
  * timer, never on the UI thread.
+ *
+ * Kept shelves and their songs survive restarts: the engine's kept shelves are saved with the
+ * taste state after every build, and their upstream songs in our database, pinned in [cache]. At
+ * start the saved songs come back first, so the day's and week's rows show before any network call.
  */
 class TurtleHomeShelves(
     private val taste: TasteEngine,
     private val events: PlayEventStore,
     private val cache: SongCache,
+    private val db: SqlitePlayEventStore,
 ) {
     var shelves: List<HomeShelf> by mutableStateOf(emptyList())
         private set
 
+    /** Guards [restored], [savedSongIds], publishing and persisting. Not reentrant: the `Locked` functions do not take it. */
     private val refreshLock = Mutex()
+    private val json = Json { ignoreUnknownKeys = true }
+    private var restored = false
+    private var savedSongIds: List<String> = emptyList()
 
     fun start(scope: CoroutineScope) {
         scope.launch {
+            // Saved songs, then Turtle's rows from disk, in one hold of the lock: a refresh() from
+            // elsewhere (fresh releases) cannot slip a network build in before the first paint.
+            refreshLock.withLock {
+                restoreLocked()
+                try {
+                    publishLocked(taste.keptShelves())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    TurtleLog.error("home: could not show the kept shelves", e)
+                }
+            }
             refresh()
             var playsSinceRefresh = 0
             events.newEvents.collect {
@@ -66,12 +90,78 @@ class TurtleHomeShelves(
         }
     }
 
+    /** Builds, shows and saves the shelves. Does nothing until [restore] has run, so startup never saves defaults over the saved state. */
     suspend fun refresh() = refreshLock.withLock {
-        val label = getString(Res.string.turtle_shelf_label)
+        if (!restored) return@withLock
         val fromEngine = taste.homeShelves()
+        publishLocked(fromEngine)
+        persistLocked(fromEngine)
+    }
+
+    /** Loads the saved shelf songs into the cache, pinned. Until this has run, [refresh] does nothing. */
+    internal suspend fun restore() {
+        refreshLock.withLock { restoreLocked() }
+    }
+
+    private suspend fun restoreLocked() {
+        try {
+            val songs =
+                db.loadShelfSongs().mapNotNull { row ->
+                    runCatching { json.decodeFromString(SongItem.serializer(), row) }.getOrNull()
+                }
+            cache.replaceShelf(songs)
+            savedSongIds = songs.map { it.id }
+            TurtleLog.info("home: restored ${songs.size} shelf songs")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Home must never stay empty because the table is unreadable.
+            TurtleLog.error("home: could not restore the shelf songs", e)
+        }
+        restored = true
+    }
+
+    /**
+     * Pins the songs of [fromEngine]'s items, saves them when the set changed, then saves the
+     * taste state (which now holds the kept shelves). Called after every build, so a kill right
+     * after a build, with no play in between, keeps the day's shelves.
+     */
+    internal suspend fun persist(fromEngine: List<Shelf>) = refreshLock.withLock { persistLocked(fromEngine) }
+
+    private suspend fun publishLocked(fromEngine: List<Shelf>) {
+        val label = getString(Res.string.turtle_shelf_label)
         val built = fromEngine.mapIndexedNotNull { index, shelf -> toHomeShelf(shelf, index, label) }
         shelves = built
         TurtleLog.info("home: engine ${fromEngine.size} shelves (${fromEngine.joinToString { "${it.kind}=${it.items.size}" }}), showing ${built.size} (${built.joinToString { "${it.key.substringAfter(':')}=${it.items.size}" }})")
+    }
+
+    private suspend fun persistLocked(fromEngine: List<Shelf>) {
+        // Songs of items hidden by a mute at build time are not pinned; unmuting the same day is rare.
+        try {
+            val songs =
+                fromEngine
+                    .flatMap { it.items }
+                    .mapNotNull { it.track.youtubeId }
+                    .distinct()
+                    .mapNotNull { cache.get(it) }
+            cache.replaceShelf(songs)
+            val ids = songs.map { it.id }
+            if (ids != savedSongIds) {
+                db.saveShelfSongs(songs.map { it.id to json.encodeToString(SongItem.serializer(), it) })
+                savedSongIds = ids
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("home: could not save the shelf songs", e)
+        }
+        try {
+            writeTasteState(db, taste)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("home: could not save taste state", e)
+        }
     }
 
     /** Upstream's shelves with ours inserted after Speed Dial (or at the top). */

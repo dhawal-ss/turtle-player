@@ -6,16 +6,19 @@ import app.turtleplayer.core.TrackKey
 /**
  * What the engine learned outside the play log and must keep across restarts: the listener's
  * direct controls ("less like this", mutes, dismissed shelves, onboarding), the exploration
- * posterior and the recently recommended tracks. The discovery dial is persisted by the app on its
- * own and is not part of this state.
+ * posterior, the recently recommended tracks and Home's kept shelves ([KeptShelves]). The discovery
+ * dial is persisted by the app on its own and is not part of this state.
  *
  * [encode] produces a small line-based text that the app stores as it likes; [decode] never throws
- * and returns null for text it cannot read, so a damaged value costs the state, not the app.
+ * and returns null for text it cannot read, so a damaged value costs the state, not the app. Kept
+ * shelves follow the other lines under their own payload version, so unreadable shelves cost only
+ * the shelves, and builds that predate them still read the rest.
  */
 data class TasteState(
     val controls: UserControls = UserControls(),
     val exploration: ExplorationState = ExplorationState(),
     val recent: List<TrackKey> = emptyList(),
+    val kept: List<KeptShelves> = emptyList(),
 ) {
     fun encode(): String = buildString {
         append(VERSION)
@@ -29,6 +32,7 @@ data class TasteState(
         line("boostedClusters", controls.boostedClusters.map { a -> a.centroid.joinToString(",") })
         line("exploration", listOf(exploration.alpha.toString(), exploration.beta.toString()))
         line("recent", recent.map { it.value })
+        KeptShelvesCodec.encode(kept).forEach { append('\n').append(it) }
     }
 
     private fun StringBuilder.line(key: String, items: List<String>) {
@@ -66,7 +70,8 @@ data class TasteState(
             val exploration = items("exploration").takeIf { it.size == 2 }
                 ?.let { (a, b) -> ExplorationState(a.toDouble(), b.toDouble()) }
                 ?: ExplorationState()
-            TasteState(controls, exploration, items("recent").map(::TrackKey))
+            val kept = runCatching { KeptShelvesCodec.decode(lines.drop(1)) }.getOrDefault(emptyList())
+            TasteState(controls, exploration, items("recent").map(::TrackKey), kept)
         }.getOrNull()
     }
 }

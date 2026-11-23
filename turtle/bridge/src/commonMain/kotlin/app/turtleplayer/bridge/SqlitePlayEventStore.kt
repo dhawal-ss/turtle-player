@@ -69,6 +69,11 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             connection.execSQL("CREATE TABLE IF NOT EXISTS observed_song (id TEXT PRIMARY KEY, json TEXT NOT NULL)")
             connection.execSQL("PRAGMA user_version = 4")
         }
+        if (version < 5) {
+            // Songs on Home's Turtle shelves, so the day's and week's shelves stay playable after a restart.
+            connection.execSQL("CREATE TABLE IF NOT EXISTS shelf_song (id TEXT PRIMARY KEY, json TEXT NOT NULL)")
+            connection.execSQL("PRAGMA user_version = 5")
+        }
     }
 
     private fun eventTable(name: String) =
@@ -164,6 +169,33 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
         }
         links to songs
     }
+
+    /** Replaces the saved songs of Home's Turtle shelves: (YouTube id, upstream SongItem JSON). */
+    suspend fun saveShelfSongs(songs: List<Pair<String, String>>) {
+        db {
+            transaction {
+                connection.execSQL("DELETE FROM shelf_song")
+                connection.prepare("INSERT OR REPLACE INTO shelf_song (id, json) VALUES (?, ?)").use { s ->
+                    for ((id, json) in songs) {
+                        s.bindText(1, id)
+                        s.bindText(2, json)
+                        s.step()
+                        s.reset()
+                    }
+                }
+            }
+        }
+    }
+
+    /** The saved shelf songs' JSON, in the order they were saved. */
+    suspend fun loadShelfSongs(): List<String> =
+        db {
+            connection.prepare("SELECT json FROM shelf_song ORDER BY rowid").use { s ->
+                val out = ArrayList<String>()
+                while (s.step()) out += s.getText(0)
+                out
+            }
+        }
 
     private fun transaction(block: () -> Unit) {
         connection.execSQL("BEGIN")

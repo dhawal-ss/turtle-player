@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TasteEngineTest {
@@ -376,6 +377,103 @@ class TasteEngineTest {
         )
         assertEquals(state, TasteState.decode(state.encode()))
         assertEquals(TasteState(), TasteState.decode(TasteState().encode()))
+    }
+
+    private val fullTrack = TrackMeta(
+        TrackKey("yt:a1"), "Song", listOf("Artist A", "Guest"), album = "LP", durationMs = 201_000,
+        releasedAtMs = 1_700_000_000_000, youtubeId = "a1", isrc = "USX1", explicit = true, popularity = 0.25f,
+    )
+    private val bareTrack = TrackMeta(TrackKey("meta:artist b|song,live"), "Bare", listOf("Artist B"), album = "")
+    private fun item(t: TrackMeta, reason: Reason = Reason.SimilarTo(ArtistKey("a"))) =
+        QueueItem(t, CandidateSource.SESSION, reason, SlotKind.FAMILIAR, 1f)
+
+    @Test
+    fun tasteStateRoundTripsKeptShelves() {
+        val items = listOf(
+            QueueItem(fullTrack, CandidateSource.UPSTREAM_RADIO, Reason.UpstreamRadio(TrackKey("yt:seed")), SlotKind.DISCOVERY, 0.8125f),
+            QueueItem(bareTrack, CandidateSource.LIBRARY, Reason.Rediscover(TrackKey("yt:r"), 1_600_000_000_000), SlotKind.FAMILIAR, -1.5f),
+        )
+        val mix = Shelf("daily_mix:artist:artist a", ShelfKind.DAILY_MIX, Reason.DailyMix(0, listOf(ArtistKey("artist a")), seedArtist = ArtistKey("artist a")), items)
+        val weekly = Shelf("weekly_discovery:weekly", ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, items.reversed())
+        val state = TasteState(
+            UserControls(mutedArtists = setOf(ArtistKey("m"))),
+            kept = listOf(KeptShelves(ShelfCadence.DAILY, 20_000, listOf(mix)), KeptShelves(ShelfCadence.WEEKLY, 19_997, listOf(weekly))),
+        )
+        assertEquals(state, TasteState.decode(state.encode()))
+        assertTrue(state.encode().startsWith("turtle-taste-state 1\n"), "header unchanged, so older builds still read it")
+    }
+
+    @Test
+    fun everyHomeReasonKeepsItsKeyAcrossARoundTrip() {
+        val a = ArtistKey("a")
+        val b = ArtistKey("b")
+        val t = TrackKey("yt:t")
+        val reasons = listOf(
+            Reason.BecauseYouListened(t), Reason.BecauseYouReplayed(t), Reason.BecauseYouLiked(t), Reason.SimilarTo(a),
+            Reason.ListenersAlsoPlay(a), Reason.FromYourTaste(2, listOf(a, b)), Reason.FreshFrom(a), Reason.Rediscover(t, 42),
+            Reason.UpstreamRadio(t), Reason.BecauseYouPicked(a), Reason.DailyMix(1, listOf(a, b)), Reason.DailyMix(0, listOf(a), seedArtist = a),
+            Reason.OnRepeat, Reason.NewForYou, Reason.FreshForYou, Reason.RediscoverShelf,
+        )
+        for (r in reasons) {
+            val shelf = Shelf("s", ShelfKind.MORE_LIKE, r, listOf(item(fullTrack, r)))
+            val decoded = TasteState.decode(TasteState(kept = listOf(KeptShelves(ShelfCadence.DAILY_MORE_LIKE, 1, listOf(shelf)))).encode())!!
+            val back = decoded.kept.single().shelves.single()
+            assertEquals(r, back.reason)
+            assertEquals(r.key, back.reason.key, "suppressedReasons match by key")
+            assertEquals(r, back.items.single().reason)
+        }
+    }
+
+    @Test
+    fun versionOneStateWithoutShelvesStillLoads() {
+        val v1 = "turtle-taste-state 1\nmuted\tartist x\nboosted\t\nlessTracks\tyt:gone\nlessArtists\tartist y\u001d2\n" +
+            "suppressed\tmix:artist z\nonboarding\t\nmutedClusters\t\nboostedClusters\t\nexploration\t2.0\u001f3.0\nrecent\tyt:1\u001fyt:2"
+        val expected = TasteState(
+            UserControls(
+                mutedArtists = setOf(ArtistKey("artist x")), lessLikeThisTracks = setOf(TrackKey("yt:gone")),
+                lessLikeThisArtists = mapOf(ArtistKey("artist y") to 2), suppressedReasons = setOf("mix:artist z"),
+            ),
+            ExplorationState(2.0, 3.0),
+            listOf(TrackKey("yt:1"), TrackKey("yt:2")),
+        )
+        assertEquals(expected, TasteState.decode(v1))
+        assertNull(TasteState.decode(v1.replace("turtle-taste-state 1", "turtle-taste-state 9")))
+    }
+
+    @Test
+    fun unsafeTextOrAnUnreadableItemCostsOnlyThatItem() {
+        val good1 = item(TrackMeta(TrackKey("yt:g1"), "Fine", listOf("A")))
+        val good2 = item(bareTrack) // '|' and ',' in a meta key, and an empty (not null) album
+        val bad = listOf(
+            item(TrackMeta(TrackKey("yt:b1"), "Tab\there", listOf("A"))),
+            item(TrackMeta(TrackKey("yt:b2"), "Fine", listOf("A\u001eB"))),
+            item(TrackMeta(TrackKey("yt:b3"), "Fine", listOf("A"), album = "\u001c")),
+            item(TrackMeta(TrackKey("yt:b4"), "Fine", listOf("A")), Reason.RadioFrom(RadioSeed.Artist(ArtistKey("a")))),
+            item(TrackMeta(TrackKey("yt:b5"), "Fine", listOf("A")), Reason.UpNext),
+        )
+        val shelf = Shelf("more_like:yt:g1", ShelfKind.MORE_LIKE, Reason.BecauseYouReplayed(TrackKey("yt:g1")), listOf(good1) + bad + good2)
+        val unsafeShelf = shelf.copy(id = "bad\nid")
+        val state = TasteState(kept = listOf(KeptShelves(ShelfCadence.DAILY_MORE_LIKE, 20_000, listOf(shelf, unsafeShelf))))
+        assertEquals(listOf(shelf.copy(items = listOf(good1, good2))), TasteState.decode(state.encode())!!.kept.single().shelves)
+
+        // A damaged item line (its key lost the scheme) drops only that item.
+        val clean = TasteState(kept = listOf(KeptShelves(ShelfCadence.DAILY_MORE_LIKE, 20_000, listOf(shelf.copy(items = listOf(good1, good2))))))
+        val damaged = clean.encode().replace("item\tyt:g1\u001f", "item\tnoscheme\u001f")
+        assertEquals(listOf(good2), TasteState.decode(damaged)!!.kept.single().shelves.single().items)
+    }
+
+    @Test
+    fun unreadableShelvesKeepTheListenersControls() {
+        val shelf = Shelf("weekly_discovery:weekly", ShelfKind.WEEKLY_DISCOVERY, Reason.NewForYou, listOf(item(fullTrack)))
+        val state = TasteState(
+            UserControls(mutedArtists = setOf(ArtistKey("m")), lessLikeThisTracks = setOf(TrackKey("yt:x"))),
+            kept = listOf(KeptShelves(ShelfCadence.WEEKLY, 19_997, listOf(shelf))),
+        )
+        val text = state.encode()
+        val withoutShelves = state.copy(kept = emptyList())
+        assertEquals(withoutShelves, TasteState.decode(text.replace("shelves\t1", "shelves\t2")), "future shelf format")
+        assertEquals(withoutShelves, TasteState.decode(text.replace("kept\tWEEKLY\u001f19997", "kept\tNOT_A_CADENCE\u001fx")), "unknown cadence")
+        assertEquals(withoutShelves, TasteState.decode(text.replace("\u001fWEEKLY_DISCOVERY\u001f", "\u001fGONE_KIND\u001f")), "unknown kind")
     }
 
     @Test

@@ -77,4 +77,34 @@ class SqlitePlayEventStoreTest {
         assertEquals(listOf("yt:old"), restarted.since(0).map { it.trackKey.value })
         restarted.close()
     }
+
+    @Test
+    fun shelfSongsSurviveAReopenAndAnUpgradeFromVersionFour() =
+        runTest {
+            val file =
+                File.createTempFile("turtle", ".db").apply {
+                    delete()
+                    deleteOnExit()
+                }
+            SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath).apply {
+                append(event("old", 500))
+                close()
+            }
+            // Back to a version 4 database, as installed before shelf songs were kept.
+            JdbcSQLiteDriver().open(file.absolutePath).apply {
+                execSQL("DROP TABLE shelf_song")
+                execSQL("PRAGMA user_version = 4")
+                close()
+            }
+
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            store.saveShelfSongs(listOf("a" to """{"id":"a"}""", "b" to """{"id":"b"}"""))
+            store.saveShelfSongs(listOf("b" to """{"id":"b2"}""", "c" to """{"id":"c"}""")) // replaces, never accumulates
+            store.close()
+
+            val reopened = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            assertEquals(listOf("""{"id":"b2"}""", """{"id":"c"}"""), reopened.loadShelfSongs())
+            assertEquals(listOf("yt:old"), reopened.since(0).map { it.trackKey.value })
+            reopened.close()
+        }
 }

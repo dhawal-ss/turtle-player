@@ -118,7 +118,7 @@ val turtleModule: Module = module {
         )
     }
     single { TurtleSearch(get(), get(), get()) }
-    single { TurtleHomeShelves(get(), get(), get()) }
+    single { TurtleHomeShelves(get(), get(), get(), get()) }
     single { InfinityMix(get(), get(), get(), get()) }
     single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }

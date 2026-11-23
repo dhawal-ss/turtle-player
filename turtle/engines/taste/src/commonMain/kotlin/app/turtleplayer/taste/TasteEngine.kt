@@ -61,7 +61,8 @@ data class TasteConfig(
  * - call [observe] (or [onPlayEvent] for each recorded event) and [nowPlaying] on track changes;
  * - [startAutoplay] / [startRadio] when playback starts, [upNext] for the queue, [homeShelves] for home;
  * - title shelves from their typed [Reason]s, resolving keys with [displayName];
- * - persist [controls], [explorationState] and [recentlyRecommended] between runs.
+ * - persist [exportState] (controls, exploration, recent recommendations and kept shelves) between
+ *   runs, and [importState] it at start.
  *
  * All public functions are serialized by one mutex; generators run concurrently inside a refresh.
  */
@@ -382,11 +383,37 @@ class TasteEngine(
                 addAll(stableLocked(ShelfCadence.WEEKLY, now) { plan.weeklyRanked?.let { listOf(weeklyDiscoveryLocked(it, plan.radios)) }.orEmpty() })
                 addAll(stableLocked(ShelfCadence.DAILY_FRESH, now) { listOfNotNull(freshForYouLocked()) })
                 addAll(stableLocked(ShelfCadence.DAILY_REDISCOVER, now) { listOf(rediscoverLocked()) })
-            }.filter { it.items.isNotEmpty() && it.reason.key !in controls.suppressedReasons }
+            }.let(::visibleLocked)
         }
     }
 
-    /** Forgets kept shelves, so the next [homeShelves] builds every shelf afresh (pull to refresh). */
+    /**
+     * Home's shelves that are already decided for their period (kept or restored), plus On repeat,
+     * in [homeShelves] order and with the same filters. Builds nothing and calls nothing upstream,
+     * so Home can show Turtle's rows at once after a restart.
+     */
+    suspend fun keptShelves(): List<Shelf> = mutex.withLock {
+        ensureLoaded()
+        val now = clock.nowMs()
+        buildList {
+            addAll(keptLocked(ShelfCadence.DAILY, now).orEmpty())
+            addAll(keptLocked(ShelfCadence.DAILY_MORE_LIKE, now).orEmpty())
+            add(onRepeatLocked())
+            addAll(keptLocked(ShelfCadence.WEEKLY, now).orEmpty())
+            addAll(keptLocked(ShelfCadence.DAILY_FRESH, now).orEmpty())
+            addAll(keptLocked(ShelfCadence.DAILY_REDISCOVER, now).orEmpty())
+        }.let(::visibleLocked)
+    }
+
+    /** What Home shows of [shelves]: not empty, and not dismissed by the listener. */
+    private fun visibleLocked(shelves: List<Shelf>) =
+        shelves.filter { it.items.isNotEmpty() && it.reason.key !in controls.suppressedReasons }
+
+    /**
+     * Forgets kept shelves, so the next [homeShelves] builds every shelf afresh. Deliberately not
+     * wired to pull-to-refresh: Turtle's mixes are the day's and discovery the week's (personal-home
+     * design, W2).
+     */
     suspend fun refreshShelves() = mutex.withLock { stable.clear() }
 
     private fun periodOf(cadence: ShelfCadence, nowMs: Long): Long {
@@ -495,15 +522,27 @@ class TasteEngine(
 
     // ---- Persistence ---------------------------------------------------------------------------
 
-    /** The listener's controls, exploration state and recent recommendations, for the app to save. */
-    suspend fun exportState(): String = mutex.withLock { TasteState(controls, explorationState, recent.toList()).encode() }
+    /** The listener's controls, exploration state, recent recommendations and kept shelves, for the app to save. */
+    suspend fun exportState(): String = mutex.withLock {
+        val kept = stable.entries.sortedBy { it.key.ordinal }.map { (cadence, p) -> KeptShelves(cadence, p.first, p.second) }
+        TasteState(controls, explorationState, recent.toList(), kept).encode()
+    }
 
-    /** Restores what [exportState] saved; keeps the current discovery dial. Returns false for unreadable text. */
+    /**
+     * Restores what [exportState] saved; keeps the current discovery dial. Returns false for
+     * unreadable text. Kept shelves come back as built, so controls still apply when they are read;
+     * a cadence already built in this run keeps its build, and a restored period with nothing in it
+     * is built again rather than kept.
+     */
     suspend fun importState(encoded: String): Boolean = mutex.withLock {
         val state = TasteState.decode(encoded) ?: return@withLock false
         controls = state.controls.copy(discoveryDial = controls.discoveryDial)
         explorationState = state.exploration
         recent.restore(state.recent)
+        for (group in state.kept) {
+            if (group.shelves.none { it.items.isNotEmpty() } || group.cadence in stable) continue
+            stable[group.cadence] = group.period to group.shelves
+        }
         if (loaded) updateProfileLocked()
         true
     }

@@ -19,9 +19,12 @@ import com.metrolist.shared.ui.screens.homeShelvesOverride
 import com.metrolist.shared.state.GlobalYouTubeRepository
 import com.metrolist.shared.viewmodels.libraryContentSearchOverride
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -45,6 +48,9 @@ class TurtleRuntime(
 ) {
     private val started = AtomicBoolean(false)
 
+    /** Completed once the saved taste state has been read (or found unreadable), so nothing saves defaults over it. */
+    private val tasteRestored = CompletableDeferred<Unit>()
+
     /** Resumes after a crash or system kill mid-song, then keeps the playing mark (CrashResume.kt). */
     suspend fun crashResume(currentSong: StateFlow<SongItem?>, isPlaying: StateFlow<Boolean>) = CrashResume.run(store, currentSong, isPlaying)
 
@@ -58,7 +64,11 @@ class TurtleRuntime(
         scope.launch { TurtleDefaults.applyOnce(store) }
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
         scope.launch {
-            restoreTasteState()
+            try {
+                restoreTasteState()
+            } finally {
+                tasteRestored.complete(Unit)
+            }
             restoreDiscoveryDial()
             infinity.restore()
             // Before the first profile build, so a listener coming from Metrolist is not cold.
@@ -81,6 +91,8 @@ class TurtleRuntime(
         scope.launch {
             // Shelf items resolve through the library mirror, so build shelves after its first sync.
             while (!librarySync.isReady()) delay(500)
+            // After the saved kept shelves are back in the engine, so restored rows are not replaced by a fresh build.
+            tasteRestored.await()
             home.start(scope)
         }
         // Liked and library songs (YouTube Music likes included) count toward taste from the first launch.
@@ -185,7 +197,9 @@ class TurtleRuntime(
 
     /** "Less like this", mutes and the exploration state; without this they were lost at every restart. */
     private suspend fun saveTasteState() {
-        runCatching { store.setPref(PREF_TASTE_STATE, taste.exportState()) }
+        // A play recorded at startup must not save defaults over the state (and the day's shelves) not yet read.
+        tasteRestored.await()
+        runCatching { writeTasteState(store, taste) }
             .onFailure { if (it is CancellationException) throw it else TurtleLog.error("could not save taste state", it) }
     }
 
@@ -246,8 +260,21 @@ class TurtleRuntime(
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
         const val PREF_DIAL = "discovery_dial"
-        const val PREF_TASTE_STATE = "taste_state"
     }
+}
+
+/** The saved [TasteEngine.exportState] in our pref table; Home saves it after every shelf build too. */
+internal const val PREF_TASTE_STATE = "taste_state"
+
+/** Held from export to write, so an older export (a play's) never lands after a newer one (a build's). */
+private val tasteStateWrites = Mutex()
+
+/** Saves [taste]'s state under [PREF_TASTE_STATE]. The runtime saves after every play, Home after every build. */
+internal suspend fun writeTasteState(
+    store: SqlitePlayEventStore,
+    taste: TasteEngine,
+) {
+    tasteStateWrites.withLock { store.setPref(PREF_TASTE_STATE, taste.exportState()) }
 }
 
 /** The discovery dial as the UI shows it; balanced until our saved value is restored. */

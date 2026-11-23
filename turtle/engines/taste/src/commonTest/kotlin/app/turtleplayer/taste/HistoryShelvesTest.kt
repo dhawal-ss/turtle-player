@@ -1,5 +1,6 @@
 package app.turtleplayer.taste
 
+import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.DAY_MS
 import app.turtleplayer.core.MINUTE_MS
 import app.turtleplayer.core.TrackKey
@@ -271,6 +272,83 @@ class HistoryShelvesTest {
         engine.homeShelves()
         assertTrue(radio.calls.size > callsAfterFirst, "new day, new mixes")
         assertEquals(morning.of(ShelfKind.WEEKLY_DISCOVERY), engine.homeShelves().of(ShelfKind.WEEKLY_DISCOVERY))
+    }
+
+    private fun List<Shelf>.ofKind(kind: ShelfKind) = filter { it.kind == kind }
+
+    @Test
+    fun keptShelvesComeBackAfterARestartUntilTheirPeriodEnds() = runTest {
+        clock.now = SyntheticWorld.T0 + 10 * 60 * MINUTE_MS // Monday 10:00 UTC
+        val before = engine(upstream = FakeRadio(world)).let { first ->
+            first.homeShelves().also { assertTrue(it.ofKind(ShelfKind.DAILY_MIX).isNotEmpty() && it.ofKind(ShelfKind.WEEKLY_DISCOVERY).isNotEmpty()) } to first.exportState()
+        }
+        val radio = FakeRadio(world)
+        val restarted = engine(upstream = radio)
+        assertTrue(restarted.importState(before.second))
+        assertEquals(before.first, restarted.keptShelves(), "shown before any build")
+        assertEquals(before.first, restarted.homeShelves())
+        assertEquals(0, radio.calls.size, "restored shelves need no upstream calls")
+        assertEquals(
+            before.first.flatMap { s -> s.items.map { it.surfaceDetail } },
+            restarted.homeShelves().flatMap { s -> s.items.map { it.surfaceDetail } },
+            "plays keep their attribution",
+        )
+
+        clock.now += DAY_MS // Tuesday, same week
+        val tuesday = restarted.homeShelves()
+        assertTrue(radio.calls.isNotEmpty(), "a new day rebuilds the mixes")
+        assertEquals(before.first.ofKind(ShelfKind.WEEKLY_DISCOVERY), tuesday.ofKind(ShelfKind.WEEKLY_DISCOVERY), "the week's discovery stays")
+    }
+
+    @Test
+    fun aRestoredShelfStillDropsWhatTheListenerRulesOutLater() = runTest {
+        clock.now = SyntheticWorld.T0 + 10 * 60 * MINUTE_MS
+        val first = engine()
+        val mixes = first.homeShelves().ofKind(ShelfKind.DAILY_MIX)
+        first.lessLikeThis(mixes[1].lessLikeThis) // dismissed before the restart
+        val restarted = engine()
+        assertTrue(restarted.importState(first.exportState()))
+        assertTrue(restarted.keptShelves().none { it.id == mixes[1].id }, "a dismissed shelf stays dismissed")
+
+        val mix = restarted.keptShelves().first { it.id == mixes[0].id }
+        val seed = (mix.reason as Reason.DailyMix).seedArtist!!
+        val other = mix.items.first { it.track.artistKey != seed }
+        restarted.updateControls { it.copy(mutedArtists = it.mutedArtists + other.track.artistKey) }
+        assertTrue(restarted.keptShelves().flatMap { it.items }.none { it.track.artistKey == other.track.artistKey }, "mutes apply to restored shelves")
+        restarted.updateControls { it.copy(mutedArtists = it.mutedArtists - other.track.artistKey) }
+        assertTrue(restarted.keptShelves().first { it.id == mix.id }.items.any { it.key == other.key }, "unmuting brings it back")
+    }
+
+    @Test
+    fun aBuildInThisRunWinsOverRestoredShelves() = runTest {
+        clock.now = SyntheticWorld.T0 + 10 * 60 * MINUTE_MS
+        val t = world.tracks[0]
+        val sentinel = Shelf(
+            "daily_mix:artist:sentinel", ShelfKind.DAILY_MIX, Reason.DailyMix(0, listOf(t.artistKey), seedArtist = t.artistKey),
+            listOf(QueueItem(t, CandidateSource.LIBRARY, Reason.OnRepeat, SlotKind.FAMILIAR, 1f)),
+        )
+        val saved = TasteState(kept = listOf(KeptShelves(ShelfCadence.DAILY, clock.now.floorDiv(DAY_MS), listOf(sentinel)))).encode()
+
+        val fresh = engine()
+        assertTrue(fresh.importState(saved))
+        assertEquals(listOf(sentinel.id), fresh.keptShelves().ofKind(ShelfKind.DAILY_MIX).map { it.id })
+
+        val built = engine()
+        val ids = built.homeShelves().ofKind(ShelfKind.DAILY_MIX).map { it.id }
+        assertTrue(built.importState(saved))
+        assertEquals(ids, built.homeShelves().ofKind(ShelfKind.DAILY_MIX).map { it.id }, "rows never jump to restored shelves")
+    }
+
+    @Test
+    fun aRestoredDayWithNothingInItIsRebuilt() = runTest {
+        clock.now = SyntheticWorld.T0 + 10 * 60 * MINUTE_MS
+        val empty = Shelf("daily_mix:artist:x", ShelfKind.DAILY_MIX, Reason.DailyMix(0, listOf(ArtistKey("x")), seedArtist = ArtistKey("x")), emptyList())
+        val saved = TasteState(kept = listOf(KeptShelves(ShelfCadence.DAILY, clock.now.floorDiv(DAY_MS), listOf(empty)))).encode()
+        val radio = FakeRadio(world)
+        val engine = engine(upstream = radio)
+        assertTrue(engine.importState(saved))
+        assertTrue(engine.homeShelves().ofKind(ShelfKind.DAILY_MIX).isNotEmpty())
+        assertTrue(radio.calls.isNotEmpty(), "an empty restored day is built, not pinned empty")
     }
 
     @Test
