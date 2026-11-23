@@ -110,6 +110,7 @@ import app.turtleplayer.ui.generated.resources.shell_search_no_results_hint
 import app.turtleplayer.ui.generated.resources.shell_search_remove_history
 import app.turtleplayer.ui.generated.resources.shell_search_retry
 import app.turtleplayer.ui.generated.resources.shell_search_title
+import app.turtleplayer.ui.generated.resources.shell_set_explicit_badge
 import app.turtleplayer.ui.generated.resources.shell_songs
 import app.turtleplayer.ui.generated.resources.shell_sp_episodes
 import app.turtleplayer.ui.generated.resources.shell_sp_kind_episode
@@ -128,6 +129,8 @@ import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
+import com.metrolist.shared.generated.resources.explicit
+import com.metrolist.shared.generated.resources.Res as SharedRes
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.EpisodeItem
@@ -552,7 +555,14 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false, 
         Column(Modifier.weight(1f)) {
             Text(item.title, style = Shell.type.body, color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val meta = if (compact) searchSubtitle(item).orEmpty() else metaOf(item)
-            Text(meta, style = Shell.type.bodySmall, color = if (hovered) c.ink else c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Explicit and clean versions are separate results; the tag tells them apart.
+                if (item is SongItem && item.isExplicit) {
+                    ShellExplicitTag(stringResource(Res.string.shell_set_explicit_badge), stringResource(SharedRes.string.explicit))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(meta, style = Shell.type.bodySmall, color = if (hovered) c.ink else c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (playing) {
             Spacer(Modifier.width(12.dp))
