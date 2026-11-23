@@ -149,9 +149,10 @@ class SyntheticWorld(
         fresh: FreshReleaseSource? = null,
         upstream: RecommendationSource? = null,
         config: TasteConfig = TasteConfig(),
+        blocks: ExternalBlocks? = null,
     ) = TasteEngine(
         events = events, store = store, catalog = catalog, freshReleases = fresh, upstream = upstream,
-        config = config, clock = clock, random = random, controls = controls,
+        config = config, clock = clock, random = random, controls = controls, blocks = blocks,
     )
 
     companion object {

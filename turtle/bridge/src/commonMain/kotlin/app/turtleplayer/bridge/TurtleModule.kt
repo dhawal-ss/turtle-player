@@ -16,6 +16,9 @@ import app.turtleplayer.taste.CatalogWithObserved
 import app.turtleplayer.taste.CoListeningGraph
 import app.turtleplayer.taste.CoListeningStore
 import app.turtleplayer.taste.EmbeddingStore
+import app.turtleplayer.taste.PlayOrigin
+import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
@@ -23,6 +26,7 @@ import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.isoDayNumber
@@ -108,6 +113,7 @@ val turtleModule: Module = module {
     single { CoListeningGraph() }
     single { CoListeningStore(get()) }
     single<EmbeddingStore> { get<CoListeningStore>() }
+    single { UpstreamBlocks({ get<MusicDatabase>() }) }
     single { CoListeningSync(get(), get(), get(), get(), get(), learning = { !listenHistoryPaused() }) }
     single {
         TasteEngine(
@@ -115,12 +121,14 @@ val turtleModule: Module = module {
             freshReleases = YouTubeFreshReleases(get(), get(), get()) { get<MusicDatabase>() },
             upstream = YouTubeRadioSource(get(), get()), localDay = deviceDay,
             contextAt = { ms -> deviceTime.hourAndWeekday(ms).let { (hour, weekday) -> PlayContext(hour, weekday) } },
+            blocks = get<UpstreamBlocks>(),
         )
     }
     single { TurtleSearch(get(), get(), get()) }
     single { TurtleHomeShelves(get(), get(), get(), get()) }
     single { InfinityMix(get(), get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { PlaylistAddWatcher({ get<MusicDatabase>() }, get(), get(), get()) }
+    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }
 
 /**
@@ -254,8 +262,71 @@ object TurtleBridge {
         if (PlaybackHints.controller === controller) PlaybackHints.controller = null
     }
 
+    /**
+     * Shell: [songs] are about to play from [place] (row [row], a Home row key, or null). Call right
+     * before starting playback. HOME_TURTLE rows carry each song's generator and slot. Fails open.
+     */
+    fun attributePlay(
+        place: PlayPlace,
+        row: String?,
+        songs: List<SongItem>,
+    ) {
+        try {
+            val koin = GlobalContext.getOrNull() ?: return
+            val observer = koin.getOrNull<PlayerObserver>() ?: return
+            val home = koin.getOrNull<TurtleHomeShelves>()
+            val tags =
+                songs.associate { song ->
+                    val origin =
+                        if (place == PlayPlace.HOME_TURTLE && row != null && home != null) {
+                            home.originOf(row, song.id)
+                        } else {
+                            PlayOrigin(place, row = row)
+                        }
+                    song.id to SurfaceTag.format(origin)
+                }
+            observer.attribute(tags)
+        } catch (e: Exception) {
+            TurtleLog.error("could not attribute a play to $place", e)
+        }
+    }
+
     /** "Less like this" on a song (no-op when our runtime is unavailable). */
     suspend fun lessLikeThis(song: SongItem) { runtime?.lessLikeThis(song) }
+
+    /**
+     * "Not interested" on a Home song, artist or Turtle mix (no-op when our runtime is unavailable). Off the
+     * calling thread: Shell calls it from the UI, and the engine re-ranks and rebuilds the profile.
+     */
+    suspend fun notInterested(target: NotInterested) {
+        try {
+            withContext(Dispatchers.Default) { runtime?.notInterested(target) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not hide ${target::class.simpleName}", e)
+        }
+    }
+
+    /** "Show again" on the Hidden page (no-op when our runtime is unavailable). Off the calling thread, as [notInterested]. */
+    suspend fun undoHidden(entry: HiddenEntry) {
+        try {
+            withContext(Dispatchers.Default) { runtime?.undoHidden(entry) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not show ${entry.kind} again", e)
+        }
+    }
+
+    /** What the listener hid in Turtle, for the Hidden page. */
+    val hidden: StateFlow<List<HiddenEntry>> get() = hiddenEntriesState
+
+    /** What Home must not show. Compose state: read it during composition and Home follows changes. */
+    val hiddenSet: HiddenSet get() = hiddenSetState
+
+    /** Which Home item the next menu belongs to, for its "Not interested" row. */
+    val homeMenu: HomeMenuLatch = HomeMenuLatch(Clock.System::nowMs)
 
     /** Discovery dial: 0 familiar, 0.5 balanced, 1 adventurous. Saved, and applied to the taste engine. */
     suspend fun setDiscoveryDial(position: Double) {

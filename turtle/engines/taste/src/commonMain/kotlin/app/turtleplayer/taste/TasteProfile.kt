@@ -6,6 +6,8 @@ import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.random.Random
@@ -309,12 +311,17 @@ class TasteProfileBuilder(
         var quickSkips = 0
         var likes = 0
         var replays = 0
-        var lessLikeThis = false
+        // "Not interested" marks (play-level and feedback), and the latest undo: marks at or before it are taken back.
+        val lessMarks = ArrayList<Long>()
+        var undoneAt = Long.MIN_VALUE
         var first = Long.MAX_VALUE
         // The earliest play, whatever order events arrive in: decides whether the song was a new find.
         var firstEvent: PlayEvent? = null
         var last = Long.MIN_VALUE
         var savedAt: Long? = null
+        // Earliest and latest feedback, dating a track known only from feedback (no plays, not saved).
+        var feedbackFirst = Long.MAX_VALUE
+        var feedbackLast = Long.MIN_VALUE
     }
 
     private class ArtistAcc {
@@ -334,6 +341,10 @@ class TasteProfileBuilder(
     private val context = DecayedMix()
     private var finished = 0
     private var latestMs = Long.MIN_VALUE
+
+    // Stored feedback already counted: the app hands each one to the engine live, and a profile
+    // rebuild between storing it and handing it in has already read it.
+    private val feedbackIds = HashSet<Long>()
 
     val eventCount: Int get() = tracks.values.sumOf { it.plays }
 
@@ -357,6 +368,33 @@ class TasteProfileBuilder(
         if (weight != 0.0) a.affinity.add(weight, saved.atMs, weights)
     }
 
+    /**
+     * A non-play feedback event. Order-independent with plays: marks and undos compare by time.
+     * An add to a playlist raises affinity and makes the song known, but is not a play; "not
+     * interested" is a mark like a play-level one; an undo takes back every mark made before it.
+     * A stored event (id > 0) counts once, however often it is handed in.
+     */
+    fun addFeedback(f: TrackFeedback) {
+        if (f.id > 0 && !feedbackIds.add(f.id)) return
+        val t = tracks.getOrPut(f.track.key) { TrackAcc(f.track) }
+        val a = artists.getOrPut(f.track.artistKey) { ArtistAcc() }
+        t.feedbackFirst = minOf(t.feedbackFirst, f.atMs)
+        t.feedbackLast = maxOf(t.feedbackLast, f.atMs)
+        when (f.kind) {
+            TrackFeedbackKind.ADDED_TO_PLAYLIST -> {
+                if (t.savedAt == null) t.savedAt = f.atMs
+                t.affinity.add(weights.addedToPlaylist, f.atMs, weights)
+                a.affinity.add(weights.addedToPlaylist, f.atMs, weights)
+            }
+            TrackFeedbackKind.NOT_INTERESTED -> {
+                t.lessMarks += f.atMs
+                t.affinity.add(weights.lessLikeThis, f.atMs, weights)
+                a.affinity.add(weights.lessLikeThis, f.atMs, weights)
+            }
+            TrackFeedbackKind.UNDO_NOT_INTERESTED -> t.undoneAt = maxOf(t.undoneAt, f.atMs)
+        }
+    }
+
     fun add(e: PlayEvent) {
         val s = weights.signal(e)
         val t = tracks.getOrPut(e.trackKey) { TrackAcc(e.track) }
@@ -371,7 +409,7 @@ class TasteProfileBuilder(
         if (e.isQuickSkip) t.quickSkips++
         if (e.liked) t.likes++
         if (e.replayed) t.replays++
-        if (e.lessLikeThis) t.lessLikeThis = true
+        if (e.lessLikeThis) t.lessMarks += e.startedAtMs
         t.first = minOf(t.first, e.startedAtMs)
         t.last = maxOf(t.last, e.startedAtMs)
 
@@ -388,7 +426,7 @@ class TasteProfileBuilder(
             context.add(s, e.startedAtMs, ctx, weights)
         }
 
-        SurfaceTag.parse(e.surfaceDetail)?.let { (source, _) ->
+        SurfaceTag.parse(e.surfaceDetail)?.source?.let { source ->
             sources[source] = (sources[source] ?: SkipStats()) + SkipStats(1, if (e.isQuickSkip) 1 else 0)
         }
         if (e.isFinished) finished++
@@ -414,7 +452,15 @@ class TasteProfileBuilder(
      */
     fun snapshot(nowMs: Long, representation: TrackRepresentation?, clusters: List<TasteCluster> = emptyList()): TasteProfile {
         val trackStats = LinkedHashMap<TrackKey, TrackStats>(tracks.size * 2)
+        // What undone "not interested" marks took from each artist, given back below.
+        val artistRefund = HashMap<ArtistKey, Double>()
         for ((k, t) in tracks) {
+            var refund = 0.0
+            for (mark in t.lessMarks) if (mark <= t.undoneAt) refund -= weights.lessLikeThis * weights.decay(nowMs - mark)
+            if (refund != 0.0) artistRefund[t.meta.artistKey] = (artistRefund[t.meta.artistKey] ?: 0.0) + refund
+            // A track known only from feedback is dated by it.
+            val known = t.savedAt ?: t.feedbackFirst.takeIf { it != Long.MAX_VALUE }
+            val knownLast = t.savedAt ?: t.feedbackLast.takeIf { it != Long.MIN_VALUE }
             // A first play that held a minute is a new find: it scores nearly a finish (instead of a late
             // skip) and seeds "More like" picks. Skipping it before halfway is not a find, however long the intro.
             val fe = t.firstEvent
@@ -424,11 +470,11 @@ class TasteProfileBuilder(
                 (weights.newFind - weights.signal(fe.copy(liked = false, replayed = false, addedToPlaylist = false))) * weights.decay(nowMs - fe.startedAtMs)
             } else 0.0
             trackStats[k] = TrackStats(
-                meta = t.meta, affinity = t.affinity.at(nowMs, weights) + bonus, plays = t.plays, finishes = t.finishes,
-                quickSkips = t.quickSkips, likes = t.likes, replays = t.replays, lessLikeThis = t.lessLikeThis,
+                meta = t.meta, affinity = t.affinity.at(nowMs, weights) + bonus + refund, plays = t.plays, finishes = t.finishes,
+                quickSkips = t.quickSkips, likes = t.likes, replays = t.replays, lessLikeThis = t.lessMarks.any { it > t.undoneAt },
                 // A saved song never played here dates from when it was saved (Rediscover, days-since features).
-                firstPlayedMs = if (t.plays > 0) t.first else t.savedAt ?: t.first,
-                lastPlayedMs = if (t.plays > 0) t.last else t.savedAt ?: t.last,
+                firstPlayedMs = if (t.plays > 0) t.first else known ?: t.first,
+                lastPlayedMs = if (t.plays > 0) t.last else knownLast ?: t.last,
                 recentFinishes = t.recentFinishes.at(nowMs, weights), foundMs = if (found) fe.startedAtMs else null,
                 saved = t.savedAt != null,
             )
@@ -436,7 +482,7 @@ class TasteProfileBuilder(
         val artistStats = LinkedHashMap<ArtistKey, ArtistStats>(artists.size * 2)
         for ((k, a) in artists) {
             artistStats[k] = ArtistStats(
-                k, a.affinity.at(nowMs, weights), a.plays, a.finishes, a.quickSkips, a.last, a.saved,
+                k, a.affinity.at(nowMs, weights) + (artistRefund[k] ?: 0.0), a.plays, a.finishes, a.quickSkips, a.last, a.saved,
                 a.context?.at(nowMs, weights) ?: ContextMix.EMPTY,
             )
         }

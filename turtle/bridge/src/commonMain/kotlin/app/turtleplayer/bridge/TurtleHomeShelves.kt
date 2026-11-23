@@ -16,6 +16,8 @@ import app.turtleplayer.bridge.generated.resources.turtle_shelf_rediscover
 import app.turtleplayer.bridge.generated.resources.turtle_shelf_weekly_discovery
 import app.turtleplayer.core.HOUR_MS
 import app.turtleplayer.events.PlayEventStore
+import app.turtleplayer.taste.PlayOrigin
+import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.taste.Reason
 import app.turtleplayer.taste.Shelf
 import app.turtleplayer.taste.ShelfKind
@@ -32,6 +34,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import org.jetbrains.compose.resources.getString
+import kotlin.concurrent.Volatile
 
 /**
  * The taste engine's shelves as upstream [HomeShelf]s, placed at the top of Home on both platforms.
@@ -58,6 +61,11 @@ class TurtleHomeShelves(
     private val json = Json { ignoreUnknownKeys = true }
     private var restored = false
     private var savedSongIds: List<String> = emptyList()
+
+    // The engine shelves on Home by home key, replaced whole when shelves are published (off the UI
+    // thread) and read when a play starts (on it).
+    @Volatile
+    private var engineShelves: Map<String, Shelf> = emptyMap()
 
     fun start(scope: CoroutineScope) {
         scope.launch {
@@ -131,6 +139,8 @@ class TurtleHomeShelves(
     private suspend fun publishLocked(fromEngine: List<Shelf>) {
         val label = getString(Res.string.turtle_shelf_label)
         val built = fromEngine.mapIndexedNotNull { index, shelf -> toHomeShelf(shelf, index, label) }
+        val shown = built.mapTo(HashSet()) { it.key }
+        engineShelves = fromEngine.associateBy { homeKey(it) }.filterKeys { it in shown }
         shelves = built
         TurtleLog.info("home: engine ${fromEngine.size} shelves (${fromEngine.joinToString { "${it.kind}=${it.items.size}" }}), showing ${built.size} (${built.joinToString { "${it.key.substringAfter(':')}=${it.items.size}" }})")
     }
@@ -164,6 +174,21 @@ class TurtleHomeShelves(
         }
     }
 
+    /** The engine shelf behind Home row [homeKey] ("turtle:<shelf id>"), while it is on Home. */
+    fun engineShelf(homeKey: String): Shelf? = engineShelves[homeKey]
+
+    /** The origin of [songId] played from Turtle row [homeKey]: HOME_TURTLE, the item's source and slot when known, row = shelf id. */
+    fun originOf(
+        homeKey: String,
+        songId: String,
+    ): PlayOrigin {
+        val shelf = engineShelf(homeKey)
+        val item = shelf?.items?.firstOrNull { it.track.youtubeId == songId }
+        return PlayOrigin(PlayPlace.HOME_TURTLE, item?.source, item?.slot, shelf?.id ?: homeKey.removePrefix(HOME_KEY_PREFIX))
+    }
+
+    private fun homeKey(shelf: Shelf) = HOME_KEY_PREFIX + shelf.id
+
     /** Upstream's shelves with ours inserted after Speed Dial (or at the top). */
     fun mergeInto(upstream: List<HomeShelf>): List<HomeShelf> {
         val ours = shelves
@@ -177,7 +202,7 @@ class TurtleHomeShelves(
         if (items.size < MIN_ITEMS) return null
         val title = title(shelf, index) ?: return null
         return HomeShelf(
-            key = "turtle:${shelf.id}",
+            key = homeKey(shelf),
             title = title,
             items = items.take(MAX_ITEMS),
             style = HomeShelfStyle.SONG_GRID,
@@ -209,6 +234,7 @@ class TurtleHomeShelves(
 
     private companion object {
         const val MIN_ITEMS = 4
+        const val HOME_KEY_PREFIX = "turtle:"
         const val MAX_ITEMS = 24
         const val PLAYS_PER_REFRESH = 8
         const val REFRESH_INTERVAL_MS = 2 * HOUR_MS

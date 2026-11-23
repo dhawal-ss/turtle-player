@@ -1,7 +1,10 @@
 package app.turtleplayer.bridge
 
 import app.turtleplayer.core.TrackMeta
+import app.turtleplayer.taste.PlayOrigin
+import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.taste.SmartShuffle
+import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.model.SongItem
 import kotlinx.coroutines.CancellationException
@@ -17,7 +20,8 @@ import kotlin.time.TimeSource
 /**
  * Smart Shuffle for a playlist or album: YouTube's radio for a few of its songs gives the
  * candidates, the taste engine ranks them, and [SmartShuffle] mixes them into the shuffled list.
- * Recommended songs are tagged on the [PlayerObserver], so their skips and finishes train the engine.
+ * The shuffled queue is attributed on the [PlayerObserver], recommendations with their generator, so
+ * their skips and finishes train the engine.
  * Anything slow or failing gives a plain shuffle instead.
  */
 internal class SmartShuffleBridge(
@@ -67,12 +71,15 @@ internal class SmartShuffleBridge(
         val arranged = SmartShuffle(random).arrange(metas, ranked, taste.controls, taste.profile())
         val byId = own.associateBy { it.id }
         val out = ArrayList<SongItem>(arranged.size)
+        val tags = LinkedHashMap<String, String>()
         for (item in arranged) {
             val id = item.track.youtubeId ?: continue
             val song = byId[id] ?: cache.get(id) ?: continue
-            item.surfaceDetail?.let { observer.tag(song.id, it) }
+            val rec = item.recommendation
+            tags[song.id] = SurfaceTag.format(PlayOrigin(PlayPlace.SMART_SHUFFLE, rec?.source, rec?.slot))
             out += song
         }
+        observer.attribute(tags)
         TurtleLog.info("smart shuffle: ${own.size} songs, ${out.size - own.size} recommendations from ${candidates.size} candidates")
         return out
     }
@@ -108,8 +115,13 @@ internal class SmartShuffleBridge(
     /** Fallback: random order, no artist twice in a row where avoidable. */
     private fun plain(own: List<SongItem>): List<SongItem> {
         val byId = own.associateBy { it.id }
-        return SmartShuffle(random).arrange(own.map { it.toTrackMeta() }, emptyList())
-            .mapNotNull { it.track.youtubeId?.let(byId::get) }
+        val out =
+            SmartShuffle(random)
+                .arrange(own.map { it.toTrackMeta() }, emptyList())
+                .mapNotNull { it.track.youtubeId?.let(byId::get) }
+        val tag = SurfaceTag.format(PlayOrigin(PlayPlace.SMART_SHUFFLE))
+        observer.attribute(out.associate { it.id to tag })
+        return out
     }
 
     companion object {

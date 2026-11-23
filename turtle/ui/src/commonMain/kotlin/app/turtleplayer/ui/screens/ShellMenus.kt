@@ -156,6 +156,7 @@ fun ShellMenuHeader(slot: MenuHeaderSlot) = ShellTheme {
             Modifier.fillMaxWidth().padding(horizontal = if (popup) 4.dp else 20.dp).padding(top = if (popup) 2.dp else 12.dp)
                 .height(1.dp).background(c.hairline),
         )
+        HomeNotInterestedRow(slot.title, slot.popup)
         if (!popup) Spacer(Modifier.height(4.dp))
     }
 }

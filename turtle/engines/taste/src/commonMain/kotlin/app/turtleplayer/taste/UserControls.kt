@@ -88,3 +88,42 @@ fun UserControls.apply(feedback: LessLikeThis): UserControls = when (feedback) {
     )
     is LessLikeThis.ForReason -> copy(suppressedReasons = suppressedReasons + feedback.reason.key)
 }
+
+/** One thing the listener ruled out, as the engine keeps it. */
+sealed interface Hidden {
+    /** A song marked "not interested"; [artist] null when unknown (no mark count to take back). */
+    data class Track(val track: TrackKey, val artist: ArtistKey?) : Hidden
+
+    /** A muted artist. */
+    data class Artist(val artist: ArtistKey) : Hidden
+
+    /** A dismissed shelf or mix ([Reason.key]). */
+    data class Shelf(val reasonKey: String) : Hidden
+}
+
+/** What is hidden: tracks (artist null), then muted artists, then dismissed shelves, each in insertion order. */
+fun UserControls.hidden(): List<Hidden> =
+    lessLikeThisTracks.map { Hidden.Track(it, null) } +
+        mutedArtists.map { Hidden.Artist(it) } +
+        suppressedReasons.map { Hidden.Shelf(it) }
+
+/**
+ * Takes one back: the track leaves lessLikeThisTracks and its artist's mark count drops by one
+ * (removed at 0); an artist is unmuted; a shelf reason is no longer suppressed.
+ */
+fun UserControls.undo(target: Hidden): UserControls = when (target) {
+    is Hidden.Track -> {
+        val artist = target.artist
+        val marks = artist?.let { lessLikeThisArtists[it] }
+        copy(
+            lessLikeThisTracks = lessLikeThisTracks - target.track,
+            lessLikeThisArtists = when {
+                artist == null || marks == null -> lessLikeThisArtists
+                marks <= 1 -> lessLikeThisArtists - artist
+                else -> lessLikeThisArtists + (artist to marks - 1)
+            },
+        )
+    }
+    is Hidden.Artist -> copy(mutedArtists = mutedArtists - target.artist)
+    is Hidden.Shelf -> copy(suppressedReasons = suppressedReasons - target.reasonKey)
+}

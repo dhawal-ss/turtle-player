@@ -35,6 +35,13 @@
     <string name="shell_set_recs_dial">Discovery dial</string>
     <string name="shell_set_recs_dial_body">Sets the blend of favourites and new finds in the Infinity Mix. Changes are heard within a song.</string>
     <string name="shell_set_recs_tune">Tune the Infinity Mix</string>
+    <string name="shell_set_hidden">Hidden songs and artists</string>
+    <string name="shell_set_hidden_sub">What you marked Not interested</string>
+    <string name="shell_set_hidden_empty">Nothing hidden. Choose Not interested on Home to hide a song, artist or mix.</string>
+    <string name="shell_set_hidden_songs">Songs</string>
+    <string name="shell_set_hidden_artists">Artists</string>
+    <string name="shell_set_hidden_mixes">Mixes</string>
+    <string name="shell_set_hidden_undo">Show again</string>
 
     <!-- Spoken word -->
     <string name="shell_set_spoken">Spoken word</string>

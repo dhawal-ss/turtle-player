@@ -73,6 +73,8 @@ import app.turtleplayer.ui.generated.resources.shell_set_group_library
 import app.turtleplayer.ui.generated.resources.shell_set_group_listening
 import app.turtleplayer.ui.generated.resources.shell_set_group_privacy
 import app.turtleplayer.ui.generated.resources.shell_set_group_turtle
+import app.turtleplayer.ui.generated.resources.shell_set_hidden
+import app.turtleplayer.ui.generated.resources.shell_set_hidden_sub
 import app.turtleplayer.ui.generated.resources.shell_set_infinity_sub
 import app.turtleplayer.ui.generated.resources.shell_set_integrations_sub
 import app.turtleplayer.ui.generated.resources.shell_set_metrolist_source
@@ -368,7 +370,31 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                         ),
                     ),
                 ),
+                group(
+                    "hidden",
+                    "",
+                    listOf(
+                        navigationItem(
+                            "recsHidden",
+                            stringResource(Res.string.shell_set_hidden),
+                            SettingsPageId.APPEARANCE_NAVIGATION,
+                            stringResource(Res.string.shell_set_hidden_sub),
+                        ),
+                    ),
+                ),
             ),
+        )
+
+    // Reached only from Recommendations. Upstream's APPEARANCE_NAVIGATION id is free in Turtle's registry
+    // (its items moved to Advanced), and adding an id of our own would be an upstream edit.
+    val hiddenTitle = stringResource(Res.string.shell_set_hidden)
+    val hiddenPage =
+        turtlePage(
+            SettingsPageId.APPEARANCE_NAVIGATION,
+            hiddenTitle,
+            stringResource(Res.string.shell_set_hidden_sub),
+            Glyphs.Less,
+            listOf(group("hidden", "", listOf(customItem("hiddenList", hiddenTitle) { HiddenList() }))),
         )
 
     val speedChoices = ShellSpoken.SPEEDS.map { SettingsChoice(it.toString(), stringResource(Res.string.shell_sp_speed_value, speedText(it))) }
@@ -522,7 +548,7 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
         )
 
     val pages =
-        listOfNotNull(theme, infinityPage, recommendations, spoken, playback, lyrics, content, storage, backup, privacy, integrations, advanced, about) +
+        listOfNotNull(theme, infinityPage, recommendations, hiddenPage, spoken, playback, lyrics, content, storage, backup, privacy, integrations, advanced, about) +
             KEEP_SUBPAGES.mapNotNull { id -> if (id == SettingsPageId.EQUALIZER) equalizerPage else raw[id] }
     val rootGroups =
         listOf(

@@ -3,6 +3,7 @@ package app.turtleplayer.taste
 import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
+import app.turtleplayer.events.Surface
 
 /** Which generator proposed a candidate. Tags are persisted in [app.turtleplayer.events.PlayEvent.surfaceDetail]; never rename. */
 enum class CandidateSource(val tag: String) {
@@ -30,23 +31,74 @@ enum class SlotKind(val tag: String) {
     DISCOVERY("d"),
 }
 
+/** Where in the app a play started. [tag] is persisted in [app.turtleplayer.events.PlayEvent.surfaceDetail]: never rename. */
+enum class PlayPlace(val tag: String, val surface: Surface) {
+    /** Up Next, and every legacy `taste/<source>/<slot>` tag. */
+    ENGINE("taste", Surface.AUTOPLAY),
+    INFINITY("infinity", Surface.AUTOPLAY),
+    SMART_SHUFFLE("shuffle", Surface.PLAYLIST),
+    RADIO("radio", Surface.RADIO),
+    SEARCH("search", Surface.SEARCH),
+    /** Turtle's mixes and rows on Home; the row is the shelf id. */
+    HOME_TURTLE("home-turtle", Surface.SHELF),
+    /** Home's shortcut grid. */
+    HOME_GRID("home-grid", Surface.SHELF),
+    /** Home's "Jump back in"; the row is its row key. */
+    HOME_RECENT("home-recent", Surface.SHELF),
+    /** One of YouTube's rows on Home; the row is its row key. */
+    HOME_YOUTUBE("home-yt", Surface.SHELF),
+    ;
+
+    companion object {
+        fun fromTag(tag: String): PlayPlace? = entries.firstOrNull { it.tag == tag }
+    }
+}
+
+/** Where a play came from: the place, the generator and slot that proposed the track (when one did), and the row. */
+data class PlayOrigin(
+    val place: PlayPlace,
+    val source: CandidateSource? = null,
+    val slot: SlotKind? = null,
+    val row: String? = null,
+) {
+    val surface: Surface get() = place.surface
+}
+
 /**
- * The string the app stores in `PlayEvent.surfaceDetail` for plays the engine suggested, so later
- * events can be attributed to a generator (per-source skip rates) and to a discovery slot
- * (exploration feedback). Format: `taste/<source>/<slot>`.
+ * The string the app stores in `PlayEvent.surfaceDetail` for plays it can attribute, so later
+ * events can be attributed to a place, a generator (per-source skip rates) and a discovery slot
+ * (exploration feedback). Format: `<place>/<source|->/<slot|->`, then `/<row>` when there is a row.
+ * The row keeps its own slashes; line breaks and tabs in it become spaces. Legacy Infinity tags
+ * (`infinity/<pick>`) still parse; anything else Turtle did not write parses to null.
  */
 object SurfaceTag {
-    private const val PREFIX = "taste/"
+    private const val NONE = "-"
 
-    fun format(source: CandidateSource, slot: SlotKind): String = "$PREFIX${source.tag}/${slot.tag}"
+    fun format(source: CandidateSource, slot: SlotKind): String = format(PlayOrigin(PlayPlace.ENGINE, source, slot))
 
-    fun parse(detail: String?): Pair<CandidateSource, SlotKind>? {
-        if (detail == null || !detail.startsWith(PREFIX)) return null
-        val parts = detail.removePrefix(PREFIX).split('/')
-        if (parts.size != 2) return null
-        val source = CandidateSource.fromTag(parts[0]) ?: return null
-        val slot = SlotKind.entries.firstOrNull { it.tag == parts[1] } ?: return null
-        return source to slot
+    fun format(origin: PlayOrigin): String {
+        val head = "${origin.place.tag}/${origin.source?.tag ?: NONE}/${origin.slot?.tag ?: NONE}"
+        val row = origin.row?.replace('\n', ' ')?.replace('\r', ' ')?.replace('\t', ' ')
+        return if (row.isNullOrEmpty()) head else "$head/$row"
+    }
+
+    fun parse(detail: String?): PlayOrigin? {
+        if (detail.isNullOrEmpty()) return null
+        val parts = detail.split('/', limit = 4)
+        val place = PlayPlace.fromTag(parts[0]) ?: return null
+        if (parts.size == 2) return if (place == PlayPlace.INFINITY) legacyInfinity(parts[1]) else null
+        if (parts.size < 3) return null
+        val source = if (parts[1] == NONE) null else CandidateSource.fromTag(parts[1]) ?: return null
+        val slot = if (parts[2] == NONE) null else SlotKind.entries.firstOrNull { it.tag == parts[2] } ?: return null
+        return PlayOrigin(place, source, slot, parts.getOrNull(3)?.takeIf { it.isNotEmpty() })
+    }
+
+    /** `infinity/<pick>`, written before plays carried a full origin. "foryou" never stored its generator. */
+    private fun legacyInfinity(pick: String): PlayOrigin? = when {
+        pick == "familiar" -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.LIBRARY, SlotKind.FAMILIAR, pick)
+        pick == "morelike" || pick.startsWith("genre:") -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, pick)
+        pick == "foryou" -> PlayOrigin(PlayPlace.INFINITY, row = pick)
+        else -> null
     }
 }
 

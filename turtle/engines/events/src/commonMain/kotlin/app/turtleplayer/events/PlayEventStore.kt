@@ -32,12 +32,20 @@ interface PlayEventStore {
     suspend fun deleteSource(source: EventSource)
 
     suspend fun count(): Long
+
+    /** Records a non-play feedback event. Not emitted on [newEvents]. Returns its id. */
+    suspend fun appendFeedback(feedback: TrackFeedback): Long
+
+    /** Feedback with `atMs >= sinceMs`, oldest first. */
+    suspend fun feedbackSince(sinceMs: Long, limit: Int = Int.MAX_VALUE): List<TrackFeedback>
 }
 
 class InMemoryPlayEventStore : PlayEventStore {
     private val mutex = Mutex()
     private val events = ArrayList<PlayEvent>()
     private var nextId = 1L
+    private val feedback = ArrayList<TrackFeedback>()
+    private var nextFeedbackId = 1L
     private val stream = MutableSharedFlow<PlayEvent>(extraBufferCapacity = 64)
 
     override val newEvents: SharedFlow<PlayEvent> = stream.asSharedFlow()
@@ -84,4 +92,15 @@ class InMemoryPlayEventStore : PlayEventStore {
     }
 
     override suspend fun count(): Long = mutex.withLock { events.size.toLong() }
+
+    override suspend fun appendFeedback(feedback: TrackFeedback): Long = mutex.withLock {
+        val f = feedback.copy(id = nextFeedbackId++)
+        val idx = this.feedback.indexOfFirst { it.atMs > f.atMs }
+        if (idx < 0) this.feedback += f else this.feedback.add(idx, f)
+        f.id
+    }
+
+    override suspend fun feedbackSince(sinceMs: Long, limit: Int): List<TrackFeedback> = mutex.withLock {
+        feedback.asSequence().filter { it.atMs >= sinceMs }.take(limit).toList()
+    }
 }

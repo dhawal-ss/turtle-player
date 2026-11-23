@@ -10,11 +10,14 @@ import app.turtleplayer.core.cleanArtistName
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 import kotlin.math.tanh
 import kotlin.random.Random
 
@@ -87,6 +90,8 @@ class TasteEngine(
      * now rather than the last play's. Null: the last play's context is used.
      */
     private val contextAt: ((Long) -> PlayContext)? = null,
+    /** The app's own block list, merged into [controls] live and never saved. */
+    private val blocks: ExternalBlocks? = null,
 ) {
     private val mutex = Mutex()
     private val policy = ExplorationPolicy(random)
@@ -127,8 +132,28 @@ class TasteEngine(
     private val queuedSlots = LinkedHashMap<TrackKey, SlotKind>()
     private val recent = RecentlyRecommended(config.queueRules.recentMemory).also { it.restore(recentlyRecommended) }
 
-    var controls: UserControls = controls
-        private set
+    // The listener's own controls. Volatile, and the merge cache is one immutable holder, because
+    // [controls] may be read outside the mutex.
+    @Volatile
+    private var own: UserControls = controls
+
+    private class Merged(val own: UserControls, val blocks: BlockedSet, val result: UserControls)
+
+    @Volatile
+    private var merged: Merged? = null
+
+    /** Only what the listener set in Turtle: what [exportState] saves and the Hidden page lists. */
+    val listenerControls: UserControls get() = own
+
+    /** What ranking uses: the listener's controls plus the app's block list. Safe to read from any thread. */
+    val controls: UserControls
+        get() {
+            val o = own
+            val b = blocks?.current() ?: return o
+            merged?.let { if (it.own === o && it.blocks === b) return it.result }
+            return o.withBlocks(b).also { merged = Merged(o, b, it) }
+        }
+
     var explorationState: ExplorationState = exploration
         private set
 
@@ -170,8 +195,8 @@ class TasteEngine(
         ensureLoaded()
         builder.add(event)
         event.context?.let { context = it }
-        if (event.lessLikeThis) controls = controls.apply(LessLikeThis.Track(event.trackKey, event.artistKey))
-        val slot = SurfaceTag.parse(event.surfaceDetail)?.second ?: queuedSlots[event.trackKey]
+        if (event.lessLikeThis) own = own.apply(LessLikeThis.Track(event.trackKey, event.artistKey))
+        val slot = SurfaceTag.parse(event.surfaceDetail)?.slot ?: queuedSlots[event.trackKey]
         if (slot == SlotKind.DISCOVERY) explorationState = policy.update(explorationState, policy.outcomeOf(event))
         updateProfileLocked()
         session.onPlay(event, representation.vectorFor(event.track))
@@ -179,6 +204,30 @@ class TasteEngine(
         consumeThrough(event.trackKey)
         if (autoplayActive) rerankLocked()
         queue
+    }
+
+    /**
+     * Applies a non-play feedback event the app has already stored: ADDED_TO_PLAYLIST raises affinity;
+     * NOT_INTERESTED rules the track out (as [LessLikeThis.Track]) and drops it from Up Next;
+     * UNDO_NOT_INTERESTED brings it back (controls and profile). Not collected by [observe].
+     */
+    suspend fun onFeedback(f: TrackFeedback) {
+        mutex.withLock {
+            // Not loaded yet: the load reads the stored event, so adding it here would count it twice.
+            val wasLoaded = loaded
+            ensureLoaded()
+            if (wasLoaded) builder.addFeedback(f)
+            when (f.kind) {
+                TrackFeedbackKind.ADDED_TO_PLAYLIST -> Unit
+                TrackFeedbackKind.NOT_INTERESTED -> {
+                    own = own.apply(LessLikeThis.Track(f.track.key, f.track.artistKey))
+                    queue = queue.filterNot { it.key == f.track.key }
+                }
+                TrackFeedbackKind.UNDO_NOT_INTERESTED -> own = own.undo(Hidden.Track(f.track.key, f.track.artistKey))
+            }
+            updateProfileLocked()
+            if (autoplayActive && f.kind != TrackFeedbackKind.ADDED_TO_PLAYLIST) rerankLocked()
+        }
     }
 
     /** Tells the engine which track is playing now; drops it (and anything skipped over) from Up Next. */
@@ -291,6 +340,20 @@ class TasteEngine(
         queue
     }
 
+    /**
+     * Long-term-taste picks laid out with the queue rules, for callers that play them themselves (the
+     * Infinity Mix). Read-only: the session, Up Next, the radio seed and the recently-recommended
+     * memory are untouched, so calling it while music plays changes nothing.
+     */
+    suspend fun forYou(limit: Int = config.upNextSize): List<QueueItem> = mutex.withLock {
+        ensureLoaded()
+        val now = clock.nowMs()
+        val request = GenerationRequest(profile, controls, now, sessionVector = profile.longTermVector)
+        val ranked = rankLocked(autoplayCollector, request)
+        val slots = policy.planSlots(limit, policy.sampleShare(explorationState, controls.discoveryDial))
+        assembler.assemble(emptyList(), ranked, slots, profile.recentPlays, null, recent, now)
+    }
+
     /** Mood chip: nudge the session toward [target] (null clears). Re-ranks beyond the next two. */
     suspend fun setMood(target: FloatArray?, strength: Float = 0.5f): List<QueueItem> = mutex.withLock {
         ensureLoaded()
@@ -304,7 +367,7 @@ class TasteEngine(
     /** "Less like this" on a track, artist or shelf. Removes affected tracks from Up Next and re-ranks. */
     suspend fun lessLikeThis(target: LessLikeThis): List<QueueItem> = mutex.withLock {
         ensureLoaded()
-        controls = controls.apply(target)
+        own = own.apply(target)
         if (target is LessLikeThis.Track) queue = queue.filterNot { it.key == target.track }
         if (target is LessLikeThis.ForReason) queue = queue.filterNot { it.reason.key == target.reason.key }
         if (autoplayActive) rerankLocked()
@@ -314,7 +377,7 @@ class TasteEngine(
     /** Applies a change to the listener's controls; an active Up Next is re-ranked beyond the next two. */
     suspend fun updateControls(transform: (UserControls) -> UserControls) {
         mutex.withLock {
-            controls = transform(controls)
+            own = transform(own)
             if (loaded) {
                 updateProfileLocked()
                 if (autoplayActive) rerankLocked()
@@ -525,7 +588,7 @@ class TasteEngine(
     /** The listener's controls, exploration state, recent recommendations and kept shelves, for the app to save. */
     suspend fun exportState(): String = mutex.withLock {
         val kept = stable.entries.sortedBy { it.key.ordinal }.map { (cadence, p) -> KeptShelves(cadence, p.first, p.second) }
-        TasteState(controls, explorationState, recent.toList(), kept).encode()
+        TasteState(own, explorationState, recent.toList(), kept).encode()
     }
 
     /**
@@ -536,7 +599,7 @@ class TasteEngine(
      */
     suspend fun importState(encoded: String): Boolean = mutex.withLock {
         val state = TasteState.decode(encoded) ?: return@withLock false
-        controls = state.controls.copy(discoveryDial = controls.discoveryDial)
+        own = state.controls.copy(discoveryDial = own.discoveryDial)
         explorationState = state.exploration
         recent.restore(state.recent)
         for (group in state.kept) {
@@ -573,6 +636,7 @@ class TasteEngine(
         builder = TasteProfileBuilder(config.affinity, songs).also { b ->
             b.addAll(history)
             saved.forEach(b::addSaved)
+            events.feedbackSince(now - config.historyDays * DAY_MS).forEach(b::addFeedback)
         }
         val full = builder.build(now, representation, config.clustering)
         clusters = full.clusters

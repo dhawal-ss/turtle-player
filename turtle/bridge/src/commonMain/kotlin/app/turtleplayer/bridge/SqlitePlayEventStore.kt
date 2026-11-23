@@ -17,6 +17,8 @@ import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -73,6 +75,30 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             // Songs on Home's Turtle shelves, so the day's and week's shelves stay playable after a restart.
             connection.execSQL("CREATE TABLE IF NOT EXISTS shelf_song (id TEXT PRIMARY KEY, json TEXT NOT NULL)")
             connection.execSQL("PRAGMA user_version = 5")
+        }
+        if (version < 6) {
+            // Non-play feedback: songs added to a playlist, "not interested" and its undo.
+            connection.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS track_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    at_ms INTEGER NOT NULL,
+                    track_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    artists TEXT NOT NULL,
+                    artist_key TEXT NOT NULL,
+                    album TEXT,
+                    track_duration_ms INTEGER,
+                    youtube_id TEXT,
+                    explicit INTEGER NOT NULL,
+                    detail TEXT,
+                    source TEXT NOT NULL
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL("CREATE INDEX IF NOT EXISTS idx_track_feedback_at ON track_feedback(at_ms)")
+            connection.execSQL("PRAGMA user_version = 6")
         }
     }
 
@@ -283,6 +309,73 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
         connection.prepare("SELECT COUNT(*) FROM play_event").use { if (it.step()) it.getLong(0) else 0L }
     }
 
+    override suspend fun appendFeedback(feedback: TrackFeedback): Long =
+        db {
+            connection.prepare(INSERT_FEEDBACK).use { s ->
+                var i = 0
+
+                fun text(v: String?) = if (v == null) s.bindNull(++i) else s.bindText(++i, v)
+
+                fun long(v: Long?) = if (v == null) s.bindNull(++i) else s.bindLong(++i, v)
+                val t = feedback.track
+                text(feedback.kind.name)
+                long(feedback.atMs)
+                text(t.key.value)
+                text(t.title)
+                text(t.artists.joinToString(ARTIST_SEPARATOR))
+                text(t.artistKey.value)
+                text(t.album)
+                long(t.durationMs)
+                text(t.youtubeId)
+                long(if (t.explicit) 1L else 0L)
+                text(feedback.detail)
+                text(feedback.source.name)
+                s.step()
+            }
+            connection.prepare("SELECT last_insert_rowid()").use { if (it.step()) it.getLong(0) else 0L }
+        }
+
+    override suspend fun feedbackSince(
+        sinceMs: Long,
+        limit: Int,
+    ): List<TrackFeedback> =
+        db {
+            connection.prepare("SELECT * FROM track_feedback WHERE at_ms >= ? ORDER BY at_ms ASC, id ASC LIMIT ?").use { s ->
+                s.bindLong(1, sinceMs)
+                s.bindLong(2, limit.toLong())
+                val cols = (0 until s.getColumnCount()).associateBy { s.getColumnName(it) }
+
+                fun text(name: String) = cols.getValue(name).let { if (s.isNull(it)) null else s.getText(it) }
+
+                fun long(name: String) = cols.getValue(name).let { if (s.isNull(it)) null else s.getLong(it) }
+                val out = ArrayList<TrackFeedback>()
+                while (s.step()) {
+                    // A kind this version does not know (written by a newer one) is skipped, never guessed.
+                    val kind = text("kind")?.let { k -> TrackFeedbackKind.entries.firstOrNull { it.name == k } } ?: continue
+                    val track =
+                        TrackMeta(
+                            key = TrackKey(text("track_key")!!),
+                            title = text("title")!!,
+                            artists = text("artists")!!.split(ARTIST_SEPARATOR).filter { it.isNotEmpty() },
+                            album = text("album"),
+                            durationMs = long("track_duration_ms"),
+                            youtubeId = text("youtube_id"),
+                            explicit = long("explicit") == 1L,
+                        )
+                    out +=
+                        TrackFeedback(
+                            id = long("id")!!,
+                            track = track,
+                            kind = kind,
+                            atMs = long("at_ms")!!,
+                            detail = text("detail"),
+                            source = enumOr(text("source"), EventSource.LOCAL),
+                        )
+                }
+                out
+            }
+        }
+
     fun close() = connection.close()
 
     private fun insert(e: PlayEvent, table: String = "play_event"): Long {
@@ -386,6 +479,12 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
 
     private companion object {
         const val ARTIST_SEPARATOR = "\u001f"
+        val INSERT_FEEDBACK =
+            """
+            INSERT INTO track_feedback (
+                kind, at_ms, track_key, title, artists, artist_key, album, track_duration_ms, youtube_id, explicit, detail, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent()
         fun insertInto(table: String) = """
             INSERT INTO $table (
                 track_key, title, artists, artist_key, album, track_duration_ms, released_at_ms, youtube_id, isrc, explicit,

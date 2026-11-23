@@ -6,10 +6,21 @@ import app.turtleplayer.search.LexicalQuery
 import app.turtleplayer.search.LocalItem
 import app.turtleplayer.search.LocalLibrary
 import app.turtleplayer.search.LocalSource
+import app.turtleplayer.core.ArtistKey
+import app.turtleplayer.core.TrackKey
+import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.FeedbackKind
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import app.turtleplayer.taste.DiscoveryDial
+import app.turtleplayer.taste.Hidden
 import app.turtleplayer.taste.LessLikeThis
+import app.turtleplayer.taste.PlayOrigin
+import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
+import app.turtleplayer.taste.hidden
+import app.turtleplayer.taste.undo
 import com.metrolist.shared.api.searchSummaryOverride
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SearchSummaryPage
@@ -28,10 +39,12 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
 
 /** Wires our engines into the running app once, and serves the upstream hook calls. */
-@OptIn(ExperimentalAtomicApi::class)
+@OptIn(ExperimentalAtomicApi::class, ExperimentalTime::class)
 class TurtleRuntime(
     private val turtleScope: TurtleScope,
     val observer: PlayerObserver,
@@ -45,11 +58,19 @@ class TurtleRuntime(
     val infinity: InfinityMix,
     private val coListening: CoListeningSync,
     private val history: MetrolistHistoryImport,
+    private val playlistAdds: PlaylistAddWatcher,
+    private val blocks: UpstreamBlocks,
+    private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private val started = AtomicBoolean(false)
 
     /** Completed once the saved taste state has been read (or found unreadable), so nothing saves defaults over it. */
     private val tasteRestored = CompletableDeferred<Unit>()
+
+    // Display data of what the listener hid in Turtle (titles, thumbnails), saved under [PREF_HIDDEN].
+    private val hiddenLock = Mutex()
+    private var hiddenRecords: List<HiddenEntry> = emptyList()
+    private val publishLock = Mutex()
 
     /** Resumes after a crash or system kill mid-song, then keeps the playing mark (CrashResume.kt). */
     suspend fun crashResume(currentSong: StateFlow<SongItem?>, isPlaying: StateFlow<Boolean>) = CrashResume.run(store, currentSong, isPlaying)
@@ -61,6 +82,8 @@ class TurtleRuntime(
         DriveLog.start(scope)
         librarySync.start(scope)
         observer.startCheckpoints(scope)
+        playlistAdds.start(scope)
+        blocks.start(scope)
         scope.launch { TurtleDefaults.applyOnce(store) }
         // Load history and build the taste profile now, so the first radio page is not ranked cold.
         scope.launch {
@@ -69,6 +92,10 @@ class TurtleRuntime(
             } finally {
                 tasteRestored.complete(Unit)
             }
+            restoreHidden()
+            // Home's Turtle row keys are rebuilt with the shelves (a cluster mix's id is its index), so
+            // which rows are dismissed is worked out again for each new set.
+            scope.launch { snapshotFlow { home.shelves.map { it.key } }.collect { publishHidden() } }
             restoreDiscoveryDial()
             infinity.restore()
             // Before the first profile build, so a listener coming from Metrolist is not cold.
@@ -137,7 +164,8 @@ class TurtleRuntime(
                 val byId = page.songs.associateBy { it.id }
                 val ranked = taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() })
                 val ordered = ranked.mapNotNull { item ->
-                    item.track.youtubeId?.let(byId::get)?.also { observer.tag(it.id, item.surfaceDetail) }
+                    val song = item.track.youtubeId?.let(byId::get)
+                    song?.also { observer.tag(it.id, SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, item.source, item.slot))) }
                 }
                 page.copy(songs = ordered)
             }
@@ -181,12 +209,171 @@ class TurtleRuntime(
 
     /** "Less like this" on a song: recorded on its play event and applied to the taste engine at once. */
     suspend fun lessLikeThis(song: SongItem) {
+        // Restoring the saved controls replaces them, so a change made before that would be lost.
+        tasteRestored.await()
         val meta = song.toTrackMeta()
         taste.lessLikeThis(LessLikeThis.Track(meta.key, meta.artistKey))
         saveTasteState()
+        rememberHidden(songEntry(song))
+        publishHidden()
         infinity.feedback(song, liked = false)
         if (observer.currentSong()?.id == song.id) observer.feedback(FeedbackKind.LESS_LIKE_THIS)
     }
+
+    /**
+     * "Not interested" on a Home item: a song is ruled out through a stored feedback event (its play is
+     * not marked and it keeps playing), an artist is muted, a Turtle mix is dismissed (a no-op once the
+     * mix has left Home). Turtle never writes YouTube dislikes.
+     */
+    suspend fun notInterested(target: NotInterested) {
+        tasteRestored.await()
+        val entry =
+            when (target) {
+                is NotInterested.Song -> {
+                    val feedback = TrackFeedback(track = target.song.toTrackMeta(), kind = TrackFeedbackKind.NOT_INTERESTED, atMs = nowMs())
+                    val id = store.appendFeedback(feedback)
+                    taste.onFeedback(feedback.copy(id = id))
+                    songEntry(target.song)
+                }
+
+                is NotInterested.Artist -> {
+                    // Songs carry the raw artist name, so the mute is keyed on it; the alias is only the title.
+                    val artist = ArtistKey.of(target.artist.title)
+                    taste.updateControls { it.copy(mutedArtists = it.mutedArtists + artist) }
+                    HiddenEntry(HiddenKind.ARTIST, artist.value, target.title, thumbnail = target.artist.thumbnail)
+                }
+
+                is NotInterested.Mix -> {
+                    val shelf = home.engineShelf(target.homeKey) ?: return
+                    taste.lessLikeThis(shelf.lessLikeThis)
+                    HiddenEntry(HiddenKind.MIX, shelf.reason.key, target.title)
+                }
+            }
+        saveTasteState()
+        rememberHidden(entry)
+        publishHidden()
+    }
+
+    /** "Show again" on the Hidden page: takes the entry back, play-level marks included. */
+    suspend fun undoHidden(entry: HiddenEntry) {
+        tasteRestored.await()
+        when (entry.kind) {
+            HiddenKind.SONG -> {
+                val key = TrackKey(entry.key)
+                val cached = if (key.scheme == TrackKey.YOUTUBE) cache.get(key.id) else null
+                // The track's own artist, so the undo takes back the artist's mark too (a record may lack it).
+                val track =
+                    cached?.toTrackMeta()
+                        ?: taste.profile().track(key)?.meta
+                        ?: TrackMeta(key, entry.title, listOfNotNull(entry.artist))
+                val feedback = TrackFeedback(track = track, kind = TrackFeedbackKind.UNDO_NOT_INTERESTED, atMs = nowMs())
+                val id = store.appendFeedback(feedback)
+                taste.onFeedback(feedback.copy(id = id))
+            }
+
+            HiddenKind.ARTIST -> {
+                taste.updateControls { it.undo(Hidden.Artist(ArtistKey(entry.key))) }
+            }
+
+            HiddenKind.MIX -> {
+                taste.updateControls { it.undo(Hidden.Shelf(entry.key)) }
+            }
+        }
+        hiddenLock.withLock { hiddenRecords = hiddenRecords.filterNot { it.kind == entry.kind && it.key == entry.key } }
+        saveTasteState()
+        saveHiddenRecords()
+        publishHidden()
+    }
+
+    private fun songEntry(song: SongItem) =
+        HiddenEntry(HiddenKind.SONG, song.toTrackMeta().key.value, song.title, song.artists.firstOrNull()?.name, song.thumbnail)
+
+    private suspend fun rememberHidden(entry: HiddenEntry) {
+        hiddenLock.withLock { hiddenRecords = hiddenRecords.filterNot { it.kind == entry.kind && it.key == entry.key } + entry }
+        saveHiddenRecords()
+    }
+
+    private suspend fun saveHiddenRecords() {
+        val text = hiddenLock.withLock { HiddenRecords.encode(hiddenRecords) }
+        runCatching { store.setPref(PREF_HIDDEN, text) }
+            .onFailure { if (it is CancellationException) throw it else TurtleLog.error("could not save the hidden list", it) }
+    }
+
+    private suspend fun restoreHidden() {
+        try {
+            val saved = HiddenRecords.decode(store.pref(PREF_HIDDEN))
+            hiddenLock.withLock { hiddenRecords = saved }
+            publishHidden()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not restore the hidden list", e)
+        }
+    }
+
+    /**
+     * Publishes what the listener hid in Turtle (never upstream's block list, which keeps its own pages):
+     * the Hidden page's rows, titled from the saved records or the engine, and what Home filters out.
+     */
+    private suspend fun publishHidden() {
+        try {
+            // One at a time: each reads the controls when it starts, so the last to publish is the newest.
+            publishLock.withLock { publishHiddenNow() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not publish the hidden list", e)
+        }
+    }
+
+    private suspend fun publishHiddenNow() {
+        // Records first: a record is added only after its control, so every record read here has its
+        // control in [controls], and one added meanwhile is never pruned as stale.
+        val records = hiddenLock.withLock { hiddenRecords }
+        val controls = taste.listenerControls
+        val entries =
+            controls.hidden().map { h ->
+                when (h) {
+                    is Hidden.Track -> {
+                        records.find(HiddenKind.SONG, h.track.value)
+                            ?: HiddenEntry(HiddenKind.SONG, h.track.value, taste.displayName(h.track) ?: h.track.value)
+                    }
+
+                    is Hidden.Artist -> {
+                        records.find(HiddenKind.ARTIST, h.artist.value)
+                            ?: HiddenEntry(HiddenKind.ARTIST, h.artist.value, taste.displayName(h.artist) ?: h.artist.value)
+                    }
+
+                    is Hidden.Shelf -> {
+                        records.find(HiddenKind.MIX, h.reasonKey) ?: HiddenEntry(HiddenKind.MIX, h.reasonKey, h.reasonKey)
+                    }
+                }
+            }
+        val listed = entries.mapTo(HashSet()) { it.kind to it.key }
+        val stale =
+            hiddenLock.withLock {
+                val kept = hiddenRecords.filter { it !in records || (it.kind to it.key) in listed }
+                (kept.size != hiddenRecords.size).also { hiddenRecords = kept }
+            }
+        if (stale) saveHiddenRecords()
+        hiddenEntriesState.value = entries
+        val dismissedRows =
+            home.shelves.map { it.key }.filterTo(HashSet()) { key ->
+                val reason = home.engineShelf(key)?.reason ?: return@filterTo false
+                reason.key in controls.suppressedReasons
+            }
+        hiddenSetState =
+            HiddenSet(
+                songIds = controls.lessLikeThisTracks.filter { it.scheme == TrackKey.YOUTUBE }.mapTo(HashSet()) { it.id },
+                artists = controls.mutedArtists,
+                homeShelfKeys = dismissedRows,
+            )
+    }
+
+    private fun List<HiddenEntry>.find(
+        kind: HiddenKind,
+        key: String,
+    ) = firstOrNull { it.kind == kind && it.key == key }
 
     /** Discovery dial position: 0 familiar, 0.5 balanced, 1 adventurous. Saved across launches. */
     suspend fun setDiscoveryDial(position: Double) {
@@ -260,6 +447,7 @@ class TurtleRuntime(
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
         const val PREF_DIAL = "discovery_dial"
+        const val PREF_HIDDEN = "hidden_items"
     }
 }
 

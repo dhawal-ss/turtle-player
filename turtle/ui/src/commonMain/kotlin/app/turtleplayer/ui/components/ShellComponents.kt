@@ -248,9 +248,20 @@ fun Modifier.cardHover(hovered: Boolean): Modifier {
 
 /** Square mix card with the name set on the artwork and a "who's in it" line below. */
 @Composable
-fun MixCard(title: String, subtitle: String, artUrl: String?, tint: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun MixCard(
+    title: String,
+    subtitle: String,
+    artUrl: String?,
+    tint: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+) {
     val (source, hovered) = rememberHover()
-    Column(modifier.hoverable(source).cardHover(hovered).shellPressable(onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        modifier.hoverable(source).cardHover(hovered).shellPressable(onClick, onLongClick = onLongClick),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(ShellShapes.Art).background(tint)) {
             if (artUrl != null) {
                 AsyncImage(model = artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.55f })

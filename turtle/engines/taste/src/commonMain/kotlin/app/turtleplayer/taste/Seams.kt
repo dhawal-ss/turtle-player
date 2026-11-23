@@ -37,6 +37,29 @@ interface RecommendationSource {
     suspend fun related(seed: TrackMeta, limit: Int): List<TrackMeta>
 }
 
+/** Songs and artists the app's own block list rules out. */
+data class BlockedSet(val tracks: Set<TrackKey> = emptySet(), val artists: Set<ArtistKey> = emptySet()) {
+    companion object {
+        val NONE = BlockedSet()
+    }
+}
+
+/**
+ * The app's block list, read live and never copied into [UserControls]: unblocking there takes
+ * effect here. Return the same instance while unchanged; it is read often, inside the engine's lock.
+ */
+fun interface ExternalBlocks {
+    fun current(): BlockedSet
+}
+
+/** [this] with [blocks] merged in (tracks into lessLikeThisTracks, artists into mutedArtists); [this] itself when [blocks] is empty. */
+fun UserControls.withBlocks(blocks: BlockedSet): UserControls =
+    if (blocks.tracks.isEmpty() && blocks.artists.isEmpty()) {
+        this
+    } else {
+        copy(lessLikeThisTracks = lessLikeThisTracks + blocks.tracks, mutedArtists = mutedArtists + blocks.artists)
+    }
+
 /** Simple catalog for tests, tools and the offline evaluator. */
 class InMemoryTrackCatalog(tracks: Collection<TrackMeta>) : TrackCatalog {
     private val byKey = LinkedHashMap<TrackKey, TrackMeta>()

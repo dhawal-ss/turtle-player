@@ -5,6 +5,8 @@ import app.turtleplayer.core.HOUR_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -141,5 +143,43 @@ class TasteProfileTest {
         assertEquals(4, SphericalKMeans.chooseK(32))
         assertEquals(8, SphericalKMeans.chooseK(5000))
         assertFalse(SphericalKMeans.chooseK(40) > 8)
+    }
+
+    @Test
+    fun playlistAddCountsOnceAsAStrongPositive() {
+        val t = world.tracks[0]
+        val at = now - 10 * DAY_MS
+        val p = TasteProfileBuilder().apply { addFeedback(TrackFeedback(track = t, kind = TrackFeedbackKind.ADDED_TO_PLAYLIST, atMs = at)) }.snapshot(now, rep)
+        val w = AffinityWeights()
+        assertEquals(w.addedToPlaylist * w.decay(now - at), p.track(t.key)!!.affinity, 1e-9)
+        assertEquals(0, p.track(t.key)!!.plays)
+        assertTrue(p.hasHeard(t))
+    }
+
+    @Test
+    fun undoTakesBackEveryEarlierNotInterestedMark() {
+        val a = world.tracks[0]
+        val skip = play(a, now - 3 * DAY_MS, EndReason.SKIPPED, msPlayed = 5_000)
+        val plain = TasteProfileBuilder().apply { add(skip) }.snapshot(now, rep)
+        fun build(feedbackFirst: Boolean) = TasteProfileBuilder().apply {
+            val fb = listOf(
+                TrackFeedback(track = a, kind = TrackFeedbackKind.NOT_INTERESTED, atMs = now - 2 * DAY_MS),
+                TrackFeedback(track = a, kind = TrackFeedbackKind.UNDO_NOT_INTERESTED, atMs = now - DAY_MS),
+            )
+            if (feedbackFirst) fb.forEach(::addFeedback)
+            add(skip.copy(lessLikeThis = true)) // hidden from Now Playing while it played
+            if (!feedbackFirst) fb.forEach(::addFeedback)
+        }.snapshot(now, rep)
+        for (undone in listOf(build(false), build(true))) {
+            assertFalse(undone.track(a.key)!!.lessLikeThis)
+            assertEquals(plain.track(a.key)!!.affinity, undone.track(a.key)!!.affinity, 1e-9)
+            assertEquals(plain.artist(a.artistKey)!!.affinity, undone.artist(a.artistKey)!!.affinity, 1e-9)
+        }
+        val hiddenAgain = TasteProfileBuilder().apply {
+            add(skip.copy(lessLikeThis = true))
+            addFeedback(TrackFeedback(track = a, kind = TrackFeedbackKind.UNDO_NOT_INTERESTED, atMs = now - DAY_MS))
+            addFeedback(TrackFeedback(track = a, kind = TrackFeedbackKind.NOT_INTERESTED, atMs = now - HOUR_MS))
+        }.snapshot(now, rep)
+        assertTrue(hiddenAgain.track(a.key)!!.lessLikeThis)
     }
 }

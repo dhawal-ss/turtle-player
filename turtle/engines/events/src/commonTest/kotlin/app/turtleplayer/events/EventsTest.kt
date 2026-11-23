@@ -400,3 +400,17 @@ class PlayerHistoryImportTest {
         assertEquals(3, store.count())
     }
 }
+
+class TrackFeedbackStoreTest {
+    @Test
+    fun feedbackIsKeptApartFromPlaysOldestFirst() = runTest {
+        val store = InMemoryPlayEventStore()
+        store.appendFeedback(TrackFeedback(track = track("b"), kind = TrackFeedbackKind.NOT_INTERESTED, atMs = 2_000))
+        val id = store.appendFeedback(TrackFeedback(track = track("a"), kind = TrackFeedbackKind.ADDED_TO_PLAYLIST, atMs = 1_000, detail = "PL1"))
+        assertTrue(id > 0)
+        assertEquals(listOf("yt:a", "yt:b"), store.feedbackSince(0).map { it.track.key.value })
+        assertEquals("PL1", store.feedbackSince(0).first().detail)
+        assertEquals(listOf("yt:b"), store.feedbackSince(1_500).map { it.track.key.value })
+        assertEquals(0L, store.count())
+    }
+}

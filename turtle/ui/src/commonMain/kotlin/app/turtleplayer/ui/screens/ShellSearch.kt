@@ -68,6 +68,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import app.turtleplayer.bridge.TurtleBridge
+import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.Equalizer
@@ -503,7 +505,7 @@ private fun TopResultCard(item: YTItem, slot: SearchSlot, wide: Boolean, modifie
     Box(
         modifier.padding(start = 16.dp).then(if (wide) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().padding(end = 16.dp))
             .clip(RoundedCornerShape(8.dp)).background(bg).hoverable(hover)
-            .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
+            .shellPressable({ playResult(slot, item) }, onLongClick = { slot.onItemLongClick(item) })
             .padding(16.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -520,7 +522,7 @@ private fun TopResultCard(item: YTItem, slot: SearchSlot, wide: Boolean, modifie
             }
         }
         // Touch has no hover, so a song's play button is always there (H-Search).
-        if (isSong) HoverPlayButton(true, 52.dp, { slot.onItemClick(item) }, Modifier.align(Alignment.BottomEnd))
+        if (isSong) HoverPlayButton(true, 52.dp, { playResult(slot, item) }, Modifier.align(Alignment.BottomEnd))
     }
 }
 
@@ -534,7 +536,7 @@ private fun ResultRow(item: YTItem, slot: SearchSlot, compact: Boolean = false, 
     val artSize = if (compact) 44.dp else 48.dp
     Row(
         modifier.fillMaxWidth().padding(horizontal = if (compact) 0.dp else 8.dp).clip(RoundedCornerShape(6.dp)).background(bg).hoverable(hover)
-            .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) })
+            .shellPressable({ playResult(slot, item) }, onLongClick = { slot.onItemLongClick(item) })
             .padding(horizontal = 8.dp, vertical = if (compact) 4.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -591,12 +593,12 @@ private fun CardRow(items: List<YTItem>, slot: SearchSlot, wide: Boolean) {
             val (hover, hovered) = rememberHover()
             Column(
                 Modifier.hoverable(hover).cardHover(hovered).width(size)
-                    .shellPressable({ slot.onItemClick(item) }, onLongClick = { slot.onItemLongClick(item) }),
+                    .shellPressable({ playResult(slot, item) }, onLongClick = { slot.onItemLongClick(item) }),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Box {
                     ShellArt(item.displayThumbnailUrl, Modifier.size(size), shape = if (item is ArtistItem) CircleShape else ShellShapes.Art)
-                    if (item is SongItem) HoverPlayButton(hovered, 44.dp, { slot.onItemClick(item) }, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+                    if (item is SongItem) HoverPlayButton(hovered, 44.dp, { playResult(slot, item) }, Modifier.align(Alignment.BottomEnd).padding(8.dp))
                 }
                 Text(item.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 kindOf(item)?.let { Text(it, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1) }
@@ -618,6 +620,15 @@ private fun searchSubtitle(item: YTItem): String? = when (item) {
     is PodcastItem -> item.author
     is EpisodeItem -> listOfNotNull(item.author?.name, item.publishDateText).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { null }
     else -> subtitleOf(item)
+}
+
+/** Opens a result; a song is attributed to Search first, so its play records where it came from. */
+private fun playResult(
+    slot: SearchSlot,
+    item: YTItem,
+) {
+    if (item is SongItem) TurtleBridge.attributePlay(PlayPlace.SEARCH, null, listOf(item))
+    slot.onItemClick(item)
 }
 
 @Composable

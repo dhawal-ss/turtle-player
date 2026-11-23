@@ -9,6 +9,8 @@ import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import androidx.sqlite.execSQL
 import com.metrolist.shared.db.JdbcSQLiteDriver
 import kotlinx.coroutines.test.runTest
@@ -105,6 +107,47 @@ class SqlitePlayEventStoreTest {
             val reopened = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
             assertEquals(listOf("""{"id":"b2"}""", """{"id":"c"}"""), reopened.loadShelfSongs())
             assertEquals(listOf("yt:old"), reopened.since(0).map { it.trackKey.value })
+            reopened.close()
+        }
+
+    @Test
+    fun feedbackSurvivesAReopenAndAnUpgradeFromVersionFive() =
+        runTest {
+            val file = File.createTempFile("turtle", ".db")
+            file.delete()
+            file.deleteOnExit()
+            val first = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            first.append(event("old", 500))
+            first.close()
+            val downgrade = JdbcSQLiteDriver().open(file.absolutePath)
+            downgrade.execSQL("DROP TABLE track_feedback")
+            downgrade.execSQL("PRAGMA user_version = 5")
+            downgrade.close()
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val added =
+                TrackFeedback(
+                    track =
+                        TrackMeta(
+                            TrackKey.youtube("a"),
+                            "Title a",
+                            listOf("Artist A", "Artist B"),
+                            album = "Album",
+                            durationMs = 200_000,
+                        ),
+                    kind = TrackFeedbackKind.ADDED_TO_PLAYLIST,
+                    atMs = 1_000,
+                    detail = "PLx",
+                )
+            store.appendFeedback(added)
+            store.appendFeedback(added.copy(kind = TrackFeedbackKind.NOT_INTERESTED, atMs = 2_000, detail = null))
+            store.close()
+
+            val reopened = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val all = reopened.feedbackSince(0)
+            assertEquals(added.copy(id = all[0].id), all[0])
+            assertEquals(listOf(TrackFeedbackKind.ADDED_TO_PLAYLIST, TrackFeedbackKind.NOT_INTERESTED), all.map { it.kind })
+            assertEquals(1, reopened.feedbackSince(1_500).size)
+            assertEquals(1L, reopened.count())
             reopened.close()
         }
 }

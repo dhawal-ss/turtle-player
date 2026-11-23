@@ -6,6 +6,7 @@ import app.turtleplayer.events.ListeningSessionTracker
 import app.turtleplayer.events.PlaybackSignal
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
+import app.turtleplayer.taste.SurfaceTag
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.ui.playback.PlaybackController
 import kotlinx.coroutines.CancellationException
@@ -21,6 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.math.abs
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -46,6 +51,7 @@ internal object PlaybackHints {
  * Spoken word (TurtleSpoken.isSpokenWord) is not music taste and is not recorded; whether history is
  * paused is the tracker's concern.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class PlayerObserver(
     private val tracker: ListeningSessionTracker,
     private val controller: () -> PlaybackController? = { PlaybackHints.controller },
@@ -56,8 +62,19 @@ class PlayerObserver(
     private val mutex = Mutex()
     private var current: SongItem? = null
     private val currentId: String? get() = current?.id
-    // Why our engines queued a song (QueueItem.surfaceDetail), so its play is attributed to the right generator.
-    private val pendingTags = LinkedHashMap<String, String>()
+
+    // Why our engines queued a song (QueueItem.surfaceDetail), so its play is attributed to the right generator,
+    // with the stamp it was given: the newer of a song's own tag and its queue's attribution wins.
+    private val pendingTags = LinkedHashMap<String, Pair<String, Long>>()
+    private val stamps = AtomicLong(0)
+
+    private class QueueTags(
+        val tags: Map<String, String>,
+        val stamp: Long,
+    )
+
+    // The queue the listener started (song id to surface detail), until a song outside it plays.
+    private val queueTags = AtomicReference<QueueTags?>(null)
     private var endedByEof = false
     private var repeatCheck: Job? = null
     private var startedAt: TimeMark? = null
@@ -131,8 +148,17 @@ class PlayerObserver(
     /** Remembers why [songId] was queued until it starts playing. */
     suspend fun tag(songId: String, surfaceDetail: String) = mutex.withLock {
         pendingTags.remove(songId)
-        pendingTags[songId] = surfaceDetail
+        pendingTags[songId] = surfaceDetail to stamps.incrementAndFetch()
         while (pendingTags.size > MAX_TAGS) pendingTags.remove(pendingTags.keys.first())
+    }
+
+    /**
+     * The queue the listener is starting, song id → surface detail. Replaces the previous queue's and
+     * lasts until a song outside it starts. Not suspending: call it on the UI thread right before
+     * starting playback. A per-song [tag] made later wins over it, and an earlier one loses.
+     */
+    fun attribute(tags: Map<String, String>) {
+        queueTags.store(QueueTags(tags.toMap(), stamps.incrementAndFetch()))
     }
 
     /** Records the play that was in progress when the app last stopped, then saves the open play every few seconds. */
@@ -187,13 +213,24 @@ class PlayerObserver(
         lastPositionMs = -1L
         lastPositionAt = null
         durationSent = false
-        val tag = pendingTags.remove(song.id)
+        val own = pendingTags.remove(song.id)
+        val q = queueTags.load()
+        val fromQueue = q?.tags?.get(song.id)
+        // A song outside the attributed queue: the listener moved on, so the attribution ends.
+        if (q != null && fromQueue == null) queueTags.compareAndSet(q, null)
+        val tag =
+            when {
+                own == null -> fromQueue
+                fromQueue == null || own.second > q.stamp -> own.first
+                else -> fromQueue
+            }
+        val origin = SurfaceTag.parse(tag)
         tracker.onSignal(
             PlaybackSignal.TrackStarted(
                 track = song.toTrackMeta(),
                 reason = reason,
-                // Upstream does not tell us where a queue came from yet; the queue hook will.
-                surface = if (reason == StartReason.AUTOPLAY) Surface.AUTOPLAY else Surface.QUEUE,
+                // Attributed plays know their surface; otherwise upstream does not tell us where a queue came from.
+                surface = origin?.surface ?: if (reason == StartReason.AUTOPLAY) Surface.AUTOPLAY else Surface.QUEUE,
                 surfaceDetail = tag ?: song.queueSourceTitle,
                 playing = playing,
             ),

@@ -7,6 +7,8 @@ import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.InMemoryPlayEventStore
+import app.turtleplayer.events.TrackFeedback
+import app.turtleplayer.events.TrackFeedbackKind
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
@@ -271,6 +273,17 @@ class TasteEngineTest {
         assertEquals(before, engine.explorationState)
     }
 
+    @Test
+    fun homeShelfTagsAttributeDiscoveryLikeEngineTags() = runTest {
+        val track = world.tracks.last()
+        val viaEngine = engineWithHistory()
+        val viaHome = engineWithHistory()
+        viaEngine.onPlayEvent(play(track, clock.now, EndReason.SKIPPED, msPlayed = 3_000, surfaceDetail = "taste/cf/d"))
+        viaHome.onPlayEvent(play(track, clock.now, EndReason.SKIPPED, msPlayed = 3_000, surfaceDetail = "home-turtle/cf/d/weekly_discovery:weekly"))
+        assertTrue(viaHome.explorationState != ExplorationState())
+        assertEquals(viaEngine.explorationState, viaHome.explorationState)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun generatorsRunConcurrentlyAndFailuresAreIsolated() = runTest {
@@ -377,6 +390,95 @@ class TasteEngineTest {
         )
         assertEquals(state, TasteState.decode(state.encode()))
         assertEquals(TasteState(), TasteState.decode(TasteState().encode()))
+    }
+
+    @Test
+    fun undoRestoresWhatWasRuledOut() {
+        val a = ArtistKey("a")
+        val t = TrackKey.youtube("t")
+        val m = ArtistKey("m")
+        val c = UserControls().apply(LessLikeThis.Track(t, a)).apply(LessLikeThis.Track(t, a))
+            .copy(mutedArtists = setOf(m), suppressedReasons = setOf("mix:x"))
+        assertEquals(listOf(Hidden.Track(t, null), Hidden.Artist(m), Hidden.Shelf("mix:x")), c.hidden())
+        val u = c.undo(Hidden.Track(t, a)).undo(Hidden.Artist(m)).undo(Hidden.Shelf("mix:x"))
+        assertEquals(UserControls(lessLikeThisArtists = mapOf(a to 1)), u)
+        // The mark count never goes below zero.
+        assertEquals(emptyMap(), c.undo(Hidden.Track(t, a)).undo(Hidden.Track(t, a)).undo(Hidden.Track(t, a)).lessLikeThisArtists)
+    }
+
+    @Test
+    fun notInterestedFeedbackRulesOutAndUndoBringsBack() = runTest {
+        val engine = engineWithHistory()
+        val target = engine.startAutoplay(user.heavyRotation[0])[2].track
+        engine.onFeedback(TrackFeedback(track = target, kind = TrackFeedbackKind.NOT_INTERESTED, atMs = clock.now))
+        assertTrue(target.key in engine.controls.lessLikeThisTracks)
+        assertTrue(engine.upNext().none { it.key == target.key })
+        assertTrue(engine.profile().track(target.key)!!.lessLikeThis)
+        clock.now += MINUTE_MS
+        engine.onFeedback(TrackFeedback(track = target, kind = TrackFeedbackKind.UNDO_NOT_INTERESTED, atMs = clock.now))
+        assertFalse(target.key in engine.controls.lessLikeThisTracks)
+        assertFalse(engine.profile().track(target.key)!!.lessLikeThis)
+    }
+
+    @Test
+    fun forYouLeavesTheLiveSessionAlone() = runTest {
+        val engine = engineWithHistory()
+        val upNext = engine.startAutoplay(user.heavyRotation[0])
+        val recent = engine.recentlyRecommended()
+        val picks = engine.forYou(12)
+        assertEquals(12, picks.size)
+        assertQueueRules(picks)
+        assertEquals(upNext, engine.upNext())
+        assertEquals(recent, engine.recentlyRecommended())
+    }
+
+    @Test
+    fun appBlocksApplyLiveAndAreNeverSaved() = runTest {
+        var blocked = BlockedSet.NONE
+        val store = InMemoryPlayEventStore().also { it.appendAll(history) }
+        val engine = world.engine(store, clock, blocks = ExternalBlocks { blocked })
+        val seed = user.heavyRotation[0]
+        val tracks = engine.startAutoplay(seed).map { it.track }
+        val artist = tracks.first().artistKey
+        val song = tracks.last { it.artistKey != artist }
+        blocked = BlockedSet(tracks = setOf(song.key), artists = setOf(artist))
+        val ranked = engine.rankExternal(seed, tracks)
+        assertTrue(ranked.none { it.track.artistKey == artist || it.key == song.key })
+        assertTrue(artist in engine.controls.mutedArtists)
+        assertFalse(artist in engine.listenerControls.mutedArtists)
+        val saved = TasteState.decode(engine.exportState())!!
+        assertFalse(artist in saved.controls.mutedArtists || song.key in saved.controls.lessLikeThisTracks)
+        blocked = BlockedSet.NONE // unblocked upstream
+        val again = engine.rankExternal(seed, tracks)
+        assertTrue(again.any { it.track.artistKey == artist } && again.any { it.key == song.key })
+    }
+
+    @Test
+    fun storedFeedbackShapesTheProfileAfterARestartAndCountsOnce() = runTest {
+        val store = InMemoryPlayEventStore().also { it.appendAll(history) }
+        val fresh = world.tracks.first { t -> history.none { it.trackKey == t.key } }
+        val w = AffinityWeights()
+        store.appendFeedback(TrackFeedback(track = fresh, kind = TrackFeedbackKind.ADDED_TO_PLAYLIST, atMs = clock.now - DAY_MS))
+        assertEquals(w.addedToPlaylist * w.decay(DAY_MS), world.engine(store, clock).profile().track(fresh.key)!!.affinity, 1e-9)
+        // The app stores an add, then hands it to an engine that has not loaded yet: it must count once, not twice.
+        val live = TrackFeedback(track = fresh, kind = TrackFeedbackKind.ADDED_TO_PLAYLIST, atMs = clock.now)
+        store.appendFeedback(live)
+        val engine = world.engine(store, clock)
+        engine.onFeedback(live)
+        assertEquals(w.addedToPlaylist * (w.decay(DAY_MS) + 1.0), engine.profile().track(fresh.key)!!.affinity, 1e-9)
+    }
+
+    @Test
+    fun aRebuildBetweenStoringAndHandingInFeedbackCountsItOnce() = runTest {
+        val store = InMemoryPlayEventStore().also { it.appendAll(history) }
+        val fresh = world.tracks.first { t -> history.none { it.trackKey == t.key } }
+        val engine = world.engine(store, clock)
+        engine.profile()
+        val add = TrackFeedback(track = fresh, kind = TrackFeedbackKind.ADDED_TO_PLAYLIST, atMs = clock.now)
+        val stored = add.copy(id = store.appendFeedback(add))
+        engine.refresh() // e.g. the library sync or a co-listening rebuild, before the app hands the add in
+        engine.onFeedback(stored)
+        assertEquals(AffinityWeights().addedToPlaylist, engine.profile().track(fresh.key)!!.affinity, 1e-9)
     }
 
     private val fullTrack = TrackMeta(

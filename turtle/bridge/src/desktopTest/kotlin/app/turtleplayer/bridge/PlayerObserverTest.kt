@@ -3,6 +3,7 @@ package app.turtleplayer.bridge
 import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.InMemoryPlayEventStore
 import app.turtleplayer.events.ListeningSessionTracker
+import app.turtleplayer.events.Surface
 import com.metrolist.shared.model.ArtistTiny
 import com.metrolist.shared.model.SongItem
 import kotlinx.coroutines.CompletableDeferred
@@ -102,5 +103,82 @@ class PlayerObserverTest {
             observer.settle(null)
 
             assertEquals(listOf("yt:m1"), store.since(0).map { it.trackKey.value })
+        }
+
+    @Test
+    fun queueAttributionEndsWhenTheQueueMovesOn() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer =
+                PlayerObserver(
+                    ListeningSessionTracker(store),
+                    controller = { null },
+                    isBookChapter = { false },
+                    spokenReady = {},
+                )
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            observer.attribute(mapOf("a" to "home-yt/-/-/row1", "b" to "home-yt/-/-/row1"))
+            current.value = song("a")
+            observer.settle("a")
+            current.value = song("b")
+            observer.settle("b")
+            current.value = song("c")
+            observer.settle("c") // radio after the row: not in it
+            current.value = song("a")
+            observer.settle("a") // played again from the Library
+            current.value = null
+            observer.settle(null)
+            val events = store.since(0)
+            assertEquals(listOf("home-yt/-/-/row1", "home-yt/-/-/row1", null, null), events.map { it.surfaceDetail })
+            assertEquals(listOf(Surface.SHELF, Surface.SHELF, Surface.QUEUE, Surface.QUEUE), events.map { it.surface })
+        }
+
+    @Test
+    fun attributionSetJustBeforePlaybackTagsTheTappedSong() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer =
+                PlayerObserver(
+                    ListeningSessionTracker(store),
+                    controller = { null },
+                    isBookChapter = { false },
+                    spokenReady = {},
+                )
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            observer.attribute(mapOf("s" to "search/-/-"))
+            current.value = song("s") // no suspension in between
+            observer.settle("s")
+            current.value = null
+            observer.settle(null)
+            assertEquals(Surface.SEARCH, store.since(0).single().surface)
+        }
+
+    @Test
+    fun theNewerOfQueueAndSongTagWins() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer =
+                PlayerObserver(
+                    ListeningSessionTracker(store),
+                    controller = { null },
+                    isBookChapter = { false },
+                    spokenReady = {},
+                )
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            observer.attribute(mapOf("x" to "home-grid/-/-", "y" to "home-grid/-/-"))
+            observer.tag("x", "infinity/library/f/familiar") // Infinity queued it after the Home tap
+            current.value = song("x")
+            observer.settle("x")
+            observer.tag("z", "radio/upstream/d") // radio ranked it earlier...
+            observer.attribute(mapOf("z" to "search/-/-")) // ...then the listener tapped it in Search
+            current.value = song("z")
+            observer.settle("z")
+            current.value = null
+            observer.settle(null)
+            assertEquals(listOf("infinity/library/f/familiar", "search/-/-"), store.since(0).map { it.surfaceDetail })
+            assertEquals(listOf(Surface.AUTOPLAY, Surface.SEARCH), store.since(0).map { it.surface })
         }
 }

@@ -1,8 +1,16 @@
 package app.turtleplayer.bridge
 
+import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.taste.CandidateSource
+import app.turtleplayer.taste.PlayOrigin
+import app.turtleplayer.taste.PlayPlace
+import app.turtleplayer.taste.QueueItem
+import app.turtleplayer.taste.SlotKind
+import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
+import app.turtleplayer.taste.UserControls
 import com.metrolist.shared.api.YouTubeRepository
 import com.metrolist.shared.model.SearchFilter
 import com.metrolist.shared.model.SongItem
@@ -127,7 +135,13 @@ class InfinityMix(
     /** Songs liked while the mix played: each seeds a radio of songs like it. */
     private val likedSeeds = ArrayDeque<SongItem>()
     private val moreLike = ArrayDeque<Pair<SongItem, String>>()
-    private var forYou = ArrayDeque<SongItem>()
+
+    /** "For you" picks from the taste engine, each with the queue item that says which generator proposed it. */
+    private var forYou = ArrayDeque<Pair<SongItem, QueueItem>>()
+
+    // Queue items of the "for you" songs picked in the current batch, for their play attribution.
+    private val forYouPicked = HashMap<String, QueueItem>()
+
     /** Everything served this session, so nothing repeats. */
     private val served = LinkedHashSet<String>()
     private val passedArtists = HashSet<String>()
@@ -261,8 +275,11 @@ class InfinityMix(
         val dial = discoveryDialState.value.coerceIn(0.0, 1.0)
         // Familiar 85% of songs at "Familiar", about half at the centre, 10% at "All new".
         val familiarShare = infinityFamiliarShare(dial)
+        // The one "not interested" list (Turtle's own and upstream's block list), read once per batch.
+        val ruled = taste.controls
         val familiar = familiarCandidates(taken).toCollection(ArrayDeque())
         fillBudget = FILLS_PER_BATCH
+        forYouPicked.clear()
         var acc = if (familiarShare >= 0.5) 0.5 else 0.0
         var attempts = 0
         withTimeoutOrNull(BATCH_TIMEOUT_MS) {
@@ -271,10 +288,10 @@ class InfinityMix(
                 val wantFamiliar = acc >= 1.0 - 1e-9
                 if (wantFamiliar) acc -= 1.0
                 val pick = if (wantFamiliar && familiar.isNotEmpty()) {
-                    takeSpaced(familiar, taken, recentArtists)?.let { it to InfinityWhy.Familiar }
+                    takeSpaced(familiar, taken, recentArtists, ruled)?.let { it to InfinityWhy.Familiar }
                 } else {
-                    discoveryPick(taken, recentArtists)
-                        ?: takeSpaced(familiar, taken, recentArtists)?.let { it to InfinityWhy.Familiar }
+                    discoveryPick(taken, recentArtists, ruled)
+                        ?: takeSpaced(familiar, taken, recentArtists, ruled)?.let { it to InfinityWhy.Familiar }
                 } ?: continue
                 val (song, reason) = pick
                 picks += song
@@ -284,7 +301,7 @@ class InfinityMix(
             }
         }
         served.addAll(picks.map { it.id })
-        for ((id, reason) in why) observer.tag(id, "infinity/" + tagOf(reason))
+        for ((id, reason) in why) observer.tag(id, SurfaceTag.format(originOf(reason, forYouPicked[id])))
         val merged = LinkedHashMap(_state.value.why).apply { putAll(why) }
         while (merged.size > MAX_WHY) merged.remove(merged.keys.first())
         _state.value = _state.value.copy(why = merged)
@@ -292,21 +309,50 @@ class InfinityMix(
         return picks
     }
 
-    private fun tagOf(why: InfinityWhy) = when (why) {
-        InfinityWhy.Familiar -> "familiar"
-        InfinityWhy.ForYou -> "foryou"
-        is InfinityWhy.Genre -> "genre:${why.id}"
-        is InfinityWhy.MoreLike -> "morelike"
+    /** Where an Infinity pick came from; a "for you" pick carries the generator and slot of its [item]. */
+    private fun originOf(
+        why: InfinityWhy,
+        item: QueueItem?,
+    ) = when (why) {
+        InfinityWhy.Familiar -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.LIBRARY, SlotKind.FAMILIAR, "familiar")
+        InfinityWhy.ForYou -> PlayOrigin(PlayPlace.INFINITY, item?.source, item?.slot, "foryou")
+        is InfinityWhy.Genre -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, "genre:${why.id}")
+        is InfinityWhy.MoreLike -> PlayOrigin(PlayPlace.INFINITY, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, "morelike")
     }
 
-    /** Takes the first candidate whose artist did not just play; null when none fits. */
-    private fun takeSpaced(pool: ArrayDeque<SongItem>, taken: Set<String>, recentArtists: Collection<String>): SongItem? {
-        pool.removeAll { it.id in taken || SongLikeState.isDisliked(it.id) }
-        val i = pool.indexOfFirst { it.artists.firstOrNull()?.name !in recentArtists }
+    /**
+     * Takes the first candidate whose artist did not just play; null when none fits. Drops what was
+     * taken, disliked, or ruled out in [ruled] (a hidden song, a muted or blocked artist).
+     */
+    private fun takeSpaced(
+        pool: ArrayDeque<SongItem>,
+        taken: Set<String>,
+        recentArtists: Collection<String>,
+        ruled: UserControls,
+    ): SongItem? = takeSpaced(pool, taken, recentArtists, ruled) { it }
+
+    private fun <T> takeSpaced(
+        pool: ArrayDeque<T>,
+        taken: Set<String>,
+        recentArtists: Collection<String>,
+        ruled: UserControls,
+        songOf: (T) -> SongItem,
+    ): T? {
+        pool.removeAll { songOf(it).let { s -> s.id in taken || SongLikeState.isDisliked(s.id) || ruledOut(s, ruled) } }
+        val i = pool.indexOfFirst { songOf(it).artists.firstOrNull()?.name !in recentArtists }
         return when {
             i >= 0 -> pool.removeAt(i)
             else -> null
         }
+    }
+
+    private fun ruledOut(
+        song: SongItem,
+        ruled: UserControls,
+    ): Boolean {
+        if (TrackKey.youtube(song.id) in ruled.lessLikeThisTracks) return true
+        val artist = song.artists.firstOrNull()?.name ?: return false
+        return ArtistKey.of(artist) in ruled.mutedArtists
     }
 
     /** The listener's favourites, best first with some shuffle so no two mixes open the same way. */
@@ -332,12 +378,16 @@ class InfinityMix(
     }
 
     /** One new song: from a liked song's radio, a picked genre (by tuned weight), or your taste. */
-    private suspend fun discoveryPick(taken: Set<String>, recentArtists: Collection<String>): Pair<SongItem, InfinityWhy>? {
+    private suspend fun discoveryPick(
+        taken: Set<String>,
+        recentArtists: Collection<String>,
+        ruled: UserControls,
+    ): Pair<SongItem, InfinityWhy>? {
         val genres = _state.value.genres
         val useMoreLike = likedSeeds.isNotEmpty() && random.nextDouble() < MORE_LIKE_CHANCE
         if (useMoreLike) {
             fillMoreLike()
-            moreLike.removeAll { it.first.id in taken }
+            moreLike.removeAll { it.first.id in taken || ruledOut(it.first, ruled) }
             val i = moreLike.indexOfFirst { it.first.artists.firstOrNull()?.name !in recentArtists }
             if (i >= 0) moreLike.removeAt(i).let { (song, seed) -> return song to InfinityWhy.MoreLike(seed) }
         }
@@ -346,16 +396,22 @@ class InfinityMix(
             for (g in order) {
                 val stocked = pools[g]?.size ?: 0
                 val pool = if (stocked >= POOL_LOW || fillBudget-- > 0) fillGenre(g, taken) else pools[g] ?: continue
-                takeSpaced(pool, taken, recentArtists)?.let { return it to InfinityWhy.Genre(g) }
+                takeSpaced(pool, taken, recentArtists, ruled)?.let { return it to InfinityWhy.Genre(g) }
             }
         }
         if (forYou.isEmpty()) {
-            forYou = runCatching { taste.startAutoplay(continuous = false) }.getOrDefault(emptyList())
-                .mapNotNull { item -> item.track.youtubeId?.let { cache.get(it) } }
-                .filter { it.id !in taken }
-                .toCollection(ArrayDeque())
+            // Read-only picks: refilling never resets the session or Up Next of the queue that is playing.
+            val picks = runCatching { taste.forYou(FOR_YOU_BATCH) }.getOrDefault(emptyList())
+            forYou =
+                picks
+                    .mapNotNull { item -> item.track.youtubeId?.let { id -> cache.get(id) }?.let { it to item } }
+                    .filter { it.first.id !in taken }
+                    .toCollection(ArrayDeque())
         }
-        return takeSpaced(forYou, taken, recentArtists)?.let { it to InfinityWhy.ForYou }
+        return takeSpaced(forYou, taken, recentArtists, ruled) { it.first }?.let { (song, item) ->
+            forYouPicked[song.id] = item
+            song to InfinityWhy.ForYou
+        }
     }
 
     /** Genres in a random order biased by their tuned weight (a like makes a genre come up more). */
@@ -454,5 +510,6 @@ class InfinityMix(
         const val MAX_WHY = 400
         const val BATCH_TIMEOUT_MS = 20_000L
         const val RANK_TIMEOUT_MS = 1_500L
+        const val FOR_YOU_BATCH = 20
     }
 }

@@ -69,7 +69,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.turtleplayer.bridge.HiddenSet
+import app.turtleplayer.bridge.NotInterested
 import app.turtleplayer.bridge.TurtleBridge
+import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.HoverPlayButton
@@ -163,22 +166,40 @@ private class HomeLists(
     val jumpBackIn: HomeShelf?,
 ) {
     companion object {
-        fun of(shelves: List<HomeShelf>, s: HomeUiState): HomeLists {
-            val ours = shelves.filter { it.key.startsWith("turtle:") }.distinctBy { it.key }
+        fun of(
+            shelves: List<HomeShelf>,
+            s: HomeUiState,
+            hidden: HiddenSet,
+        ): HomeLists {
+            // What the listener marked "Not interested" leaves Home at once, before the next refresh.
+            fun HomeShelf.visible() = copy(items = items.filterNot(hidden::hides))
+            val ours =
+                shelves
+                    .filter { it.key.startsWith("turtle:") && !hidden.hidesShelf(it.key) }
+                    .distinctBy { it.key }
+                    .map { it.visible() }
             val mixes = ours.mapIndexed { i, shelf ->
                 val songs = shelf.items.filterIsInstance<SongItem>()
                 val names = songs.flatMap { song -> song.artists.map { it.name } }.distinct().take(3).joinToString(", ")
                 MixEntry(shelf, songs, names, MIX_TINTS[i % MIX_TINTS.size])
             }
             val speedDial = shelves.firstOrNull { it.style == HomeShelfStyle.SPEED_DIAL }?.items.orEmpty()
-            val jumpBackIn = shelves.firstOrNull { it.key == KEEP_LISTENING_KEY && it.items.isNotEmpty() }
+            val recents = shelves.firstOrNull { it.key == KEEP_LISTENING_KEY && it.items.isNotEmpty() }
+            val jumpBackIn = recents?.visible()?.takeIf { it.items.isNotEmpty() }
             val upstreamRows = shelves
-                .filter { !it.key.startsWith("turtle:") && it.style != HomeShelfStyle.SPEED_DIAL && it.items.isNotEmpty() && it !== jumpBackIn }
+                .filter { !it.key.startsWith("turtle:") && it.style != HomeShelfStyle.SPEED_DIAL && it.items.isNotEmpty() && it !== recents }
                 .distinctBy { it.key }
+                .map { it.visible() }
+                .filter { it.items.isNotEmpty() }
             // Recents get their own row; without one (too few, or hidden in Home settings) they stay in the grid.
             val recentIds = jumpBackIn?.items.orEmpty().mapTo(HashSet()) { it.id }
             val pool = if (jumpBackIn != null) speedDial + s.quickPicks else speedDial + s.keepListening + s.quickPicks
-            val shortcuts = pool.distinctBy { it.id }.sortedBy { it.id in recentIds }.take(SHORTCUT_TILES)
+            val shortcuts =
+                pool
+                    .filterNot(hidden::hides)
+                    .distinctBy { it.id }
+                    .sortedBy { it.id in recentIds }
+                    .take(SHORTCUT_TILES)
             val artUrls = (ours.flatMap { it.items } + s.quickPicks).map { it.displayThumbnailUrl }.distinct().take(9)
             return HomeLists(mixes, upstreamRows, shortcuts, shortcuts.filterIsInstance<SongItem>(), artUrls, jumpBackIn)
         }
@@ -229,6 +250,17 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
     fun openInfinity() {
         ShellInfinity.sheetOpen = true
     }
+
+    // Songs in the shortcut grid record that they were played from it.
+    fun openShortcut(item: YTItem) {
+        if (item !is SongItem) return slot.onItemClick(item)
+        ShellHomeFeedback.play(PlayPlace.HOME_GRID, null, listOf(item)) { slot.onItemClick(item) }
+    }
+
+    fun playShortcuts(
+        song: SongItem,
+        songs: List<SongItem>,
+    ) = ShellHomeFeedback.play(PlayPlace.HOME_GRID, null, songs) { playback.play(song, songs) }
     InfinitySheetHost()
     if (ShellAppearance.open) ShellThemeSheet()
 
@@ -269,7 +301,8 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         val cache = slot.shelfCache ?: localCache
         val ui = slot.uiState
         val shelves = cache.build(ui, slot.text, maxWidth)
-        val lists = remember(shelves, ui) { HomeLists.of(shelves, ui) }
+        val hidden = TurtleBridge.hiddenSet
+        val lists = remember(shelves, ui, hidden) { HomeLists.of(shelves, ui, hidden) }
         val noContent = lists.shortcuts.isEmpty() && lists.upstreamRows.isEmpty() && lists.jumpBackIn == null
         val failed = noContent && !ui.error.isNullOrBlank()
         val waiting = noContent && !failed &&
@@ -354,11 +387,11 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                                             title = item.title,
                                             art = { m -> ShellArt(item.displayThumbnailUrl, m, shape = RectangleShape) },
                                             playing = now.isPlaying && now.currentSong?.id == item.id,
-                                            onClick = { slot.onItemClick(item) },
+                                            onClick = { openShortcut(item) },
                                             modifier = Modifier.weight(1f),
-                                            onPlay = (item as? SongItem)?.let { s -> { playback.play(s, lists.shortcutSongs) } },
+                                            onPlay = (item as? SongItem)?.let { s -> { playShortcuts(s, lists.shortcutSongs) } },
                                             onHover = { if (it) { glowInfinity = false; glowArt = item.displayThumbnailUrl } },
-                                            onLongClick = slot.onItemLongClick?.let { f -> { f(item) } },
+                                            onLongClick = slot.onItemLongClick?.let { f -> { ShellHomeFeedback.openMenu(item, f) } },
                                         )
                                     }
                                 }
@@ -376,7 +409,8 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             val jumpBackIn = lists.jumpBackIn
             if (current != HomeFilter.MIXES.ordinal && jumpBackIn != null) {
                 item(key = "jump_back_in") {
-                    ItemRow(jumpBackIn, slot, wide, Modifier.riseIn(rise, "jump_back_in", 3), title = stringResource(Res.string.shell_home_jump_back_in))
+                    val title = stringResource(Res.string.shell_home_jump_back_in)
+                    ItemRow(jumpBackIn, slot, wide, Modifier.riseIn(rise, "jump_back_in", 3), PlayPlace.HOME_RECENT, title = title)
                 }
             }
 
@@ -407,7 +441,7 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             if (current != HomeFilter.MIXES.ordinal) {
                 lists.upstreamRows.forEachIndexed { i, shelf ->
                     val key = "row:${shelf.key}"
-                    item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, 4 + i)) }
+                    item(key = key) { ItemRow(shelf, slot, wide, Modifier.riseIn(rise, key, 4 + i), PlayPlace.HOME_YOUTUBE) }
                 }
                 val retry = slot.onLoadMore
                 if (ui.loadMoreError && retry != null) {
@@ -490,14 +524,24 @@ private fun InfinityCard(artUrls: List<String?>, playing: Boolean, wide: Boolean
 @Composable
 private fun MixTile(mix: MixEntry, modifier: Modifier) {
     val playback = LocalPlaybackController.current
-    MixCard(
-        title = mix.shelf.title,
-        subtitle = if (mix.names.isBlank()) mix.shelf.label.orEmpty() else stringResource(Res.string.shell_and_more, mix.names),
-        artUrl = mix.songs.firstOrNull()?.displayThumbnailUrl,
-        tint = mix.tint,
-        onClick = { if (mix.songs.isNotEmpty()) ShellQueue.play(playback, mix.songs, mix.shelf.title) },
-        modifier = modifier,
-    )
+    var menu by remember { mutableStateOf(false) }
+    Box(modifier) {
+        MixCard(
+            title = mix.shelf.title,
+            subtitle = if (mix.names.isBlank()) mix.shelf.label.orEmpty() else stringResource(Res.string.shell_and_more, mix.names),
+            artUrl = mix.songs.firstOrNull()?.displayThumbnailUrl,
+            tint = mix.tint,
+            onClick = {
+                if (mix.songs.isNotEmpty()) {
+                    ShellHomeFeedback.play(PlayPlace.HOME_TURTLE, mix.shelf.key, mix.songs) {
+                        ShellQueue.play(playback, mix.songs, mix.shelf.title)
+                    }
+                }
+            },
+            onLongClick = { menu = true },
+        )
+        MixMenu(menu, { menu = false }, NotInterested.Mix(mix.shelf.key, mix.shelf.title))
+    }
 }
 
 /** Home's section titles: the shared header on phones, the larger 24 sp desktop title otherwise. */
@@ -515,7 +559,14 @@ private fun HomeSectionTitle(title: String) {
 
 /** One of upstream's rows as Spotify-style cards: songs play in the row's context, the rest navigate. */
 @Composable
-private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean, modifier: Modifier, title: String = shelf.title) {
+private fun ItemRow(
+    shelf: HomeShelf,
+    slot: HomeSlot,
+    wide: Boolean,
+    modifier: Modifier,
+    place: PlayPlace,
+    title: String = shelf.title,
+) {
     val c = Shell.colors
     val playback = LocalPlaybackController.current
     val unique = remember(shelf.items) { shelf.items.distinctBy { it.id } }
@@ -530,16 +581,24 @@ private fun ItemRow(shelf: HomeShelf, slot: HomeSlot, wide: Boolean, modifier: M
             items(unique, key = { it.id }) { item ->
                 val round = item is ArtistItem
                 val (hover, hovered) = rememberHover()
-                val open: () -> Unit = { if (item is SongItem) playback.play(item, songs) else slot.onItemClick(item) }
+                val play = { song: SongItem -> ShellHomeFeedback.play(place, shelf.key, songs) { playback.play(song, songs) } }
+                val open: () -> Unit = { if (item is SongItem) play(item) else slot.onItemClick(item) }
+                // YouTube's rows keep upstream's menu as it is; Turtle's own rows offer "Not interested" in it.
+                val longClick =
+                    slot.onItemLongClick?.let { f ->
+                        {
+                            if (place == PlayPlace.HOME_YOUTUBE) f(item) else ShellHomeFeedback.openMenu(item, f)
+                        }
+                    }
                 Column(
                     Modifier.hoverable(hover)
-                        .shellPressable(open, label = item.title, onLongClick = slot.onItemLongClick?.let { f -> { f(item) } })
+                        .shellPressable(open, label = item.title, onLongClick = longClick)
                         .cardHover(hovered).width(art),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Box {
                         ShellArt(item.displayThumbnailUrl, Modifier.size(art), shape = if (round) CircleShape else ShellShapes.Art)
-                        if (item is SongItem) HoverPlayButton(hovered, 44.dp, { playback.play(item, songs) }, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+                        if (item is SongItem) HoverPlayButton(hovered, 44.dp, { play(item) }, Modifier.align(Alignment.BottomEnd).padding(8.dp))
                     }
                     Text(item.title, style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     subtitleOf(item)?.let { Text(it, style = Shell.type.bodySmall, color = c.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis) }

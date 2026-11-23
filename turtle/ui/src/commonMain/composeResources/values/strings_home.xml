@@ -8,4 +8,6 @@
     <string name="shell_explore_loading">Loading Explore</string>
     <string name="shell_explore_offline">Explore needs a connection. It fills in when you’re back online.</string>
     <string name="shell_home_jump_back_in">Jump back in</string>
+    <string name="shell_home_not_interested">Not interested</string>
+    <string name="shell_home_not_interested_done">Hidden. You can undo this in Settings › Recommendations</string>
 </resources>
