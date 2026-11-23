@@ -49,13 +49,13 @@ internal object ShellSmartShuffle {
     }
 }
 
-/** The sparkle beside Shuffle; lime while Smart Shuffle is gathering songs. */
+/** The discover radar beside Shuffle; lime while Smart Shuffle is gathering songs. */
 @Composable
 internal fun SmartShuffleButton(onClick: () -> Unit) {
     val c = Shell.colors
     val busy = ShellSmartShuffle.busy
     GlyphButton(
-        Glyphs.Sparkle,
+        Glyphs.Discover,
         stringResource(Res.string.shell_smart_shuffle),
         onClick,
         if (busy) c.accent else c.ink2,

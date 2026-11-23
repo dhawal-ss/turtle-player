@@ -356,7 +356,7 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
             SettingsPageId.PLAYER_ARTWORK,
             stringResource(Res.string.shell_set_recs),
             stringResource(Res.string.shell_set_recs_sub),
-            Glyphs.Sparkle,
+            Glyphs.Discover,
             listOf(
                 group(
                     "how",
@@ -366,7 +366,7 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                             ExplainList(
                                 listOf(
                                     Triple(Glyphs.HeartLine, familiarTitle, familiarBody),
-                                    Triple(Glyphs.Sparkle, newTitle, newBody),
+                                    Triple(Glyphs.Discover, newTitle, newBody),
                                     Triple(Glyphs.ThumbUp, tuningTitle, tuningBody),
                                 ),
                             )

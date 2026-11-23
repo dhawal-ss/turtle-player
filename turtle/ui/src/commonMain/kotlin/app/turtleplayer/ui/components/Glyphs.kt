@@ -66,7 +66,8 @@ object Glyphs {
 
     // Hearts, controls and pages.
     val HeartLine = vector("heart_line", "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", filled = false, stroke = 2f)
-    val Sparkle = vector("sparkle", "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z", filled = false, stroke = 1.8f)
+    /** A radar with a sweep and one blip: finding music that is new to you. */
+    val Discover = vector("discover", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM12 12l6.4-6.4M15.6 15.6v.2", filled = false, stroke = 1.8f)
     val Sliders = vector("sliders", "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4", filled = false, stroke = 2f)
     val ChevronRight =vector("chevron_right", "M9 6l6 6-6 6", filled = false, stroke = 2f)
     val ChevronUpDown = vector("chevron_up_down", "M8 9l4-4 4 4M8 15l4 4 4-4", filled = false, stroke = 2f)
