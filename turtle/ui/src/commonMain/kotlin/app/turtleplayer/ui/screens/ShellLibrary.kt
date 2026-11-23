@@ -71,6 +71,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -151,6 +152,7 @@ import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
 import app.turtleplayer.ui.theme.ShellShapes
 import app.turtleplayer.ui.theme.ShellTheme
+import com.metrolist.shared.generated.resources.liked
 import com.metrolist.shared.model.AlbumItem
 import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.EpisodeItem
@@ -176,8 +178,10 @@ import com.metrolist.shared.settings.displayName
 import com.metrolist.shared.settings.displayTitle
 import com.metrolist.shared.settings.moveLibraryItems
 import com.metrolist.shared.settings.orderLibraryItems
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.turtle.LibraryPageSlot
 import com.metrolist.shared.ui.components.CollectionPreviews
+import com.metrolist.shared.ui.components.UnavailableSongTaps
 import com.metrolist.shared.ui.components.libraryArtwork
 import com.metrolist.shared.ui.components.libraryCover
 import com.metrolist.shared.ui.haptics.HapticEvent
@@ -199,6 +203,7 @@ import org.jetbrains.compose.resources.stringResource
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
+import com.metrolist.shared.generated.resources.Res as SharedRes
 // Upstream's filter enum; this package has its own `LibraryFilter` (desktop sidebar), so alias it.
 import com.metrolist.shared.ui.screens.LibraryFilter as UpFilter
 
@@ -463,7 +468,9 @@ private fun ShellLibContent(slot: LibraryPageSlot) {
                             item,
                             grid,
                             {
-                                if (item is SongItem) {
+                                if (item is SongItem && item.unplayable) {
+                                    UnavailableSongTaps.tapped()
+                                } else if (item is SongItem) {
                                     val all = playableSongs()
                                     slot.onPlaySongs(all, all.indexOf(item))
                                 } else {
@@ -479,7 +486,15 @@ private fun ShellLibContent(slot: LibraryPageSlot) {
                                 grid = grid,
                                 current = current,
                                 playing = current && slot.isPlaying,
-                                downloaded = (item as? PlaylistItem)?.isDownloaded == true || (item as? AlbumItem)?.isDownloaded == true,
+                                downloaded =
+                                    when (item) {
+                                        is SongItem -> item.downloadedAt != null
+                                        is PlaylistItem -> item.isDownloaded
+                                        is AlbumItem -> item.isDownloaded
+                                        else -> false
+                                    },
+                                liked = item is SongItem && SongLikeState.isLiked(item.id),
+                                unavailable = item is SongItem && item.unplayable,
                                 onPlay = (item as? AlbumItem)?.let { album -> slot.onPlayAlbum?.let { play -> { play(album) } } },
                                 handle =
                                     if (reorderEnabled && shown.size > 1) {
@@ -526,8 +541,12 @@ private fun ShellLibContent(slot: LibraryPageSlot) {
                                 song,
                                 false,
                                 {
-                                    val all = playableSongs()
-                                    slot.onPlaySongs(all, all.indexOf(song))
+                                    if (song.unplayable) {
+                                        UnavailableSongTaps.tapped()
+                                    } else {
+                                        val all = playableSongs()
+                                        slot.onPlaySongs(all, all.indexOf(song))
+                                    }
                                 },
                             ) {
                                 ShellLibEntry(
@@ -537,6 +556,9 @@ private fun ShellLibContent(slot: LibraryPageSlot) {
                                     grid = false,
                                     current = current,
                                     playing = current && slot.isPlaying,
+                                    downloaded = song.downloadedAt != null,
+                                    liked = SongLikeState.isLiked(song.id),
+                                    unavailable = song.unplayable,
                                 )
                             }
                         }
@@ -769,6 +791,8 @@ private fun ShellLibEntry(
     current: Boolean = false,
     playing: Boolean = false,
     downloaded: Boolean = false,
+    liked: Boolean = false,
+    unavailable: Boolean = false,
     pinned: Boolean = false,
     badge: String? = null,
     onPlay: (() -> Unit)? = null,
@@ -777,8 +801,10 @@ private fun ShellLibEntry(
     val c = Shell.colors
     val (source, hovered) = rememberHover()
     val titleColor = if (current) c.accent else c.ink
+    // Same dimming as ShellCollection's TrackRow for unplayable songs.
+    val contentAlpha = if (unavailable) 0.38f else 1f
     if (grid) {
-        Column(Modifier.fillMaxWidth().hoverable(source).cardHover(hovered)) {
+        Column(Modifier.fillMaxWidth().hoverable(source).cardHover(hovered).alpha(contentAlpha)) {
             Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
                 art(Modifier.fillMaxSize())
                 if (badge != null) ShellLibBadge(badge, Modifier.align(Alignment.TopEnd).padding(8.dp))
@@ -802,7 +828,7 @@ private fun ShellLibEntry(
                     Equalizer(height = 12.dp)
                 }
             }
-            ShellLibMetaLine(meta, downloaded, pinned)
+            ShellLibMetaLine(meta, downloaded, liked, pinned)
         }
     } else {
         val bg by animateColorAsState(if (hovered) c.surface2 else Color.Transparent, ShellMotion.emphasized())
@@ -811,11 +837,13 @@ private fun ShellLibEntry(
                 .padding(horizontal = if (ShellPlatform.desktop) 8.dp else 0.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            art(Modifier.size(56.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = Shell.type.body, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                ShellLibMetaLine(meta, downloaded, pinned)
+            Row(Modifier.weight(1f).alpha(contentAlpha), verticalAlignment = Alignment.CenterVertically) {
+                art(Modifier.size(56.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = Shell.type.body, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ShellLibMetaLine(meta, downloaded, liked, pinned)
+                }
             }
             if (playing) {
                 Spacer(Modifier.width(8.dp))
@@ -831,8 +859,12 @@ private fun ShellLibEntry(
     }
 }
 
+// A downloaded copy plays without YouTube, so a stale or regional unavailable flag does not block it.
+private val SongItem.unplayable: Boolean
+    get() = isUnavailable && downloadedAt == null
+
 @Composable
-private fun ShellLibMetaLine(meta: String, downloaded: Boolean, pinned: Boolean) {
+private fun ShellLibMetaLine(meta: String, downloaded: Boolean, liked: Boolean, pinned: Boolean) {
     val c = Shell.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (pinned) {
@@ -841,6 +873,10 @@ private fun ShellLibMetaLine(meta: String, downloaded: Boolean, pinned: Boolean)
         }
         if (downloaded) {
             Glyph(Glyphs.Download, c.accent, 12.dp, contentDescription = stringResource(Res.string.shell_lib_downloaded))
+            Spacer(Modifier.width(6.dp))
+        }
+        if (liked) {
+            Glyph(Glyphs.Heart, c.accent, 12.dp, contentDescription = stringResource(SharedRes.string.liked))
             Spacer(Modifier.width(6.dp))
         }
         Text(meta, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
