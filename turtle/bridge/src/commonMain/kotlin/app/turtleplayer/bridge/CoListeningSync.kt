@@ -19,7 +19,8 @@ import kotlin.time.TimeSource
  * Runs the on-device co-listening graph: feeds it every radio page and finished play, rebuilds the
  * vectors the taste engine reads when it changed, and keeps it in our database across launches.
  * Songs it learned are put back into the song cache at startup, so shelves built from them stay
- * playable with their artwork.
+ * playable with their artwork. Radio pages are seeded by the listener's own songs, so they teach
+ * nothing while listening history is paused.
  */
 class CoListeningSync(
     private val graph: CoListeningGraph,
@@ -27,11 +28,14 @@ class CoListeningSync(
     private val db: SqlitePlayEventStore,
     private val events: PlayEventStore,
     private val cache: SongCache,
+    /** False while listening history is paused: radio pages teach the graph nothing. */
+    private val learning: () -> Boolean = { true },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** A radio page the app loaded for [seed]. Never throws. */
     suspend fun observeRadio(seed: TrackMeta, page: List<SongItem>) {
+        if (!learning()) return
         guarded("radio page") { graph.observeRadio(seed, page.map { it.toTrackMeta() }) }
     }
 

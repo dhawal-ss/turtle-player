@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.koin.core.context.GlobalContext
+import kotlin.concurrent.Volatile
 
 /**
  * Audiobook shelves. YouTube Music has no audiobook catalog, but YouTube hosts many full readings
@@ -137,9 +138,14 @@ object TurtleSpoken {
     /** Books in progress, most recently heard first. */
     val books: StateFlow<List<BookProgress>> = booksState.asStateFlow()
 
+    // Read-only maps replaced on each write: the player observer reads them off the main thread.
     /** Chapter video id → book id, for every book opened or saved. */
-    private val chapterBooks = HashMap<String, String>()
-    private val bookChapters = HashMap<String, List<String>>()
+    @Volatile
+    private var chapterBooks: Map<String, String> = emptyMap()
+
+    /** Book id → its chapter video ids, in order. */
+    @Volatile
+    private var bookChapters: Map<String, List<String>> = emptyMap()
 
     // ---------------------------------------------------------------------------------------------
     // Podcasts
@@ -263,19 +269,40 @@ object TurtleSpoken {
     suspend fun load() {
         loadLock.withLock {
             if (loaded) return
-            val raw = soft { TurtleBridge.uiPref(PREF_BOOKS) }
-            val restored = raw?.lineSequence()?.mapNotNull { decode(it) }?.toList().orEmpty()
-            // Anything registered before the load finished wins over the stored copy.
-            val current = booksState.value
-            booksState.value = (current + restored.filter { r -> current.none { it.bookId == r.bookId } })
-                .sortedByDescending { it.updatedMs }
-            restored.forEach { chapterBooks.getOrPut(it.chapterId) { it.bookId } }
+            restore(soft { TurtleBridge.uiPref(PREF_BOOKS) })
             loaded = true
         }
     }
 
+    /** Merges the saved books ([raw], the stored preference) into memory, with every saved chapter of each. */
+    internal fun restore(raw: String?) {
+        val restored = raw?.lineSequence()?.mapNotNull { decodeLine(it) }?.toList().orEmpty()
+        // Anything registered before the load finished wins over the stored copy.
+        val current = booksState.value
+        booksState.value = (current + restored.map { it.first }.filter { r -> current.none { it.bookId == r.bookId } })
+            .sortedByDescending { it.updatedMs }
+        val books = chapterBooks.toMutableMap()
+        val lists = bookChapters.toMutableMap()
+        restored.forEach { (progress, chapters) ->
+            books.getOrPut(progress.chapterId) { progress.bookId }
+            if (chapters.isNotEmpty()) {
+                lists.getOrPut(progress.bookId) { chapters }
+                chapters.forEach { books.getOrPut(it) { progress.bookId } }
+            }
+        }
+        chapterBooks = books
+        bookChapters = lists
+    }
+
     /** The book a playing video belongs to, or null when it isn't one we opened. */
     fun bookOf(songId: String): String? = chapterBooks[songId]
+
+    /**
+     * Spoken word is never music taste: podcast episodes (show id or episode video type) and chapters
+     * of books Turtle opened; local books and podcasts join in W8.
+     */
+    fun isSpokenWord(song: SongItem, isBookChapter: (String) -> Boolean = { bookOf(it) != null }): Boolean =
+        song.isPodcast || isBookChapter(song.id)
 
     /** Saved progress for [bookId], if any. */
     fun progressOf(bookId: String): BookProgress? = booksState.value.firstOrNull { it.bookId == bookId }
@@ -286,13 +313,17 @@ object TurtleSpoken {
      */
     fun open(book: SpokenBook, chapters: List<SongItem>): Pair<Int, Long> {
         val ids = chapters.map { it.id }
-        bookChapters[book.id] = ids
-        ids.forEach { chapterBooks[it] = book.id }
+        val known = bookChapters[book.id]
+        bookChapters = bookChapters + (book.id to ids)
+        chapterBooks = chapterBooks + ids.associateWith { book.id }
         val saved = progressOf(book.id)
         val index = saved?.let { s -> ids.indexOf(s.chapterId).takeIf { it >= 0 } } ?: 0
         val position = if (saved != null && ids.getOrNull(index) == saved.chapterId) saved.positionMs else 0L
         if (saved == null && ids.isNotEmpty()) {
             put(BookProgress(book.id, book.title, book.author, book.thumbnail, book.playlistId, ids.first(), 0, ids.size, 0L, (book.durationSec ?: 0L) * 1000L, now()))
+        } else if (saved != null && ids != known) {
+            // Saved with its chapters, so a later chapter is still known as this book after a restart.
+            persist()
         }
         return index to position
     }
@@ -330,33 +361,40 @@ object TurtleSpoken {
 
     private fun put(progress: BookProgress) {
         booksState.value = (listOf(progress) + booksState.value.filterNot { it.bookId == progress.bookId }).take(MAX_BOOKS)
-        chapterBooks[progress.chapterId] = progress.bookId
+        chapterBooks = chapterBooks + (progress.chapterId to progress.bookId)
         persist()
     }
 
     private fun persist() {
         val snapshot = booksState.value
+        val chapters = bookChapters
         writer.launch {
-            writeLock.withLock { soft { TurtleBridge.setUiPref(PREF_BOOKS, snapshot.joinToString("\n") { encode(it) }) } }
+            writeLock.withLock {
+                soft { TurtleBridge.setUiPref(PREF_BOOKS, snapshot.joinToString("\n") { encodeLine(it, chapters[it.bookId].orEmpty()) }) }
+            }
         }
     }
 
     private fun clean(s: String?): String = s.orEmpty().map { if (it == FIELD || it == '\n' || it == '\r') ' ' else it }.joinToString("")
 
-    private fun encode(p: BookProgress): String =
+    /** One saved book: its progress fields, then its chapter video ids (which never contain a comma). */
+    internal fun encodeLine(p: BookProgress, chapterIds: List<String>): String =
         listOf(
             clean(p.bookId), clean(p.title), clean(p.author), clean(p.thumbnail), clean(p.playlistId), clean(p.chapterId),
             p.chapterIndex.toString(), p.chapterCount.toString(), p.positionMs.toString(), p.durationMs.toString(), p.updatedMs.toString(),
+            chapterIds.joinToString(",") { clean(it) },
         ).joinToString(FIELD.toString())
 
-    private fun decode(line: String): BookProgress? {
+    /** A saved book and its chapter ids; lines saved before chapter lists were kept have none. */
+    internal fun decodeLine(line: String): Pair<BookProgress, List<String>>? {
         val f = line.split(FIELD)
         if (f.size < 11 || f[0].isBlank() || f[5].isBlank()) return null
+        val chapters = f.getOrNull(11)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
         return BookProgress(
             bookId = f[0], title = f[1], author = f[2].ifBlank { null }, thumbnail = f[3].ifBlank { null }, playlistId = f[4].ifBlank { null },
             chapterId = f[5], chapterIndex = f[6].toIntOrNull() ?: 0, chapterCount = f[7].toIntOrNull() ?: 1,
             positionMs = f[8].toLongOrNull() ?: 0L, durationMs = f[9].toLongOrNull() ?: 0L, updatedMs = f[10].toLongOrNull() ?: 0L,
-        )
+        ) to chapters
     }
 
     private fun now(): Long = Clock.System.nowMs()

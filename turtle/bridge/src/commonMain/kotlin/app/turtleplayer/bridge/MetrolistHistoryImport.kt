@@ -5,6 +5,7 @@ import app.turtleplayer.events.imports.PastPlay
 import app.turtleplayer.events.imports.PlayerHistoryImporter
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.db.entities.toSongItem
+import com.metrolist.shared.model.isPodcast
 import kotlinx.coroutines.flow.first
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
@@ -29,7 +30,7 @@ class MetrolistHistoryImport(
         val zone = TimeZone.currentSystemDefault()
         val rows = database().dao().events().first()
         val plays = rows.mapNotNull { row ->
-            val song = row.song.toSongItem().takeIf { it.podcastId == null } ?: return@mapNotNull null
+            val song = row.song.toSongItem().takeUnless { it.isPodcast } ?: return@mapNotNull null
             PastPlay(
                 track = song.toTrackMeta(),
                 atMs = row.event.timestamp.toInstant(zone).toEpochMilliseconds(),

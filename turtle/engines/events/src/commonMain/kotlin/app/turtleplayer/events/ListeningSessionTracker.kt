@@ -76,7 +76,8 @@ fun interface LocalTimeResolver {
  * is closed with a reason inferred from how the new one started: autoplay = completed, next button =
  * skipped, picking something else (tapped) = stopped, which is neutral rather than a skip.
  *
- * A track that never actually played (restored paused, then replaced) records nothing.
+ * A track that never actually played (restored paused, then replaced) records nothing. Plays are
+ * followed but stored only while [recording] is true, both at their start and at their end.
  */
 class ListeningSessionTracker(
     private val store: PlayEventStore,
@@ -84,6 +85,8 @@ class ListeningSessionTracker(
     private val time: LocalTimeResolver = LocalTimeResolver.fixedOffset(),
     private val sessionGapMs: Long = 30 * MINUTE_MS,
     private val checkpoint: OpenPlayCheckpoint? = null,
+    /** False while the listener paused listening history: plays are followed but never stored. */
+    private val recording: () -> Boolean = { true },
 ) {
     private class Open(
         val start: PlaybackSignal.TrackStarted,
@@ -91,6 +94,8 @@ class ListeningSessionTracker(
         val position: Int,
         val sessionId: String,
         var durationMs: Long?,
+        /** Whether history was being recorded when the play started. */
+        val recordable: Boolean,
         var playingSinceMs: Long? = null,
         var accumulatedMs: Long = 0,
         var seeks: Int = 0,
@@ -103,6 +108,9 @@ class ListeningSessionTracker(
         fun playedMs(now: Long): Long = accumulatedMs + (playingSinceMs?.let { now - it } ?: 0)
     }
 
+    /** A play [handle] closed; [event] is null when it is not stored (never heard, or history paused). */
+    private class Closed(val event: PlayEvent?)
+
     private val mutex = Mutex()
     private var open: Open? = null
     private var sessionId: String? = null
@@ -113,10 +121,10 @@ class ListeningSessionTracker(
     private var network = NetworkType.UNKNOWN
 
     suspend fun onSignal(signal: PlaybackSignal) {
-        val finished: PlayEvent? = mutex.withLock { handle(signal, clock.nowMs()) }
-        finished?.let { store.append(it) }
-        // A closed play must never be recovered after a restart: replace its checkpoint right away.
-        if (finished != null) checkpoint()
+        val closed: Closed? = mutex.withLock { handle(signal, clock.nowMs()) }
+        closed?.event?.let { store.append(it) }
+        // A closed play, stored or dropped, must never be recovered after a restart: replace its checkpoint right away.
+        if (closed != null) checkpoint()
     }
 
     /** Saves the play in progress (if it has been heard) through [checkpoint]; call every few seconds. */
@@ -125,17 +133,19 @@ class ListeningSessionTracker(
         val provisional = mutex.withLock {
             val o = open ?: return@withLock null
             val now = clock.nowMs()
-            if (o.playedMs(now) >= MIN_CHECKPOINT_MS) event(o, EndReason.STOPPED, now) else null
+            if (o.recordable && recording() && o.playedMs(now) >= MIN_CHECKPOINT_MS) event(o, EndReason.STOPPED, now) else null
         }
         cp.save(provisional)
     }
 
     /**
      * Appends the play that was in progress when the app last stopped (saved by [checkpoint]) as
-     * STOPPED, or COMPLETED when it had been heard nearly to the end. Call once at startup.
+     * STOPPED, or COMPLETED when it had been heard nearly to the end. Call once at startup. Dropped
+     * (but still cleared) when listening history is paused by then.
      */
     suspend fun recover(): PlayEvent? {
         val saved = checkpoint?.take() ?: return null
+        if (!recording()) return null
         val finished = (saved.completion ?: 0f) >= COMPLETED_SHARE
         val event = saved.copy(endReason = if (finished) EndReason.COMPLETED else EndReason.STOPPED)
         store.append(event)
@@ -145,7 +155,7 @@ class ListeningSessionTracker(
     /** Closes the open play, e.g. when the app is shutting down. */
     suspend fun flush(reason: EndReason = EndReason.STOPPED) = onSignal(PlaybackSignal.TrackEnded(reason))
 
-    private fun handle(signal: PlaybackSignal, now: Long): PlayEvent? {
+    private fun handle(signal: PlaybackSignal, now: Long): Closed? {
         val current = open
         return when (signal) {
             is PlaybackSignal.TrackStarted -> {
@@ -157,6 +167,7 @@ class ListeningSessionTracker(
                 }
                 val o = Open(
                     signal, now, sessionPosition++, sessionId!!, signal.durationMs,
+                    recordable = recording(),
                     playingSinceMs = if (signal.playing) now else null,
                     everPlayed = signal.playing,
                 )
@@ -229,12 +240,17 @@ class ListeningSessionTracker(
         }
     }
 
-    /** Closes [o]; null when it never actually played, which is not a listening event. */
-    private fun close(o: Open, reason: EndReason, now: Long): PlayEvent? {
+    /**
+     * Closes [o]. Nothing is stored when it never actually played, which is not a listening event, or
+     * when history was paused at its start or its end.
+     */
+    private fun close(o: Open, reason: EndReason, now: Long): Closed {
         open = null
-        if (!o.everPlayed && reason != EndReason.COMPLETED) return null
-        lastTrackKey = o.start.track.key.value
-        return event(o, reason, now)
+        if (!o.everPlayed && reason != EndReason.COMPLETED) return Closed(null)
+        val stored = o.recordable && recording()
+        // A play dropped while history was paused must not make the next stored play of it a replay.
+        lastTrackKey = if (stored) o.start.track.key.value else null
+        return Closed(if (stored) event(o, reason, now) else null)
     }
 
     private fun event(o: Open, reason: EndReason, now: Long): PlayEvent {

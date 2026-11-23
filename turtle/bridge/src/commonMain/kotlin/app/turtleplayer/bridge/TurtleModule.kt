@@ -20,6 +20,7 @@ import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
 import com.metrolist.shared.model.RadioQueuePage
 import com.metrolist.shared.model.SongItem
+import com.metrolist.shared.settings.Settings
 import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -68,6 +69,9 @@ class TurtleScope(
     ),
 )
 
+/** Upstream's "Pause listening history" (Privacy settings); read on each use so toggling it applies at once. */
+internal fun listenHistoryPaused(): Boolean = Settings.shared.pauseListenHistory
+
 /**
  * Koin bindings for Turtle Player. The app loads this after upstream's modules, so any binding here
  * overrides upstream's (see turtle/HOOKS.md). Upstream's `MusicDatabase` is registered by the app
@@ -83,7 +87,12 @@ val turtleModule: Module = module {
         SqlitePlayEventStore(spec.driver, spec.path)
     }
     single<PlayEventStore> { get<SqlitePlayEventStore>() }
-    single { ListeningSessionTracker(get(), Clock.System, deviceTime, checkpoint = get<SqlitePlayEventStore>()) }
+    single {
+        ListeningSessionTracker(
+            get(), Clock.System, deviceTime,
+            checkpoint = get<SqlitePlayEventStore>(), recording = { !listenHistoryPaused() },
+        )
+    }
     single { PlayerObserver(get()) }
     single { SpotifyHistoryImporter(get(), deviceTime) }
     single { ListenBrainzHistoryImporter(get(), deviceTime) }
@@ -99,7 +108,7 @@ val turtleModule: Module = module {
     single { CoListeningGraph() }
     single { CoListeningStore(get()) }
     single<EmbeddingStore> { get<CoListeningStore>() }
-    single { CoListeningSync(get(), get(), get(), get(), get()) }
+    single { CoListeningSync(get(), get(), get(), get(), get(), learning = { !listenHistoryPaused() }) }
     single {
         TasteEngine(
             events = get(), store = get(), catalog = CatalogWithObserved(get<LibrarySync>(), get()),

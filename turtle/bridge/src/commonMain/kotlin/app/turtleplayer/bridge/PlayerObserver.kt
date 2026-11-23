@@ -43,11 +43,15 @@ internal object PlaybackHints {
  * change without EOF is classified from the queue when the controller is known: the next queue item
  * is the next button (or a crossfade, near the end), the previous one is the back button, and any
  * other song is the listener choosing something else, which is not a verdict on the old song.
- * Podcast episodes are not music taste and are not recorded.
+ * Spoken word (TurtleSpoken.isSpokenWord) is not music taste and is not recorded; whether history is
+ * paused is the tracker's concern.
  */
 class PlayerObserver(
     private val tracker: ListeningSessionTracker,
     private val controller: () -> PlaybackController? = { PlaybackHints.controller },
+    private val isBookChapter: (String) -> Boolean = { TurtleSpoken.bookOf(it) != null },
+    /** Awaited once before the first song is classified, so a restored chapter is known as a book. */
+    private val spokenReady: suspend () -> Unit = { TurtleSpoken.load() },
 ) {
     private val mutex = Mutex()
     private var current: SongItem? = null
@@ -73,6 +77,7 @@ class PlayerObserver(
         onEndOfTrack: Flow<*>,
     ) {
         scope.launch {
+            guarded("saved books") { spokenReady() }
             currentSong.map { it }.distinctUntilChanged { a, b -> a?.id == b?.id }.collect { song ->
                 guarded("song change") { mutex.withLock { onSongChanged(song, isPlaying.value) } }
             }
@@ -143,7 +148,7 @@ class PlayerObserver(
 
     private suspend fun onSongChanged(song: SongItem?, playing: Boolean) {
         repeatCheck?.cancel()
-        val music = song?.takeUnless { it.podcastId != null }
+        val music = song?.takeUnless { TurtleSpoken.isSpokenWord(it, isBookChapter) }
         if (music == null) {
             if (currentId != null && !endedByEof) tracker.onSignal(PlaybackSignal.TrackEnded(EndReason.STOPPED))
             current = null

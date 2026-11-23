@@ -59,7 +59,6 @@ import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellPlatform
 import com.metrolist.shared.model.SongItem
-import com.metrolist.shared.model.isPodcast
 import com.metrolist.shared.model.isVideoSong
 import com.metrolist.shared.turtle.TurtleUiSlots
 import com.metrolist.shared.ui.playback.PlaybackController
@@ -106,7 +105,7 @@ internal object ShellSpoken {
         private set
 
     /** A podcast episode or a book we opened: what spoken-word speed and resume apply to. */
-    fun isSpokenWord(song: SongItem?): Boolean = song != null && (song.isPodcast || TurtleBridge.spoken.bookOf(song.id) != null)
+    fun isSpokenWord(song: SongItem?): Boolean = song != null && TurtleBridge.spoken.isSpokenWord(song)
 
     /** When the player shows spoken-word controls: spoken word, or any long-form video (lectures, readings). */
     fun showsControls(song: SongItem?): Boolean =
