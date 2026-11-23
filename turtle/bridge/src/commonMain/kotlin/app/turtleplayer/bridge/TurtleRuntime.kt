@@ -63,6 +63,8 @@ class TurtleRuntime(
     private val blocks: UpstreamBlocks,
     private val homeRows: TurtleHomeRows,
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    /** How long radio ranking may take before upstream's order is kept. */
+    private val rankTimeoutMs: Long = RANK_TIMEOUT_MS,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -163,40 +165,104 @@ class TurtleRuntime(
 
     /**
      * Orders upstream's radio candidates (already filtered for blocked and queued songs) with the
-     * taste engine. Keeps upstream's page whenever we cannot do better in time.
+     * taste engine. [seedId] is the song the station was started from: it seeds the ranking only
+     * when we know that song, and the page is ranked by taste alone otherwise. Keeps upstream's
+     * page, minus what the listener ruled out, whenever we cannot do better in time.
      */
-    suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage {
-        if (page.songs.size < 2) return page.also { tagServed(it, Served.PROVIDER) }
+    suspend fun rankRadio(
+        page: RadioQueuePage,
+        seedId: String? = null,
+    ): RadioQueuePage {
+        if (page.songs.size < 2) {
+            val kept = keepUpstream(page, Served.PROVIDER)
+            TurtleLog.info("radio: ${seedLabel(seedId, "not looked up")}; kept a ${page.songs.size}-song page (${kept.songs.size} left)")
+            return kept
+        }
+        var seedFrom = "not looked up"
         return try {
-            // Radio pages often load as playback starts, before the observer has seen a song.
-            val seed = observer.currentSong() ?: page.songs.first()
             val ranked =
-                withTimeoutOrNull(RANK_TIMEOUT_MS) {
+                withTimeoutOrNull(rankTimeoutMs) {
                     cache.putAll(page.songs)
-                    coListening.observeRadio(seed.toTrackMeta(), page.songs)
+                    // Hides and mutes are empty in the engine until the saved state is back.
+                    tasteRestored.await()
+                    // A station's own song when one was asked for, never the playing song instead of it and never
+                    // a candidate: callers took the station's song off the page, and rankExternal would drop a
+                    // candidate seed. With no station asked for (a queue running on), the radio is the playing song's.
+                    val playing = observer.currentSong()
+                    val seedSong =
+                        when {
+                            seedId == null -> playing?.also { seedFrom = "player ${it.id}" }
+                            playing?.id == seedId -> playing.also { seedFrom = "player" }
+                            else -> cache.get(seedId)?.also { seedFrom = "song cache" }
+                        }
+                    val seed = seedSong?.toTrackMeta()
+                    if (seed == null) {
+                        seedFrom = "unknown, seedless"
+                    } else {
+                        // Learned only from a known seed: an unknown one would link the wrong artist.
+                        coListening.observeRadio(seed, page.songs)
+                    }
                     val byId = page.songs.associateBy { it.id }
-                    taste.rankExternal(seed.toTrackMeta(), page.songs.map { it.toTrackMeta() }).mapNotNull { item ->
+                    taste.rankExternal(seed, page.songs.map { it.toTrackMeta() }).mapNotNull { item ->
                         item.track.youtubeId?.let(byId::get)?.let { song ->
                             song to SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, item.source, item.slot, served = Served.RANKED))
                         }
                     }
                 }
             if (ranked == null) {
-                TurtleLog.info("radio: kept upstream order (ranking exceeded ${RANK_TIMEOUT_MS}ms)")
-                tagServed(page, Served.TIMEOUT)
-                return page
+                val kept = keepUpstream(page, Served.TIMEOUT)
+                val label = seedLabel(seedId, seedFrom)
+                TurtleLog.info(
+                    "radio: $label; ranking exceeded ${rankTimeoutMs}ms, kept upstream order of ${kept.songs.size} of ${page.songs.size}",
+                )
+                return kept
             }
             // Tagged only once ranking is done, so a timeout never leaves songs marked as ranked.
             for ((song, tag) in ranked) observer.tag(song.id, tag)
-            TurtleLog.info("radio: ranked ${ranked.size} of ${page.songs.size} candidates")
+            TurtleLog.info("radio: ${seedLabel(seedId, seedFrom)}; ranked ${ranked.size} of ${page.songs.size} candidates")
             page.copy(songs = ranked.map { it.first })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            TurtleLog.error("radio: ranking failed, kept upstream order", e)
-            tagServed(page, Served.FAILED)
-            page
+            TurtleLog.error("radio: ${seedLabel(seedId, seedFrom)}; ranking failed, kept upstream order", e)
+            keepUpstream(page, Served.FAILED)
         }
+    }
+
+    private fun seedLabel(
+        seedId: String?,
+        from: String,
+    ) = if (seedId == null) "no station asked, seed $from" else "seed $seedId ($from)"
+
+    /**
+     * [page] as upstream ordered it, without the songs ranking would have ruled out (Not interested
+     * songs, muted and blocked artists, by the rule [TasteEngine.rankExternal] applies), then tagged
+     * with why ([served]). Chips and continuation stay, even when no song is left.
+     */
+    private suspend fun keepUpstream(
+        page: RadioQueuePage,
+        served: Served,
+    ): RadioQueuePage {
+        val kept =
+            try {
+                // Hides and mutes are empty until the saved state is back: wait for it, briefly (a cold start).
+                withTimeoutOrNull(RESTORE_WAIT_MS) { tasteRestored.await() }
+                // Lock-free: the engine's controls and the block list are read without its mutex.
+                val controls = taste.controls
+                val songs =
+                    page.songs.filterNot { song ->
+                        val meta = song.toTrackMeta()
+                        meta.artistKey in controls.mutedArtists || meta.key in controls.lessLikeThisTracks
+                    }
+                if (songs.size == page.songs.size) page else page.copy(songs = songs)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                TurtleLog.error("radio: could not apply the listener's exclusions", e)
+                page
+            }
+        tagServed(kept, served)
+        return kept
     }
 
     /**
@@ -491,6 +557,7 @@ class TurtleRuntime(
     private companion object {
         const val RANK_TIMEOUT_MS = 1_500L
         const val TAG_TIMEOUT_MS = 200L
+        const val RESTORE_WAIT_MS = 1_000L
         const val PAGE_SIZE = 200
         const val RESOLVER_WAIT_MS = 30_000L
         const val PREF_DIAL = "discovery_dial"

@@ -563,7 +563,7 @@ internal class AndroidQueueCoordinator(
                     withContext(Dispatchers.IO) { GlobalYouTubeRepository.instance.continueRadioQueue(token) }
                 }
             },
-        )?.let { TurtleBridge.rankRadio(it) }
+        )?.let { TurtleBridge.rankRadio(it, recommendationSeedSongId.takeIf { isRadioQueue }) }
 
     private fun canBootstrapRecommendations(): Boolean =
         shouldBootstrapQueueRecommendations(isFiniteQueue, Settings.shared.autoLoadMore, playlistPage?.hasMore == true)

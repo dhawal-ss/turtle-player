@@ -100,7 +100,7 @@ internal class DesktopQueueRadio(
                         },
                         isCurrent = ::canLoad,
                         loadMore = continueRadio,
-                    )?.let { TurtleBridge.rankRadio(it) } ?: return@withLock null
+                    )?.let { TurtleBridge.rankRadio(it, seed.id) } ?: return@withLock null
                 continuation = page.continuation
                 val candidates = page.songs.take(limit)
                 var changed = false

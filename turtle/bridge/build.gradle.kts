@@ -60,6 +60,11 @@ kotlin {
 // Opt-in LocalOriginReportProbe: the path of a copied turtle.db to report on. Never set in CI. The
 // report is printed, and the probe reruns for each new copy, which Gradle cannot see as an input.
 tasks.named<Test>("desktopTest") {
+    // Tests never open the developer's own Turtle database or Metrolist settings: every XDG home
+    // (data, config, state, cache) points into the build directory.
+    val xdg = layout.buildDirectory.dir("test-xdg").get().asFile
+    val homes = mapOf("XDG_DATA_HOME" to "data", "XDG_CONFIG_HOME" to "config", "XDG_STATE_HOME" to "state", "XDG_CACHE_HOME" to "cache")
+    for ((variable, dir) in homes) environment(variable, xdg.resolve(dir).absolutePath)
     providers.gradleProperty("turtleOriginReportDb").orNull?.let { db ->
         systemProperty("turtleOriginReportDb", db)
         testLogging.showStandardStreams = true

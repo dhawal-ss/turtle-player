@@ -411,8 +411,14 @@ object TurtleBridge {
             null
         }
 
-    /** Hook: re-rank upstream's filtered radio page with the taste engine. */
-    suspend fun rankRadio(page: RadioQueuePage): RadioQueuePage = runtime?.rankRadio(page) ?: page
+    /**
+     * Hook: re-rank upstream's filtered radio page with the taste engine. [seedId] is the song the
+     * station was started from; null when no station was asked for, so the playing song seeds it.
+     */
+    suspend fun rankRadio(
+        page: RadioQueuePage,
+        seedId: String? = null,
+    ): RadioQueuePage = runtime?.rankRadio(page, seedId) ?: page
 
     // Spoken word (TurtleSpoken.kt): podcast shelves, the audiobook catalog and per-book resume.
     /** Podcasts and audiobooks for Shell; independent of the runtime, so it works before it starts. */

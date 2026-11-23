@@ -388,6 +388,23 @@ class TasteEngineTest {
     }
 
     @Test
+    fun rankExternalWithoutASeedKeepsTheFirstCandidateAndStillExcludes() = runTest {
+        val first = user.heavyRotation[0]
+        val rest = user.likedGenres.flatMap { world.tracksOfGenre(it) }.filter { it.artistKey != first.artistKey }.distinctBy { it.artistKey }.take(10)
+        val candidates = listOf(first) + rest
+
+        // Taking the first candidate as the seed drops it; without a seed every eligible candidate stays.
+        assertTrue(engineWithHistory().rankExternal(first, candidates).none { it.key == first.key })
+        val seedless = engineWithHistory().rankExternal(null, candidates)
+        assertEquals(candidates.map { it.key }.toSet(), seedless.map { it.key }.toSet(), "nothing added or lost")
+
+        val hidden = engineWithHistory(controls = UserControls(lessLikeThisTracks = setOf(first.key), mutedArtists = setOf(rest[0].artistKey)))
+        val ranked = hidden.rankExternal(null, candidates)
+        assertTrue(ranked.none { it.key == first.key || it.track.artistKey == rest[0].artistKey }, "hidden track and muted artist stay out")
+        assertEquals(candidates.size - 2, ranked.size)
+    }
+
+    @Test
     fun lessLikeThisSurvivesARestartAndKeepsTheTrackOutOfRadio() = runTest {
         val engine = engineWithHistory()
         val seed = user.heavyRotation[0]

@@ -298,13 +298,10 @@ Below 32 the JDK uses insertion sort, which does not check the contract.
 ## What this changes in the plan
 
 - **Step 1** is done; the decision is above. Steps 5–7 wait for the owner.
-- **Step 2:** done in the working tree; see [Step 2 baseline](#step-2-baseline) below.
-- **Step 3:** done in the working tree; see [Step 3: ordered Matched rows](#step-3-ordered-matched-rows) below.
-- **Step 4a:** the jitter fix is in commit `adfbd029`; the rest is in the working tree. See [Step 4a: qualified genre picks](#step-4a-qualified-genre-picks) below.
-- **Step 4b:**
-  - apply the merged controls on every fallback path, on both platforms;
-  - pass the station seed;
-  - decide whether desktop's unranked first station page is in scope.
+- **Step 2:** done in `dd2ffe04`; see [Step 2 baseline](#step-2-baseline) below.
+- **Step 3:** done in `d326a8cf`; see [Step 3: ordered Matched rows](#step-3-ordered-matched-rows) below.
+- **Step 4a:** the jitter fix is in `adfbd029`, the rest in `08bcf2bc`. See [Step 4a: qualified genre picks](#step-4a-qualified-genre-picks) below.
+- **Step 4b:** done; see [Step 4b: radio honors the station](#step-4b-radio-honors-the-station) below. Open: desktop's first Start radio page (a new hook line, owner decision).
 - **Not in this plan:**
   - spoken-word detection that does not depend on `PODCAST_EPISODE` alone;
   - credits for unlinked artists.
@@ -470,3 +467,83 @@ Removing the exclusion filter, the twin check, twin learning or the liked-seed c
 **Known limits.**
 - **Unknown blocked songs.** A twin of a blocked song is caught only when the profile, the song cache or the same response knows the blocked one.
 - **Muted taste clusters.** These are still checked only when the taste engine ranks a pool. Direct hits and provider-order fallbacks skip that check.
+
+## Step 4b: radio honors the station
+
+Radio ranking now uses the station's own song as its seed, and the unranked fallbacks no longer let ruled-out songs through. This fixes the three behaviors replay case 3 confirmed: a cold player's first candidate was dropped, the playing song seeded another song's station, and a Not interested song survived the fallbacks. Desktop's first station page and Android's fallback filters stay open (below). Nothing was checked on a device.
+
+**What changed.**
+- **The hooks pass the seed.** `TurtleBridge.rankRadio(page, seedId)` (`TurtleModule.kt:418`) takes the station's song id. Hook lines #10 and #11 keep one line each:
+  - Android passes `recommendationSeedSongId.takeIf { isRadioQueue }`: the station's song for a station (`resetQueueSession` sets it before the first page is ranked, and `playMix` sets `isRadioQueue`), otherwise null;
+  - desktop passes `seed.id` from `DesktopQueueRadio.load`.
+- **The engine can rank without a seed.** `TasteEngine.rankExternal` accepts a null seed. It then ranks by taste and the session alone, and drops no candidate as the seed. The reason is `UpstreamRadio(null)`, which is never saved to kept shelves.
+
+**The seed rule** (`TurtleRuntime.rankRadio`, `TurtleRuntime.kt:172`).
+- The seed is the requested song, found in the player when it is playing that song, or in the song cache.
+- **Never used as a seed:**
+  - the playing song, when a different song was requested;
+  - a candidate from the page. The callers already took the station's song off the page, so the old `page.songs.first()` fallback dropped a real candidate.
+- **No station asked for** (no id, as when a playlist or album runs on into radio): the playing song is the seed, as before this change. That is the song YouTube's radio was built from on Android's end-of-queue path (`performAutoLoadMore`, `AndroidQueueCoordinator.kt:791`).
+- **Requested song not found, or nothing playing:** the page is ranked seedless, and the co-listening graph learns nothing from it. An unknown seed would link the wrong artist.
+- **Cold start.** Ranking waits for the saved hides and mutes to load, within the ranking budget. The fallbacks wait for them for at most a further second. Until then the engine's controls are empty.
+- **The lookup counts against the ranking budget,** so a busy player lock cannot delay the fallback.
+- **Logging.** Each page logs one line: the seed and which path served the page.
+
+| Log text | Meaning |
+| --- | --- |
+| `seed <id> (player)` | the requested song, found playing |
+| `seed <id> (song cache)` | the requested song, found in the song cache |
+| `seed <id> (unknown, seedless)` | the requested song, not found |
+| `no station asked, seed player <id>` | no song requested; the playing song |
+| `no station asked, seed unknown, seedless` | no song requested and nothing playing |
+
+**On the phone (23 November).**
+- **A station on B started while A played.** Every page logged `seed <B> (player)`, and the first page ranked 41 of 42. One single-song page came back empty, because its only song was one of the listener's exclusions. A was recorded as `STOPPED after 14s`, not a skip.
+- **A song tapped in Home's grid.** Its radio pages logged `no station asked, seed player <that song>`.
+
+**Fallback exclusions** (`keepUpstream`, `TurtleRuntime.kt:239`).
+- **Which paths.** The single-song page, the timeout and the exception path now remove the same songs the ranked path does: a Not interested song, and a song by a muted artist. The rule is `rankExternal`'s own (`artistKey in mutedArtists || key in lessLikeThisTracks`).
+- **No lock.** `taste.controls` is read without the engine's lock: it is a volatile field plus `UpstreamBlocks.current()`, a `StateFlow` value.
+- **Tags.** Only the songs returned are tagged with `provider`, `timeout` or `failed`.
+- **Chips and continuation** pass through even when every song was removed.
+- **Android block gap.** `controls` include upstream's block list, so this also closes Android's fallback-path leak of **blocked artists**. Blocked songs were already filtered by id. Android's fallback paths still skip upstream's explicit and video filters: neither lives in `controls`.
+
+**An emptied page.**
+
+| Caller | What happens |
+| --- | --- |
+| Android `applyMixPage` | Saves the continuation, then returns false. The station continues from the next page |
+| Android `fetchInitialOrMoreRecommendations` | Returns before saving the continuation (`AndroidQueueCoordinator.kt:906`). The next refill reloads the same page, so autoplay at the end of the queue can stall |
+| Desktop `DesktopQueueRadio.load` | Saves the continuation first, then returns null. If the prefetch got the emptied page, the end-of-track load uses the next one. If the end-of-track load gets it, `tryLoadAndQueueRecommendations` adds nothing and playback ends. Nothing loads again until the listener plays something (`PlayerState.kt:3354`) |
+
+The ranked path could already empty a page this way. The fallbacks now can too, but only when every song on the page is ruled out.
+
+**Injected timeout.** `TurtleRuntime` takes `rankTimeoutMs`, which defaults to the old 1,500 ms. The Koin line is unchanged. A test passes 0, and `withTimeoutOrNull(0)` takes the timeout path without running the ranking.
+
+**Test isolation.** `TurtleRuntimeTest` used to write the owner's real `~/.local/share/turtleplayer/turtle.db`. The test only replaced `PlayEventStore`, but the runtime, co-listening and the session checkpoint open `SqlitePlayEventStore` directly. Each test now binds a temporary `SqlitePlayEventStore`.
+
+On top of that, the bridge's desktop tests point every XDG home into `turtle/bridge/build/test-xdg` (`turtle/bridge/build.gradle.kts`). That covers data, config, state and cache. No bridge test can then open the developer's real database or Metrolist settings, whatever Koin does while it loads, and none depends on their "Pause listening history" setting. With that in place the whole bridge suite runs, `TurtleRuntimeTest` included: 18 classes, 54 tests. Around that run, the real `turtle.db` checksum and the real `settings.properties` modification time were unchanged.
+
+That temporary store has the `TurtleDefaults` marker already set. Otherwise a fresh database would make `TurtleDefaults` write `stopMusicOnTaskClear` into the real desktop settings file. The test hard-codes that marker key, so renaming it in `TurtleDefaults` would reopen this.
+
+Before the XDG change, a run still rewrote `~/.config/metrolist/settings.properties` with a new timestamp comment, keeping the same values. It no longer touches it.
+
+**Tests** (`TurtleRuntimeTest`, bridge desktop tests):
+
+| Test | What it shows |
+| --- | --- |
+| Station on another song | The player holds A and the station on B ranks with B: the co-listening edges come from B's artist, none from A's |
+| Unknown station, cold player | No candidate is dropped, nothing is learned, and the first candidate's play is tagged `radio+ranked` |
+| Unranked pages | With a Not interested song H, a one-song page `[H]` and a timed-out page `[H, X, Y]` come back as `[]` and `[X, Y]`, with chips and continuation kept |
+| Existing wiring test | Still passes, now on the temporary store |
+
+**User queue edits survive refill.**
+- `rankRadio` only reorders and removes songs from the page it is given. It never adds one.
+- Android's filter drops every song still in the retained queue before ranking (`AndroidQueueCoordinator.kt:550-557`). `applyMixPage` removes only generated songs after the current one (`:646-671`).
+- Desktop skips songs already queued or in the queue (`DesktopQueueRadio.kt:108`).
+
+**Open.**
+- **Desktop's first station page** (owner decision). Explicit Start radio on desktop gets its first page from `freshRadioRecommendations` (`PlayerState.kt:3747`), which never reaches `rankRadio`. That page is neither ranked nor filtered for Not interested songs. Fixing it needs a new hook line there.
+- **Station that ran out.** If a station's continuation ends, Android's refill builds YouTube's radio from the playing song but ranks it against the station's song. This is rare, because a station normally continues from its own pages. An earlier draft passed the station song for every queue, which mis-seeded the end of ordinary playlists. Passing it only while `isRadioQueue` fixed that without a new hook line.
+- **Emptied page on Android end-of-queue autoplay.** This can stall autoplay, as described above. It is mostly upstream behavior.
+- **Session vector.** The seedless path still uses the session vector, which leans toward the previous station.

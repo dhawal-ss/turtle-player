@@ -163,7 +163,7 @@ internal object KeptShelvesCodec {
             is Reason.FromYourTaste -> listOf("cluster", reason.clusterId.toString(), artists(reason.topArtists) ?: return null)
             is Reason.FreshFrom -> listOf("fresh", text(reason.artist.value) ?: return null)
             is Reason.Rediscover -> listOf("rediscover", text(reason.track.value) ?: return null, reason.lastPlayedMs.toString())
-            is Reason.UpstreamRadio -> listOf("upstream", text(reason.seed.value) ?: return null)
+            is Reason.UpstreamRadio -> listOf("upstream", text(reason.seed?.value ?: return null) ?: return null)
             is Reason.BecauseYouPicked -> listOf("picked", text(reason.artist.value) ?: return null)
             is Reason.DailyMix -> listOf(
                 "mix",

@@ -286,25 +286,26 @@ class TasteEngine(
      * Orders a candidate list someone else produced, such as YouTube radio that the app has already
      * filtered for blocked and queued songs. Uses our ranker, exploration share and queue rules but
      * mixes in nothing else, so the caller's filters stay authoritative. Muted artists are dropped;
-     * tracks that break spacing rules go to the end rather than being lost.
+     * tracks that break spacing rules go to the end rather than being lost. A null [seed] (the
+     * requested song is unavailable) ranks by taste alone and drops no candidate as the seed.
      */
     suspend fun rankExternal(
-        seed: TrackMeta,
+        seed: TrackMeta?,
         tracks: List<TrackMeta>,
         source: CandidateSource = CandidateSource.UPSTREAM_RADIO,
     ): List<QueueItem> = mutex.withLock {
         ensureLoaded()
         // One upload per song, and never another upload of the seed itself.
-        val seedSong = songs.of(seed)
+        val seedSong = seed?.let { songs.of(it) }
         val unique = tracks.distinctBy { songs.of(it) }
             .filter { songs.of(it) != seedSong }
             .filter { it.artistKey !in controls.mutedArtists && it.key !in controls.lessLikeThisTracks }
         if (unique.isEmpty()) return@withLock emptyList()
         val now = clock.nowMs()
         val skippedNow = sessionSkippedArtistsLocked(now)
-        val seedVector = representation.vectorFor(seed)
+        val seedVector = seed?.let { representation.vectorFor(it) }
         val extractor = FeatureExtractor(profile, controls, session.vector(), now, contextLocked(now), seedVector)
-        val reason = Reason.UpstreamRadio(seed.key)
+        val reason = Reason.UpstreamRadio(seed?.key)
         val scored = unique.mapIndexedNotNull { i, t ->
             val v = representation.vectorFor(t)
             if (controls.isInMutedCluster(v)) return@mapIndexedNotNull null

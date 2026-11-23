@@ -209,9 +209,9 @@ sealed interface Reason {
             }
     }
 
-    /** From the upstream (YouTube) radio for [seed]. */
-    data class UpstreamRadio(val seed: TrackKey) : Reason {
-        override val key get() = "upstream:$seed"
+    /** From the upstream (YouTube) radio for [seed]; null when that song was unavailable. */
+    data class UpstreamRadio(val seed: TrackKey?) : Reason {
+        override val key get() = seed?.let { "upstream:$it" } ?: "upstream"
     }
 
     /** One of the artists picked during onboarding. */
