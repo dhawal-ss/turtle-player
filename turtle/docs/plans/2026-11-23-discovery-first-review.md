@@ -354,7 +354,7 @@ Opening the copy migrates it in place, so never point the probe at a live databa
 | Early-skip rate, engine Up Next | 11 of 22 |
 | Early-skip rate, radio | 0 of 5 |
 
-The samples are small. Treat these figures as a starting point, not a finding.
+The samples are small. Treat these figures as a starting point, not a finding. They are also inflated by false skips (see [False skips in the history](#false-skips-in-the-history)). Compare `ranked` with `provider` only on plays recorded after that fix.
 
 **Golden gates.** Unchanged before and after: recall@50 0.587 and NDCG@10 0.868 for all finished plays, and 0.960 and 0.641 for new tracks only.
 
@@ -404,3 +404,32 @@ The probe can therefore compare early skips for `ranked` against `provider`. `ON
 - **Reshuffles.** A row can change order without any action from the listener: when upstream refreshes Home and rescoring lands, or when the day changes at the next rescore.
 - **Another upload of a skipped or Not-interested song** scores 0 rather than inheriting that song's record. The record is kept per upload.
 - **No device check yet.** Ordering has not been checked on a device. The phone was locked.
+
+## False skips in the history
+
+Testing step 3 on the phone, signed in, Matched still kept none of YouTube's rows:
+
+| Row | Value (needs at least 0.15) | Counted as disliked |
+| --- | --- | --- |
+| Listen again | 0.08 | 30% |
+| Your daily discover | −0.04 | 50% |
+
+The cause is the listening log:
+- **The skips are mostly not skips.** Of 128 local quick skips, 80 were songs followed by a start of unknown reason. Only 36 followed a Next press.
+- **Unknown starts count as skips.** `ListeningSessionTracker` ends a song as `SKIPPED` when the next start is `UNKNOWN`. Choosing something else is meant to be a neutral `STOPPED`, and `PlayerObserver` is supposed to recognise that.
+- **The effect.** These false skips pull many artists below zero, which raises every row's disliked share.
+
+**What changed in `PlayerObserver`:**
+- **Playing song missing from the queue.** The playhead sampler no longer saves a queue that does not contain the playing song: a new queue can arrive before its first song starts.
+- **Previous song missing from the saved queue.** That is now read as choosing another song (`TAPPED`, so the old song ends `STOPPED`), not `UNKNOWN`.
+- **Diagnostics.** Each remaining case writes a line to the drive log: no controller, no queue seen yet, or previous song not in its queue.
+
+On the phone, tapping a second Home song eight seconds in was recorded as `STOPPED after 8s`.
+
+**Not yet proven.** That run went through the path that already worked. Which branch produced the historical false skips is still open; the new log lines will show it from ordinary use. No automated test covers the race: it would need a fake playback controller and the real one-second sampling.
+
+**History left as it is.** The 92 stored `SKIPPED` plays followed by an unknown start were not rewritten or reinterpreted. Stored data cannot tell a replaced queue from a real Next press made while Shell's controller was gone, such as with the screen off in the car:
+- 60 of the 92 pairs carry no queue detail at all;
+- genuine Next presses change queue detail too.
+
+Those false skips fade at the profile's 90-day half-life. A read-time correction in the engine remains possible once the logs show the cause.

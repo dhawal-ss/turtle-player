@@ -86,6 +86,7 @@ class PlayerObserver(
     private var lastPositionAt: TimeMark? = null
     private var lastPlaying = false
     private var durationSent = false
+    private var replacedQueueSeen = false
 
     fun attach(
         scope: CoroutineScope,
@@ -192,9 +193,17 @@ class PlayerObserver(
 
     /** How the listener got from [previous] to [next], judged from the queue they were in. */
     private fun classify(previous: SongItem, next: SongItem): StartReason {
-        if (controller() == null || queue.isEmpty()) return StartReason.UNKNOWN
+        if (controller() == null || queue.isEmpty()) {
+            // Unknown ends the previous song as a skip unless it was nearly done (ListeningSessionTracker).
+            TurtleLog.info("player observer: start reason unknown (${if (controller() == null) "no controller" else "no queue seen yet"})")
+            return StartReason.UNKNOWN
+        }
         val at = queueIndex.takeIf { queue.getOrNull(it)?.id == previous.id } ?: queue.indexOfFirst { it.id == previous.id }
-        if (at < 0) return StartReason.UNKNOWN
+        // The queue it played from is gone: the listener chose something else, a change of plan, not a skip.
+        if (at < 0) {
+            TurtleLog.info("player observer: previous song not in its queue, read as choosing another")
+            return StartReason.TAPPED
+        }
         return when (next.id) {
             queue.getOrNull(at + 1)?.id -> {
                 // Crossfade switches songs before the end without an EOF: near the end it is autoplay.
@@ -213,6 +222,7 @@ class PlayerObserver(
         lastPositionMs = -1L
         lastPositionAt = null
         durationSent = false
+        replacedQueueSeen = false
         val own = pendingTags.remove(song.id)
         val q = queueTags.load()
         val fromQueue = q?.tags?.get(song.id)
@@ -243,8 +253,15 @@ class PlayerObserver(
         val state = c.state.value
         val id = currentId ?: return
         if (state.currentSong?.id != id) return
-        queue = state.queue
-        queueIndex = state.currentQueueIndex
+        // A new queue arrives before its first song starts: keep the one the current song plays in, so
+        // the switch reads as choosing something else rather than an unexplained change.
+        if (state.queue.none { it.id == id }) {
+            if (!replacedQueueSeen) TurtleLog.info("player observer: new queue arrived before its first song")
+            replacedQueueSeen = true
+        } else {
+            queue = state.queue
+            queueIndex = state.currentQueueIndex
+        }
         if (!durationSent && current?.duration == null && state.durationMs > 0) {
             durationSent = true
             tracker.onSignal(PlaybackSignal.DurationKnown(state.durationMs))
