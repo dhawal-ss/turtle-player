@@ -69,7 +69,31 @@
     <string name="shell_set_devtools_on">Developer tools are on</string>
     <string name="shell_set_gpl">Turtle is free software, licensed under the GNU General Public License v3.0 (GPL-3.0). You may use, study, share and change it under that license.</string>
     <string name="shell_set_gpl_link">Read the license</string>
-    <string name="shell_set_built_on">Built on Metrolist</string>
+    <string name="shell_set_credits">Credits</string>
+    <string name="shell_set_creator_name">Dhawal Ranka</string>
+    <string name="shell_set_creator_role">Creator of Turtle</string>
+    <string name="shell_set_github_handle">@%1$s</string>
+    <string name="shell_set_metrolist_team">The Metrolist team</string>
+    <string name="shell_set_metrolist_team_role">Creators of Metrolist</string>
+    <!-- About: the credits heart, a word or two on what each person did -->
+    <string name="shell_credit_creator">Creator</string>
+    <string name="shell_credit_turtle_creator">Turtle creator</string>
+    <string name="shell_credit_android_lead">Android lead</string>
+    <string name="shell_credit_desktop_lead">Desktop lead</string>
+    <string name="shell_credit_multiplatform">Multiplatform</string>
+    <string name="shell_credit_translations">Translations</string>
+    <string name="shell_credit_lyrics">Lyrics</string>
+    <string name="shell_credit_interface">Interface</string>
+    <string name="shell_credit_settings">Settings</string>
+    <string name="shell_credit_packaging">Packaging</string>
+    <string name="shell_credit_playlists">Playlists</string>
+    <string name="shell_credit_collections">Collections</string>
+    <string name="shell_credit_sign_in">Sign-in</string>
+    <string name="shell_credit_watch">Watch controls</string>
+    <string name="shell_credit_desktop">Desktop</string>
+    <string name="shell_credit_macos">macOS</string>
+    <string name="shell_credit_recommendations">Recommendations</string>
+    <string name="shell_credit_design">UI design</string>
     <string name="shell_set_built_on_body">Turtle is a fork of Metrolist. Thank you to the Metrolist team and its contributors.</string>
     <string name="shell_set_metrolist_source">Metrolist source code</string>
 

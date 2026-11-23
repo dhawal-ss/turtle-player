@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,8 +45,6 @@ import app.turtleplayer.bridge.TurtleBridge
 import app.turtleplayer.ui.components.Glyph
 import app.turtleplayer.ui.components.Glyphs
 import app.turtleplayer.ui.components.IndexLabel
-import app.turtleplayer.ui.components.ShellArt
-import app.turtleplayer.ui.components.rememberHover
 import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_inf_fresh
@@ -62,13 +59,17 @@ import app.turtleplayer.ui.generated.resources.shell_set_about_sub
 import app.turtleplayer.ui.generated.resources.shell_set_advanced
 import app.turtleplayer.ui.generated.resources.shell_set_advanced_sub
 import app.turtleplayer.ui.generated.resources.shell_set_app_name
-import app.turtleplayer.ui.generated.resources.shell_set_built_on
 import app.turtleplayer.ui.generated.resources.shell_set_built_on_body
 import app.turtleplayer.ui.generated.resources.shell_set_content
+import app.turtleplayer.ui.generated.resources.shell_credit_turtle_creator
+import app.turtleplayer.ui.generated.resources.shell_set_creator_name
+import app.turtleplayer.ui.generated.resources.shell_set_creator_role
+import app.turtleplayer.ui.generated.resources.shell_set_credits
 import app.turtleplayer.ui.generated.resources.shell_set_devtools_on
 import app.turtleplayer.ui.generated.resources.shell_set_display
 import app.turtleplayer.ui.generated.resources.shell_set_gpl
 import app.turtleplayer.ui.generated.resources.shell_set_gpl_link
+import app.turtleplayer.ui.generated.resources.shell_set_github_handle
 import app.turtleplayer.ui.generated.resources.shell_set_group_app
 import app.turtleplayer.ui.generated.resources.shell_set_group_library
 import app.turtleplayer.ui.generated.resources.shell_set_group_listening
@@ -84,6 +85,8 @@ import app.turtleplayer.ui.generated.resources.shell_set_home_youtube_off
 import app.turtleplayer.ui.generated.resources.shell_set_infinity_sub
 import app.turtleplayer.ui.generated.resources.shell_set_integrations_sub
 import app.turtleplayer.ui.generated.resources.shell_set_metrolist_source
+import app.turtleplayer.ui.generated.resources.shell_set_metrolist_team
+import app.turtleplayer.ui.generated.resources.shell_set_metrolist_team_role
 import app.turtleplayer.ui.generated.resources.shell_set_more
 import app.turtleplayer.ui.generated.resources.shell_set_navigation
 import app.turtleplayer.ui.generated.resources.shell_set_palette
@@ -129,10 +132,7 @@ import com.metrolist.shared.ui.navigation.LocalNavigator
 import com.metrolist.shared.ui.navigation.Screen
 import com.metrolist.shared.ui.playback.LocalPlaybackController
 import com.metrolist.shared.ui.screens.AboutCommunityLinkKind
-import com.metrolist.shared.ui.screens.AboutContributor
-import com.metrolist.shared.ui.screens.AboutContributors
 import com.metrolist.shared.ui.screens.aboutCommunityLinks
-import com.metrolist.shared.ui.screens.rememberAboutScreenText
 import com.metrolist.shared.ui.settings.SettingsChoice
 import com.metrolist.shared.ui.settings.SettingsControl
 import com.metrolist.shared.ui.settings.SettingsGroupRegistration
@@ -554,7 +554,10 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
     // ---- About Turtle --------------------------------------------------------------------------
     val appName = stringResource(Res.string.shell_set_app_name)
     val version = stringResource(Res.string.shell_set_version, BuildConfig.APP_VERSION)
-    val builtOn = stringResource(Res.string.shell_set_built_on)
+    val creatorName = stringResource(Res.string.shell_set_creator_name)
+    val creatorRole = stringResource(Res.string.shell_set_creator_role)
+    val metrolistTeam = stringResource(Res.string.shell_set_metrolist_team)
+    val metrolistTeamRole = stringResource(Res.string.shell_set_metrolist_team_role)
     val repository = aboutCommunityLinks.firstOrNull { it.kind == AboutCommunityLinkKind.REPOSITORY }?.url
     val about =
         turtlePage(
@@ -574,10 +577,23 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                     ),
                 ),
                 group(
-                    "builtOn",
-                    builtOn,
+                    "credits",
+                    stringResource(Res.string.shell_set_credits),
                     buildList {
-                        add(customItem("metrolistCredits", builtOn, AboutContributors.all.joinToString(", ") { it.name }) { MetrolistCredits() })
+                        add(
+                            customItem("credits", creatorName, "$creatorRole $metrolistTeam $metrolistTeamRole") {
+                                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                    val turtleCreator = HeartCredit(creatorName, stringResource(Res.string.shell_credit_turtle_creator))
+                                    CreditsHeart(listOf(turtleCreator) + MetrolistContributors.all.map { HeartCredit(it.name, stringResource(it.role)) })
+                                    CreditRow(creatorName, creatorRole, stringResource(Res.string.shell_set_github_handle, TURTLE_CREATOR_GITHUB)) {
+                                        runCatching { uriHandler.openUri("https://github.com/$TURTLE_CREATOR_GITHUB") }
+                                    }
+                                    CreditRow(metrolistTeam, metrolistTeamRole) {
+                                        runCatching { uriHandler.openUri(MetrolistContributors.CONTRIBUTORS_URL) }
+                                    }
+                                }
+                            },
+                        )
                         repository?.let { url ->
                             add(
                                 actionItem("metrolistSource", stringResource(Res.string.shell_set_metrolist_source), stringResource(SharedRes.string.credits_license_desc)) {
@@ -737,43 +753,20 @@ private fun AboutHeader(appName: String, version: String, onSettingValueChanged:
     }
 }
 
-/** Metrolist's creator, leads and collaborators with their roles, as upstream's About credits them. */
+/** One line of About's credits: a name, what they made, and where to find them. */
 @Composable
-private fun MetrolistCredits() {
-    val text = rememberAboutScreenText()
-    val uriHandler = LocalUriHandler.current
-    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        listOf(
-            text.creatorSection to listOf(AboutContributors.lead),
-            text.leadsSection to AboutContributors.leads,
-            text.collaborators to AboutContributors.collaborators,
-        ).forEach { (section, people) ->
-            IndexLabel(section, Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp))
-            people.forEach { person ->
-                CreditRow(person, text.roleLabel(person.role)) {
-                    (person.githubUrl ?: person.websiteUrl)?.let { url -> runCatching { uriHandler.openUri(url) } }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CreditRow(person: AboutContributor, role: String, onClick: () -> Unit) {
+private fun CreditRow(name: String, role: String, handle: String? = null, onClick: () -> Unit) {
     val c = Shell.colors
-    val (source, hovered) = rememberHover()
-    val bg = shellRowBackground(hovered)
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 6.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(10.dp)).background(bg)
-            .hoverable(source).shellPressable(onClick, label = person.name, focusShape = RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp).clip(RoundedCornerShape(10.dp))
+            .shellPressable(onClick, label = name, focusShape = RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ShellArt(person.avatarUrl, Modifier.size(36.dp), shape = CircleShape)
-        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(person.name, style = Shell.type.body.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, style = Shell.type.body.copy(fontWeight = FontWeight.SemiBold), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(role, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        handle?.let { Text(it, style = Shell.type.bodySmall, color = c.ink2, maxLines = 1) }
     }
 }
