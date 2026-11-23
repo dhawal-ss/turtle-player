@@ -2,6 +2,8 @@
 
 Status: draft for product-owner approval, 22 Nov 2026.
 
+**23 November implementation update.** W1, W2, W3 and W9 are present at checkout `3b1f09b1`. The [music discovery handoff](../plans/2026-11-23-music-discovery.md) updates the next steps for country charts, phone Explore, session quality and evaluation. The description of Home below records the pre-Wave 1 baseline.
+
 ## Why
 
 On opening Turtle, the product owner sees songs they never listen to, such as Indian regional
