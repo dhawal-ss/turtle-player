@@ -32,8 +32,8 @@ import kotlin.time.TimeSource
 
 /**
  * Upstream's playback controller while Shell is on screen. It adds the queue order and the playhead,
- * which the player flows of the hook lines lack. Null in the background on Android (no UI), when the
- * observer falls back to inferring skips from listening time alone.
+ * which the player flows of the hook lines lack. Null once Shell is gone (Activity destroyed, Android
+ * Auto), when the observer classifies song changes against the queue it last saw.
  */
 internal object PlaybackHints {
     @Volatile
@@ -45,9 +45,10 @@ internal object PlaybackHints {
  * desktop (`MusicPlayer`) expose the same three flows, so one hook line per platform attaches it.
  *
  * End reasons: a natural end of track (EOF) is COMPLETED and the next track is AUTOPLAY. A track
- * change without EOF is classified from the queue when the controller is known: the next queue item
- * is the next button (or a crossfade, near the end), the previous one is the back button, and any
- * other song is the listener choosing something else, which is not a verdict on the old song.
+ * change without EOF is classified from the controller's queue, or the last one seen without it: the
+ * next queue item is the next button (or a crossfade, near the end), the previous one is the back
+ * button, and any other song is the listener choosing something else, which is not a verdict on the
+ * old song. A change outside that queue stays unclassified.
  * Spoken word (TurtleSpoken.isSpokenWord) is not music taste and is not recorded; whether history is
  * paused is the tracker's concern.
  */
@@ -87,6 +88,10 @@ class PlayerObserver(
     private var lastPlaying = false
     private var durationSent = false
 
+    // The playhead carried forward by playing time alone (pauses excluded), for changes no controller sampled.
+    private var reckonedMs = 0L
+    private var reckonedSince: TimeMark? = null
+
     fun attach(
         scope: CoroutineScope,
         currentSong: StateFlow<SongItem?>,
@@ -101,7 +106,14 @@ class PlayerObserver(
         }
         scope.launch {
             isPlaying.collect { playing ->
-                guarded("play state") { mutex.withLock { if (currentId != null) tracker.onSignal(PlaybackSignal.PlayingChanged(playing)) } }
+                guarded("play state") {
+                    mutex.withLock {
+                        if (currentId != null) {
+                            reckonFrom(playhead(), playing)
+                            tracker.onSignal(PlaybackSignal.PlayingChanged(playing))
+                        }
+                    }
+                }
             }
         }
         scope.launch {
@@ -192,14 +204,19 @@ class PlayerObserver(
 
     /** How the listener got from [previous] to [next], judged from the queue they were in. */
     private fun classify(previous: SongItem, next: SongItem): StartReason {
-        if (controller() == null || queue.isEmpty()) return StartReason.UNKNOWN
+        if (queue.isEmpty()) return StartReason.UNKNOWN
         val at = queueIndex.takeIf { queue.getOrNull(it)?.id == previous.id } ?: queue.indexOfFirst { it.id == previous.id }
         if (at < 0) return StartReason.UNKNOWN
         return when (next.id) {
             queue.getOrNull(at + 1)?.id -> {
                 // Crossfade switches songs before the end without an EOF: near the end it is autoplay.
-                val remaining = previous.duration?.let { it * 1000 - lastPositionMs }
-                if (lastPositionMs >= 0 && remaining != null && remaining <= CROSSFADE_WINDOW_MS) StartReason.AUTOPLAY else StartReason.USER_NEXT
+                val durationMs = previous.duration?.let { it * 1000 }
+                when {
+                    // Without Shell nothing reports the duration, so a crossfade cannot be ruled out.
+                    durationMs == null -> if (controller() == null) StartReason.UNKNOWN else StartReason.USER_NEXT
+                    durationMs - playhead() <= CROSSFADE_WINDOW_MS -> StartReason.AUTOPLAY
+                    else -> StartReason.USER_NEXT
+                }
             }
             queue.getOrNull(at - 1)?.id -> StartReason.USER_PREVIOUS
             else -> StartReason.TAPPED
@@ -213,6 +230,7 @@ class PlayerObserver(
         lastPositionMs = -1L
         lastPositionAt = null
         durationSent = false
+        reckonFrom(0, playing)
         val own = pendingTags.remove(song.id)
         val q = queueTags.load()
         val fromQueue = q?.tags?.get(song.id)
@@ -260,6 +278,15 @@ class PlayerObserver(
         lastPositionMs = position
         lastPositionAt = TimeSource.Monotonic.markNow()
         lastPlaying = state.isPlaying
+        reckonFrom(position, state.isPlaying)
+    }
+
+    /** Where the current song's playhead should be: the last known point plus the time played since. */
+    private fun playhead(): Long = reckonedMs + (reckonedSince?.elapsedNow()?.inWholeMilliseconds ?: 0L)
+
+    private fun reckonFrom(positionMs: Long, playing: Boolean) {
+        reckonedMs = positionMs
+        reckonedSince = if (playing) TimeSource.Monotonic.markNow() else null
     }
 
     /** One failing signal (a locked database, a bad song) must not stop recording for the rest of the run. */
