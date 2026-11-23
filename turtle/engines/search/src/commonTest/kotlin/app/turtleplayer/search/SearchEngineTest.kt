@@ -103,6 +103,26 @@ class SearchEngineTest {
     }
 
     @Test
+    fun explicitAndCleanUploadsStaySeparateRows() = runTest {
+        // The library copy of the explicit upload was saved without its flag; it must not tie the two versions together.
+        val lib = LocalLibrary().apply { upsert(track("salt-e", "Paper Lanterns", "Salt Letters")) }
+        val online = FixedOnline(
+            OnlineResults(
+                tracks = listOf(
+                    OnlineTrack(track("salt-e", "Paper Lanterns", "Salt Letters").copy(explicit = true), official = true, popularity = 0.9f),
+                    OnlineTrack(track("salt-c", "Paper Lanterns", "Salt Letters"), popularity = 0.5f),
+                ),
+            ),
+        )
+        val rows = engine(online = online, lib = lib).search("salt letters").last().ranked.filterIsInstance<TrackResult>()
+        fun ids(r: TrackResult) = listOfNotNull(r.track.youtubeId) + r.alternates.map { it.id }
+        val explicitRow = rows.single { "salt-e" in ids(it) }
+        val cleanRow = rows.single { "salt-c" in ids(it) }
+        assertTrue(explicitRow !== cleanRow, "explicit and clean merged: ${ids(explicitRow)}")
+        assertEquals(listOf("salt-c"), ids(cleanRow))
+    }
+
+    @Test
     fun originalBeatsCoversLiveAndKaraokeUnlessAsked() = runTest {
         val e = engine()
         val plain = e.search("yellow").last().trackIds()
