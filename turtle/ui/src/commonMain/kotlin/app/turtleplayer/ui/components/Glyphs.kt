@@ -46,7 +46,8 @@ object Glyphs {
     val Check = vector("check", "M5 12l4 4 10-10", filled = false, stroke = 3f)
     val ChevronDown = vector("chevron_down", "M6 9l6 6 6-6", filled = false, stroke = 2f)
     val More = vector("more", "M5 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM12 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM19 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z", filled = true)
-    val Queue = vector("queue", "M4 6h12M4 12h12M4 18h8M18 15v6M15 18h6", filled = false)
+    /** What plays now, marked by a play triangle, then the lines of what comes next. */
+    val Queue = vector("queue", "M4 4.5v5l4.5-2.5zM12 7h8M4 13h16M4 18.5h16", filled = false, stroke = 2f)
     val Devices = vector("devices", "M6 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM18 8v8M21 6v12", filled = false)
     val Close = vector("close", "M6 6l12 12M18 6L6 18", filled = false, stroke = 2.4f)
     val Repeat = vector("repeat", "M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3", filled = false, stroke = 2f)
