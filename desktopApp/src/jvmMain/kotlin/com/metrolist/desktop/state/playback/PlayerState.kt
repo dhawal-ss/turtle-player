@@ -3756,7 +3756,7 @@ object PlayerState {
                 filter = { songs -> songs.filter { it.id != seedId && !isSongBlocked(it) } },
                 isCurrent = { isCurrentPlaybackTransition(generation) },
                 loadMore = { repository.continueRadioQueue(it) },
-            ) ?: return emptyList()
+            )?.let { TurtleBridge.rankRadio(it, seedId) } ?: return emptyList()
         return firstPage.songs.filter { it.id == seedId } + page.songs
     }
 

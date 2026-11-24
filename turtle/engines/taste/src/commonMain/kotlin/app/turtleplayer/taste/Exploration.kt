@@ -1,6 +1,8 @@
 package app.turtleplayer.taste
 
+import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.events.StartReason
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.ln
@@ -80,9 +82,18 @@ class ExplorationPolicy(
     /** Successes and failures saturate at this much pseudo-evidence, keeping the policy responsive. */
     private val maxEvidence: Double = 200.0,
 ) {
-    /** Classifies a play of a discovery-slot track. */
+    /**
+     * Classifies a play of a discovery-slot track. An explicit Less like this is always a failure.
+     * Otherwise only a play the pick itself started counts: an imported play, a replay or a step
+     * back to it is neutral, because the listener chose to hear it again rather than the pick
+     * landing. Trade-off: `replayed` is also set when the listener seeks back to the start of a
+     * mostly heard play, so a real engagement success on the pick's own play is dropped too. That
+     * is the conservative side: never infer an outcome from a manual replay.
+     */
     fun outcomeOf(event: PlayEvent): DiscoveryOutcome = when {
-        event.isQuickSkip || event.lessLikeThis -> DiscoveryOutcome.FAILURE
+        event.lessLikeThis -> DiscoveryOutcome.FAILURE
+        event.source != EventSource.LOCAL || event.replayed || event.startReason == StartReason.USER_PREVIOUS -> DiscoveryOutcome.NEUTRAL
+        event.isQuickSkip -> DiscoveryOutcome.FAILURE
         event.isFinished || event.liked || event.addedToPlaylist -> DiscoveryOutcome.SUCCESS
         else -> DiscoveryOutcome.NEUTRAL
     }

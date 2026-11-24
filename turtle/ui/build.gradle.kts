@@ -31,6 +31,16 @@ kotlin {
     jvmToolchain(25)
 
     sourceSets {
+        // Pure state logic behind Shell's layouts (desktop panel, Explore anchoring, mix snapshots).
+        // Runs locally (./gradlew :turtle-ui:desktopTest); CI runs only the engines.
+        getByName("desktopTest").dependencies {
+            implementation(kotlin("test"))
+            // Headless screenshot harness (src/desktopTest/.../shot): Compose's UI test runner on Skia,
+            // no window, no network.
+            implementation("org.jetbrains.compose.ui:ui-test:${libs.versions.compose.get()}")
+            // Dispatchers.Main, as in the desktop app (Shell launches some work on it).
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:${libs.versions.kotlinxCoroutines.get()}")
+        }
         commonMain.dependencies {
             implementation(project(":shared"))
             api(project(":turtle-bridge"))

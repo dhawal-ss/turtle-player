@@ -609,7 +609,7 @@ private fun PlaylistCover(playlist: PlaylistItem?, slot: PlaylistPageSlot, modif
 }
 
 @Composable
-private fun Mosaic(urls: List<String>, modifier: Modifier) {
+internal fun Mosaic(urls: List<String>, modifier: Modifier) {
     Column(modifier.clip(CoverShape)) {
         for (row in 0 until 2) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -920,7 +920,7 @@ private fun OtherVersions(
  * a back bar that gains the title once the header has scrolled off, and upstream's selection bar.
  */
 @Composable
-private fun CollectionFrame(
+internal fun CollectionFrame(
     modifier: Modifier,
     listState: LazyListState,
     contentPadding: PaddingValues,
@@ -996,10 +996,11 @@ private fun TopBar(onBack: () -> Unit, title: String, listState: LazyListState, 
     }
 }
 
-private class CollectionActions(
+internal class CollectionActions(
     val showPlayback: Boolean,
     val onPlay: () -> Unit,
-    val onShuffle: () -> Unit,
+    /** Null hides Shuffle (a Turtle mix plays in the order it shows). */
+    val onShuffle: (() -> Unit)?,
     val isFavorite: Boolean,
     val onFavorite: (() -> Unit)?,
     val onEdit: (() -> Unit)?,
@@ -1008,11 +1009,13 @@ private class CollectionActions(
     val onSmartShuffle: (() -> Unit)? = null,
     /** True while this collection is what's playing: the play button shows pause and [onPlay] pauses. */
     val playing: Boolean = false,
+    /** The save button's label in place of Save to / Remove from Your Library (a mix saves to a playlist). */
+    val favoriteLabel: String? = null,
 )
 
 /** Phone: centred cover over a left-aligned title. Desktop: Spotify's horizontal header. */
 @Composable
-private fun CollectionHeader(
+internal fun CollectionHeader(
     artKey: Any?,
     kind: String,
     title: String,
@@ -1094,11 +1097,11 @@ private fun ActionRow(a: CollectionActions, desktop: Boolean) {
         if (desktop && a.showPlayback) {
             PlayButton(a.playing, a.onPlay)
             Spacer(Modifier.width(12.dp))
-            GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), a.onShuffle, c.ink2, iconSize = 26.dp)
+            a.onShuffle?.let { GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), it, c.ink2, iconSize = 26.dp) }
             a.onSmartShuffle?.let { SmartShuffleButton(it) }
         }
         val onFavorite = a.onFavorite
-        if (onFavorite != null) FavoriteButton(a.isFavorite, onFavorite)
+        if (onFavorite != null) FavoriteButton(a.isFavorite, onFavorite, a.favoriteLabel)
         val onEdit = a.onEdit
         if (onEdit != null) GlyphButton(CollectionGlyphs.Edit, stringResource(Res.string.shell_col_edit), onEdit, c.ink2)
         val onAddSong = a.onAddSong
@@ -1107,7 +1110,7 @@ private fun ActionRow(a: CollectionActions, desktop: Boolean) {
         if (onMore != null) GlyphButton(Glyphs.More, stringResource(Res.string.shell_col_more), onMore, c.ink2)
         Spacer(Modifier.weight(1f))
         if (!desktop && a.showPlayback) {
-            GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), a.onShuffle, c.ink2, iconSize = 26.dp)
+            a.onShuffle?.let { GlyphButton(Glyphs.Shuffle, stringResource(Res.string.shell_col_shuffle), it, c.ink2, iconSize = 26.dp) }
             a.onSmartShuffle?.let { SmartShuffleButton(it) }
             Spacer(Modifier.width(8.dp))
             PlayButton(a.playing, a.onPlay)
@@ -1126,9 +1129,9 @@ private fun PlayButton(playing: Boolean, onClick: () -> Unit) {
 
 /** Spotify's save control: an outlined plus, or a lime check once it's yours. */
 @Composable
-private fun FavoriteButton(saved: Boolean, onClick: () -> Unit) {
+private fun FavoriteButton(saved: Boolean, onClick: () -> Unit, labelOverride: String? = null) {
     val c = Shell.colors
-    val label = stringResource(if (saved) Res.string.shell_col_saved else Res.string.shell_col_save)
+    val label = labelOverride ?: stringResource(if (saved) Res.string.shell_col_saved else Res.string.shell_col_save)
     Box(Modifier.size(48.dp).shellPressable(onClick, label = label, focusShape = CircleShape), contentAlignment = Alignment.Center) {
         Crossfade(saved, animationSpec = tween(ShellMotion.EMPHASIZED_MS, easing = ShellMotion.Emphasized)) { isSaved ->
             if (isSaved) {
@@ -1199,7 +1202,7 @@ private fun FindField(query: String, onQueryChange: (String) -> Unit, onClose: (
 
 /** Desktop column headings over a hairline: # / Title / Album / duration. */
 @Composable
-private fun TableHead(numbered: Boolean, albumColumn: Boolean, modifier: Modifier) {
+internal fun TableHead(numbered: Boolean, albumColumn: Boolean, modifier: Modifier) {
     val c = Shell.colors
     val style = Shell.type.label.copy(fontSize = 12.sp)
     Column(modifier) {
@@ -1229,7 +1232,7 @@ private fun TableHead(numbered: Boolean, albumColumn: Boolean, modifier: Modifie
  * whose number turns into a play glyph on hover, with album and duration columns.
  */
 @Composable
-private fun TrackRow(
+internal fun TrackRow(
     song: SongItem,
     number: Int?,
     showArt: Boolean,
@@ -1451,7 +1454,7 @@ private fun SkeletonRows(modifier: Modifier) {
 
 /** "1 hour, 12 minutes", from upstream's shared strings (its formatter is internal to :shared). */
 @Composable
-private fun durationText(seconds: Long): String {
+internal fun durationText(seconds: Long): String {
     val totalMinutes = seconds / 60
     val days = (totalMinutes / (24 * 60)).toInt()
     val hours = (totalMinutes / 60 % 24).toInt()

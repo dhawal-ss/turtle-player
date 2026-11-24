@@ -90,4 +90,16 @@
     <string name="shell_set_home_youtube_matched">Matched to your taste</string>
     <string name="shell_set_home_youtube_all">All</string>
     <string name="shell_set_home_youtube_off">Off</string>
+    <string name="shell_set_taste_history">Taste history</string>
+    <string name="shell_set_repair_skips">Repair older skips</string>
+    <string name="shell_set_repair_skips_body">Older builds counted some song changes, such as a new queue, as skips. Turn on to read them as neutral. Your history is unchanged.</string>
+    <string name="shell_set_repair_skips_off">Older builds counted some song changes, such as a new queue, as skips: %1$d found. Turn on to read them as neutral. Your history is unchanged.</string>
+    <string name="shell_set_repair_skips_on">%1$d skips recorded by older builds are read as neutral. Your history is unchanged; turn off to undo.</string>
+    <string name="shell_set_taste_reset">Reset taste</string>
+    <string name="shell_set_taste_reset_body">Recommendations start over from your next play. Nothing is deleted, so you can undo it.</string>
+    <string name="shell_set_taste_reset_confirm">Turtle stops learning from the songs you played so far, and Jump back in and search ranking start over too. Your likes, playlists and hidden songs, artists and mixes are kept. Nothing is deleted: you can undo this here. The Infinity Mix keeps its own tuning; use Start fresh there for that.</string>
+    <string name="shell_set_taste_undo">Undo reset</string>
+    <string name="shell_set_taste_undo_body">Taste was reset. Undo to learn from every song you played again.</string>
+    <string name="shell_set_taste_undo_confirm">Turtle learns from all your plays again, including the ones before the reset. What new finds taught it since the reset is set aside.</string>
+    <string name="shell_set_pause_history_body">Songs you play are not recorded or used to learn your taste, including the one playing when you pause. Likes, playlist adds and Not interested still count.</string>
 </resources>

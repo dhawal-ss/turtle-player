@@ -1,6 +1,7 @@
 package app.turtleplayer.taste
 
 import app.turtleplayer.core.MINUTE_MS
+import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
 import kotlin.test.Test
@@ -67,6 +68,21 @@ class SessionModelTest {
         s.onPlay(play(genreB[0], 0), vec(0, genreB))
         assertFalse(s.onPlay(play(genreA[8], 0, EndReason.SKIPPED, msPlayed = 4_000), vec(8, genreA)))
         assertEquals(0, s.vibeChanges)
+    }
+
+    @Test
+    fun sessionMemoryIsCapped() {
+        val s = SessionModel()
+        val tracks = (0 until 1_000).map { TrackMeta(TrackKey("yt:t$it"), "Song $it", listOf("Artist ${it % 7}")) }
+        for ((i, t) in tracks.withIndex()) {
+            s.onPlay(play(t, i * MINUTE_MS), null)
+            s.onPlay(play(t, i * MINUTE_MS, EndReason.SKIPPED, msPlayed = 3_000), null)
+        }
+        assertTrue(s.finished.size <= 200, "finished ${s.finished.size}")
+        assertTrue(s.quickSkipped.size <= 200, "quick-skipped ${s.quickSkipped.size}")
+        assertEquals(tracks.last().key, s.finished.last(), "the newest finish is kept")
+        assertEquals(tracks.last().key, s.quickSkipped.last(), "the newest skip is kept")
+        assertTrue(tracks[900].key in s.quickSkipped && tracks[100].key !in s.quickSkipped, "the oldest skips go first")
     }
 
     @Test

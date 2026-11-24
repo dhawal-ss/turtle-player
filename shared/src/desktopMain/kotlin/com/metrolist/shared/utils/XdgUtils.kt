@@ -13,7 +13,7 @@ object XdgUtils {
         return if (env != null && File(env).isAbsolute) {
             File(env)
         } else {
-            File(System.getProperty("user.home"), ".local/share")
+            com.metrolist.shared.turtle.TurtleDesktopPaths.dataHome // Turtle: HOOKS.md #67
         }
     }
 
@@ -22,7 +22,7 @@ object XdgUtils {
         return if (env != null && File(env).isAbsolute) {
             File(env)
         } else {
-            File(System.getProperty("user.home"), ".cache")
+            com.metrolist.shared.turtle.TurtleDesktopPaths.cacheHome // Turtle: HOOKS.md #67
         }
     }
 
@@ -31,7 +31,7 @@ object XdgUtils {
         return if (env != null && File(env).isAbsolute) {
             File(env)
         } else {
-            File(System.getProperty("user.home"), ".local/state")
+            com.metrolist.shared.turtle.TurtleDesktopPaths.stateHome // Turtle: HOOKS.md #67
         }
     }
 
@@ -40,7 +40,7 @@ object XdgUtils {
         return if (env != null && File(env).isAbsolute) {
             File(env)
         } else {
-            File(System.getProperty("user.home"), ".config")
+            com.metrolist.shared.turtle.TurtleDesktopPaths.configHome // Turtle: HOOKS.md #67
         }
     }
 }

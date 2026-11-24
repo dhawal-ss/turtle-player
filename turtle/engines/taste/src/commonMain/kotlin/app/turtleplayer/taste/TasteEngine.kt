@@ -7,6 +7,7 @@ import app.turtleplayer.core.HOUR_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.core.cleanArtistName
+import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
@@ -130,8 +131,18 @@ class TasteEngine(
     private var nowPlayingTrack: TrackMeta? = null
     private var radioSeed: RadioSeed? = null
     private var context: PlayContext? = null
-    /** Slot of tracks we queued recently, to attribute exploration outcomes. */
-    private val queuedSlots = LinkedHashMap<TrackKey, SlotKind>()
+
+    // Short-term session boundaries. The session model, the quick-skip run and the skipped-artist
+    // window belong to one queue occurrence ([beginOccurrence]) and one listening session (the
+    // tracker's sessionId, or idle time); controls, exploration and the profile carry on.
+    private var occurrenceKey: String? = null
+
+    // Occurrences already left, most recent last: a page ranked for one of them that comes back late
+    // must not move the session back to it (and reset away what the current one taught).
+    private val leftOccurrences = ArrayDeque<String>()
+    private var sessionKey: String? = null
+    private var lastActivityMs = Long.MIN_VALUE
+    private var sessionStartMs = Long.MIN_VALUE
     private val recent = RecentlyRecommended(config.queueRules.recentMemory).also { it.restore(recentlyRecommended) }
 
     // The listener's own controls. Volatile, and the merge cache is one immutable holder, because
@@ -158,6 +169,12 @@ class TasteEngine(
 
     var explorationState: ExplorationState = exploration
         private set
+
+    /**
+     * Replaces the exploration posterior, e.g. a fresh one for a taste reset and the saved one for its
+     * undo. Controls, recent picks and kept shelves are left as they are (unlike [importState]).
+     */
+    suspend fun setExploration(state: ExplorationState) = mutex.withLock { explorationState = state }
 
     private fun collector(generators: List<CandidateGenerator>, target: Int = config.candidateTarget) =
         CandidateCollector(generators, config.budget, target, config.generatorTimeoutMs)
@@ -198,10 +215,23 @@ class TasteEngine(
         builder.add(event)
         event.context?.let { context = it }
         if (event.lessLikeThis) own = own.apply(LessLikeThis.Track(event.trackKey, event.artistKey))
-        val slot = SurfaceTag.parse(event.surfaceDetail)?.slot ?: queuedSlots[event.trackKey]
+        // Only the play's own tag says it was a discovery pick: a song that was once ranked and is
+        // played again from elsewhere (a search, a playlist) teaches the exploration policy nothing.
+        val slot = SurfaceTag.parse(event.surfaceDetail)?.slot
         if (slot == SlotKind.DISCOVERY) explorationState = policy.update(explorationState, policy.outcomeOf(event))
         updateProfileLocked()
-        session.onPlay(event, representation.vectorFor(event.track))
+        if (event.source == EventSource.LOCAL) {
+            val now = clock.nowMs()
+            // A new listening session (the tracker's own boundary) starts a fresh short-term session.
+            // The event arrives when the play closes, so the new session reaches back to its start.
+            if (sessionKey != null && event.sessionId != sessionKey) resetShortTermLocked(now, since = minOf(now, event.startedAtMs))
+            sessionKey = event.sessionId
+            lastActivityMs = now
+        }
+        // A play that began before the short-term session did (the song that was playing when the listener
+        // started something else, reported when it closes) belongs to the last occurrence: the profile
+        // learns from it, the new session does not.
+        if (event.startedAtMs >= sessionStartMs) session.onPlay(event, representation.vectorFor(event.track))
         if (nowPlayingTrack?.key == event.trackKey) nowPlayingTrack = null
         consumeThrough(event.trackKey)
         if (autoplayActive) rerankLocked()
@@ -211,9 +241,11 @@ class TasteEngine(
     /**
      * Applies a non-play feedback event the app has already stored: ADDED_TO_PLAYLIST raises affinity;
      * NOT_INTERESTED rules the track out (as [LessLikeThis.Track]) and drops it from Up Next;
-     * UNDO_NOT_INTERESTED brings it back (controls and profile). Not collected by [observe].
+     * UNDO_NOT_INTERESTED brings it back (controls and profile); SAVED is ignored (measurement only,
+     * saves reach taste through [setSavedTracks]). Not collected by [observe].
      */
     suspend fun onFeedback(f: TrackFeedback) {
+        if (f.kind == TrackFeedbackKind.SAVED) return
         mutex.withLock {
             // Not loaded yet: the load reads the stored event, so adding it here would count it twice.
             val wasLoaded = loaded
@@ -226,6 +258,7 @@ class TasteEngine(
                     queue = queue.filterNot { it.key == f.track.key }
                 }
                 TrackFeedbackKind.UNDO_NOT_INTERESTED -> own = own.undo(Hidden.Track(f.track.key, f.track.artistKey))
+                TrackFeedbackKind.SAVED -> Unit
             }
             updateProfileLocked()
             if (autoplayActive && f.kind != TrackFeedbackKind.ADDED_TO_PLAYLIST) rerankLocked()
@@ -288,20 +321,33 @@ class TasteEngine(
      * mixes in nothing else, so the caller's filters stay authoritative. Muted artists are dropped;
      * tracks that break spacing rules go to the end rather than being lost. A null [seed] (the
      * requested song is unavailable) ranks by taste alone and drops no candidate as the seed.
+     * [hiddenRecordings] are the song identities ([SongKeys.of]) of what the listener hid, so another
+     * upload of a hidden song stays out too; see [eligibleExternal].
+     *
+     * [station] is the queue occurrence the page is for (see [beginOccurrence]); a key the engine
+     * has not seen starts a fresh short-term session, as a backstop when [beginOccurrence] lags; one
+     * already left (a page that came back after the listener moved on) leaves the session alone.
+     * Null (smart shuffle) leaves the session alone. Either way, after [SessionConfig.idleResetMs]
+     * without a play the session starts fresh.
      */
     suspend fun rankExternal(
         seed: TrackMeta?,
         tracks: List<TrackMeta>,
         source: CandidateSource = CandidateSource.UPSTREAM_RADIO,
+        hiddenRecordings: Set<TrackKey> = emptySet(),
+        station: String? = null,
     ): List<QueueItem> = mutex.withLock {
         ensureLoaded()
-        // One upload per song, and never another upload of the seed itself.
-        val seedSong = seed?.let { songs.of(it) }
-        val unique = tracks.distinctBy { songs.of(it) }
-            .filter { songs.of(it) != seedSong }
-            .filter { it.artistKey !in controls.mutedArtists && it.key !in controls.lessLikeThisTracks }
-        if (unique.isEmpty()) return@withLock emptyList()
         val now = clock.nowMs()
+        if (station != null && station != occurrenceKey && station !in leftOccurrences) {
+            enterOccurrenceLocked(station, now, now)
+        } else if (lastActivityMs != Long.MIN_VALUE && now - lastActivityMs > config.session.idleResetMs) {
+            // Nothing closed since lastActivityMs, so every play that began after it belongs to the new session.
+            resetShortTermLocked(now, since = lastActivityMs - config.session.boundarySlackMs)
+        }
+        // One upload per song, never another upload of the seed itself, and nothing the listener ruled out.
+        val unique = eligibleExternal(seed, tracks, controls, hiddenRecordings, songs)
+        if (unique.isEmpty()) return@withLock emptyList()
         val skippedNow = sessionSkippedArtistsLocked(now)
         val seedVector = seed?.let { representation.vectorFor(it) }
         val extractor = FeatureExtractor(profile, controls, session.vector(), now, contextLocked(now), seedVector)
@@ -324,13 +370,39 @@ class TasteEngine(
         val result = laidOut + leftovers
         // Only the page head is likely to play soon; marking a whole 50-song page "recently recommended"
         // would starve other surfaces of those songs.
-        for (item in result.take(config.upNextSize)) {
-            recent.add(item.key)
-            queuedSlots.remove(item.key)
-            queuedSlots[item.key] = item.slot
-        }
-        while (queuedSlots.size > 4 * config.upNextSize) queuedSlots.remove(queuedSlots.keys.first())
+        for (item in result.take(config.upNextSize)) recent.add(item.key)
         result
+    }
+
+    /**
+     * A new queue occurrence (a Home mix, a station, the Infinity Mix) begins under [key]: the
+     * short-term session (session vector, quick-skip run, skipped-artist window, finished and
+     * skipped lists) starts fresh, so the last occurrence does not steer this one. Controls, the
+     * exploration posterior, the recently-recommended memory and the profile carry on. Idempotent
+     * for the same key, so a later [rankExternal] with that station keeps what was learned since.
+     * [atMs] is when the occurrence began; plays that started up to [SessionConfig.boundarySlackMs]
+     * before it still count for it (the boundary is often noticed just after its first song starts).
+     * A key already left is ignored.
+     */
+    suspend fun beginOccurrence(
+        key: String,
+        atMs: Long = clock.nowMs(),
+    ) = mutex.withLock {
+        if (key != occurrenceKey && key !in leftOccurrences) enterOccurrenceLocked(key, clock.nowMs(), atMs)
+    }
+
+    private fun enterOccurrenceLocked(
+        key: String,
+        now: Long,
+        atMs: Long,
+    ) {
+        occurrenceKey?.let { left ->
+            leftOccurrences.remove(left)
+            leftOccurrences.addLast(left)
+            while (leftOccurrences.size > MAX_LEFT_OCCURRENCES) leftOccurrences.removeFirst()
+        }
+        occurrenceKey = key
+        resetShortTermLocked(now, since = minOf(now, atMs) - config.session.boundarySlackMs)
     }
 
     /** Current Up Next (starts autoplay from long-term taste if nothing is active). */
@@ -401,6 +473,15 @@ class TasteEngine(
     suspend fun profile(): TasteProfile = mutex.withLock {
         ensureLoaded()
         profile
+    }
+
+    /**
+     * True while history is too thin to rank on (fewer than [TasteConfig.coldStartPlays] finished
+     * plays): Home offers onboarding picks then. The one place that threshold is read from outside.
+     */
+    suspend fun coldStart(): Boolean = mutex.withLock {
+        ensureLoaded()
+        profile.finishedPlays < config.coldStartPlays
     }
 
     suspend fun recentlyRecommended(): List<TrackKey> = mutex.withLock { recent.toList() }
@@ -692,10 +773,10 @@ class TasteEngine(
         return fresh.copy(device = last.device, network = last.network)
     }
 
-    /** Artists quick-skipped at least twice in the last [SESSION_WINDOW_MS]: not wanted right now. */
+    /** Artists quick-skipped at least twice in the last [SESSION_WINDOW_MS] of this session: not wanted right now. */
     private fun sessionSkippedArtistsLocked(now: Long): Set<ArtistKey> =
         profile.recentPlays.asSequence()
-            .filter { it.quickSkip && it.startedAtMs >= now - SESSION_WINDOW_MS }
+            .filter { it.quickSkip && it.startedAtMs >= now - SESSION_WINDOW_MS && it.startedAtMs >= sessionStartMs }
             .groupingBy { it.artist }.eachCount()
             .filterValues { it >= 2 }.keys
 
@@ -745,9 +826,20 @@ class TasteEngine(
     }
 
     private fun resetSessionLocked() {
+        resetShortTermLocked(clock.nowMs())
+        queue = emptyList()
+    }
+
+    /**
+     * Forgets the short-term session: the session model, and skips older than [since] in the
+     * skipped-artist window. Never touches controls, exploration, the recently-recommended memory
+     * or the profile.
+     */
+    private fun resetShortTermLocked(now: Long, since: Long = now) {
         session.reset()
         session.longTerm = profile.longTermVector
-        queue = emptyList()
+        sessionStartMs = since
+        lastActivityMs = now
     }
 
     private fun seedVector(seed: RadioSeed): FloatArray? = when (seed) {
@@ -784,12 +876,7 @@ class TasteEngine(
         val share = policy.sampleShare(explorationState, controls.discoveryDial)
         val slots = policy.planSlots((config.upNextSize - frozen.size).coerceAtLeast(0), share)
         queue = assembler.assemble(frozen, ranked, slots, profile.recentPlays, np, recent, now, allowAgain = tail)
-        for (item in queue) {
-            recent.add(item.key)
-            queuedSlots.remove(item.key)
-            queuedSlots[item.key] = item.slot
-        }
-        while (queuedSlots.size > 4 * config.upNextSize) queuedSlots.remove(queuedSlots.keys.first())
+        for (item in queue) recent.add(item.key)
     }
 
     private suspend fun rankLocked(collector: CandidateCollector, request: GenerationRequest): List<ScoredCandidate> {
@@ -1049,5 +1136,8 @@ class TasteEngine(
     private companion object {
         /** How far back "this session" reaches for repeated skips of one artist. */
         const val SESSION_WINDOW_MS = 2 * HOUR_MS
+
+        /** Left occurrences remembered, so a late page for one of them cannot reopen it. */
+        const val MAX_LEFT_OCCURRENCES = 64
     }
 }

@@ -563,7 +563,7 @@ internal class AndroidQueueCoordinator(
                     withContext(Dispatchers.IO) { GlobalYouTubeRepository.instance.continueRadioQueue(token) }
                 }
             },
-        )?.let { TurtleBridge.rankRadio(it, recommendationSeedSongId.takeIf { isRadioQueue }) }
+        )?.let { TurtleBridge.rankRadio(it, recommendationSeedSongId.takeIf { isRadioQueue }, songsOnly = player.queueSnapshots.value.recommendationsSongsOnly) }
 
     private fun canBootstrapRecommendations(): Boolean =
         shouldBootstrapQueueRecommendations(isFiniteQueue, Settings.shared.autoLoadMore, playlistPage?.hasMore == true)
@@ -903,9 +903,11 @@ internal class AndroidQueueCoordinator(
                 songsOnly = player.queueSnapshots.value.recommendationsSongsOnly,
             )
 
+        // Turtle: keep the station's place before giving up on an empty page, so the next attempt moves past it; ranking and paging can outlast the station, so check it is still current first (turtle/HOOKS.md behavior patch #62).
+        if (sessionId != queueSessionId) return false
+        radioQueueContinuation = page.continuation
         if (rawAdditions.isEmpty()) return false
 
-        radioQueueContinuation = page.continuation
         radioQueuePlaylistId = radioQueuePlaylistId ?: "RDAMVM$seedSongId"
 
         val (toQueue, toSuggest) =

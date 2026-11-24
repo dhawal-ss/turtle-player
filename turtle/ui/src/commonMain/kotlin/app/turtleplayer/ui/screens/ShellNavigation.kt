@@ -67,6 +67,11 @@ import app.turtleplayer.ui.theme.ShellTheme
 import com.metrolist.shared.turtle.NavigationSlot
 import com.metrolist.shared.turtle.NavigationSlotItem
 import com.metrolist.shared.turtle.TurtleUiSlots
+import androidx.compose.runtime.rememberCoroutineScope
+import app.turtleplayer.ui.generated.resources.Res
+import app.turtleplayer.ui.generated.resources.shell_explore
+import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.stringResource
 
 /** Our glyph for well-known destinations; upstream's own icon for everything else. */
 private fun glyphFor(item: NavigationSlotItem, selected: Boolean): ImageVector {
@@ -97,6 +102,12 @@ private fun BottomTabs(slot: NavigationSlot) {
     val density = LocalDensity.current
     LaunchedEffect(slot.navigationVisible) { if (!slot.navigationVisible) slot.onOccupiedHeightChanged(0.dp) }
     var barHeight by remember { mutableStateOf<Dp>(0.dp) }
+    // Browse: a stable tab whose page sits over the tab content, anchored to the route history.
+    val position = rememberNavPosition()
+    val browseSelected = ShellBrowse.nav.selected(position.top, position.stack)
+    val browseLabel = stringResource(Res.string.shell_explore)
+    val openBrowse = rememberBrowseTab(position)
+    val browseCovers = ShellBrowse.nav.visible(position.top, position.stack)
     val bar: @Composable (Modifier) -> Unit = { modifier ->
         AnimatedVisibility(
             slot.navigationVisible,
@@ -118,27 +129,14 @@ private fun BottomTabs(slot: NavigationSlot) {
                     .background(c.ground.copy(alpha = 0.96f)).windowInsetsPadding(WindowInsets.navigationBars).height(68.dp),
             ) {
                 slot.items.forEachIndexed { i, item ->
-                    val selected = i == slot.selectedIndex
-                    val tint by animateColorAsState(if (selected) c.ink else c.ink2, ShellMotion.emphasized())
-                    val pop by animateFloatAsState(if (selected) 1f else 0.94f, ShellMotion.spring())
-                    // A soft pill grows behind the selected glyph (H-Motion 07); lime stays for "yours / now".
-                    val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i)).shellPressable({ selectTab(slot, i) }, Role.Tab, item.label, selected = selected),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Box(Modifier.size(56.dp, 32.dp).graphicsLayer { scaleX = 0.6f + 0.4f * pill; alpha = pill }.clip(CircleShape).background(c.surface3))
-                            Glyph(glyphFor(item, selected), tint, 24.dp, Modifier.scale(pop))
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            item.label, style = Shell.type.bodySmall.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
-                            color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
+                    // While Browse (or a page opened from it) shows, its tab is the selected one.
+                    val selected = !browseSelected && i == slot.selectedIndex
+                    BottomTab(glyphFor(item, selected), item.label, selected, Modifier.weight(1f).fillMaxHeight().then(slot.itemModifier(i))) {
+                        leaveBrowseOrSelect(slot, i, browseSelected)
                     }
                 }
+                // Turtle's Browse tab, after upstream's: never passed to upstream's itemModifier or onSelect.
+                BottomTab(Glyphs.Explore, browseLabel, browseSelected, Modifier.weight(1f).fillMaxHeight(), onClick = openBrowse)
             }
         }
     }
@@ -147,7 +145,8 @@ private fun BottomTabs(slot: NavigationSlot) {
     val mini = if (rememberHasSong()) MiniPlayerClearance else 0.dp
     if (slot.floating) {
         Box(slot.modifier.fillMaxSize()) {
-            SlotContent(slot)
+            Box(Modifier.fillMaxSize().hiddenUnderBrowse(browseCovers)) { SlotContent(slot) }
+            BrowseOverlay(position, bottom = (if (slot.navigationVisible) barHeight else navInset) + mini)
             HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
             bar(Modifier.align(Alignment.BottomCenter))
             ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = (if (slot.navigationVisible) barHeight else navInset) + mini))
@@ -155,11 +154,77 @@ private fun BottomTabs(slot: NavigationSlot) {
     } else {
         Column(slot.modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
-                SlotContent(slot)
+                Box(Modifier.fillMaxSize().hiddenUnderBrowse(browseCovers)) { SlotContent(slot) }
+                BrowseOverlay(position, bottom = (if (slot.navigationVisible) 0.dp else navInset) + mini)
                 HiddenBarScrim(slot, Modifier.align(Alignment.BottomCenter))
                 ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = (if (slot.navigationVisible) 0.dp else navInset) + mini))
             }
             bar(Modifier)
+        }
+    }
+}
+
+/** One phone tab: glyph over label, with a soft pill behind the selected glyph. */
+@Composable
+private fun BottomTab(
+    glyph: ImageVector,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    val c = Shell.colors
+    val tint by animateColorAsState(if (selected) c.ink else c.ink2, ShellMotion.emphasized())
+    val pop by animateFloatAsState(if (selected) 1f else 0.94f, ShellMotion.spring())
+    // A soft pill grows behind the selected glyph (H-Motion 07); lime stays for "yours / now".
+    val pill by animateFloatAsState(if (selected) 1f else 0f, ShellMotion.emphasized())
+    Column(
+        modifier.shellPressable(onClick, Role.Tab, label, selected = selected),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(Modifier.size(56.dp, 32.dp).graphicsLayer { scaleX = 0.6f + 0.4f * pill; alpha = pill }.clip(CircleShape).background(c.surface3))
+            Glyph(glyph, tint, 24.dp, Modifier.scale(pop))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            label, style = Shell.type.bodySmall.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
+            color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * An upstream tab tapped: Browse closes first. While Browse (or a page opened from it) shows, tapping
+ * the tab under it returns to that tab without Shell's reselect signal (upstream's own onSelect still
+ * scrolls Home and Library to the top when they are already the top route); any other tab switches.
+ */
+private fun leaveBrowseOrSelect(
+    slot: NavigationSlot,
+    index: Int,
+    browseSelected: Boolean,
+) {
+    if (!browseSelected) return selectTab(slot, index)
+    ShellBrowse.nav.close()
+    ShellMixDetails.close()
+    slot.onSelect(index)
+}
+
+/** The Browse tab: opens Browse over the current page, or scrolls it to the top when it already shows. */
+@Composable
+private fun rememberBrowseTab(position: NavPosition): () -> Unit {
+    val scope = rememberCoroutineScope()
+    val now by rememberUpdatedState(position)
+    return remember {
+        {
+            val p = now
+            val entry = ShellBrowse.nav.entry
+            if (entry != null && ShellBrowse.nav.visible(p.top, p.stack)) {
+                scope.launch { entry.list.animateScrollToItem(0) }
+            } else {
+                ShellBrowse.nav.open(p.top, p.stack)
+            }
         }
     }
 }
@@ -176,7 +241,8 @@ private fun rememberHasSong(): Boolean {
 
 /** Selects a tab; tapping the tab already showing also asks its page to scroll back to the top. */
 private fun selectTab(slot: NavigationSlot, index: Int) {
-    if (index == slot.selectedIndex) slot.items.getOrNull(index)?.let { ShellReselect.fire(it.key) }
+    // Switching tabs leaves an open mix (ShellMixDetails) closed, so Home comes back as Home.
+    if (index == slot.selectedIndex) slot.items.getOrNull(index)?.let { ShellReselect.fire(it.key) } else ShellMixDetails.close()
     slot.onSelect(index)
 }
 
@@ -212,36 +278,57 @@ internal fun OnTabReselected(keyPrefix: String, onReselect: suspend () -> Unit) 
 private fun Rail(slot: NavigationSlot) {
     TurtleUiSlots.desktopLibrary?.let { return ShellDesktopLayout(slot, it) }
     val c = Shell.colors
+    // Tablets get the phone's Browse destination as a rail item.
+    val position = rememberNavPosition()
+    val browseSelected = ShellBrowse.nav.selected(position.top, position.stack)
+    val browseLabel = stringResource(Res.string.shell_explore)
+    val openBrowse = rememberBrowseTab(position)
+    val mini = if (rememberHasSong()) MiniPlayerClearance else 0.dp
     Row(slot.modifier.fillMaxSize()) {
         if (slot.navigationVisible) {
             Column(Modifier.width(92.dp).fillMaxHeight().background(c.ground).padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 slot.header()
                 Spacer(Modifier.height(8.dp))
                 slot.items.forEachIndexed { i, item ->
-                    val selected = i == slot.selectedIndex
-                    val bg by animateColorAsState(if (selected) c.accent else c.ground, ShellMotion.emphasized())
-                    val fg by animateColorAsState(if (selected) c.onAccent else c.ink2, ShellMotion.emphasized())
-                    Column(
-                        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(slot.itemModifier(i)).shellPressable({ selectTab(slot, i) }, Role.Tab, item.label, selected = selected),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Glyph(glyphFor(item, selected), fg, 22.dp)
-                        Spacer(Modifier.height(4.dp))
-                        Text(item.label, style = Shell.type.index.copy(letterSpacing = Shell.type.bodySmall.letterSpacing), color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                    val selected = !browseSelected && i == slot.selectedIndex
+                    RailItem(glyphFor(item, selected), item.label, selected, slot.itemModifier(i)) { leaveBrowseOrSelect(slot, i, browseSelected) }
                 }
+                RailItem(Glyphs.Explore, browseLabel, browseSelected, Modifier, openBrowse)
                 Spacer(Modifier.weight(1f))
                 slot.footer?.invoke()
             }
         }
         Box(Modifier.weight(1f).fillMaxHeight()) {
-            SlotContent(slot)
+            Box(Modifier.fillMaxSize().hiddenUnderBrowse(ShellBrowse.nav.visible(position.top, position.stack))) { SlotContent(slot) }
+            BrowseOverlay(position, bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + mini)
             ShellSnackbarHost(
                 Modifier.align(Alignment.BottomCenter)
                     .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (rememberHasSong()) MiniPlayerClearance else 0.dp),
             )
         }
+    }
+}
+
+/** One rail item on tablets: glyph over label in a rounded, accent-filled selection. */
+@Composable
+private fun RailItem(
+    glyph: ImageVector,
+    label: String,
+    selected: Boolean,
+    itemModifier: Modifier,
+    onClick: () -> Unit,
+) {
+    val c = Shell.colors
+    val bg by animateColorAsState(if (selected) c.accent else c.ground, ShellMotion.emphasized())
+    val fg by animateColorAsState(if (selected) c.onAccent else c.ink2, ShellMotion.emphasized())
+    Column(
+        Modifier.padding(vertical = 4.dp).size(72.dp, 64.dp).clip(RoundedCornerShape(18.dp)).background(bg).then(itemModifier).shellPressable(onClick, Role.Tab, label, selected = selected),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Glyph(glyph, fg, 22.dp)
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = Shell.type.index.copy(letterSpacing = Shell.type.bodySmall.letterSpacing), color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

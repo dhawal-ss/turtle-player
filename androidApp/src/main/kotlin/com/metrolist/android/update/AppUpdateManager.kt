@@ -119,7 +119,7 @@ enum class UpdateFailure { CHECK, NO_APK, DOWNLOAD, DIGEST, INSTALL }
 
 object AppUpdateManager {
     const val CHANNEL_ID = "updates"
-    private const val RELEASES_URL = "https://api.github.com/repos/MetrolistGroup/Metrolist/releases?per_page=50"
+    private const val RELEASES_URL = "${app.turtleplayer.bridge.TurtleRelease.RELEASES_API}/releases?per_page=50" // Turtle: HOOKS.md #64
     private const val NIGHTLY_RELEASE_URL = "https://api.github.com/repos/MetrolistGroup/Metrolist/releases/tags/$NIGHTLY_TAG"
     private const val NOTIFICATION_ID = 1400
     private const val MAX_APK_BYTES = 512L * 1024 * 1024

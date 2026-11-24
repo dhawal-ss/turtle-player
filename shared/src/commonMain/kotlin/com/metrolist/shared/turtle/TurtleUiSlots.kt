@@ -215,6 +215,8 @@ class DesktopPlayerExtras(
     val cancelSleepTimer: () -> Unit,
     val sleepTimerActive: () -> Boolean,
     val addToPlaylist: (SongItem) -> Unit,
+    /** Upstream's add-to-playlist dialog for several songs (a Turtle mix's Save); null hides Save on desktop. */
+    val addSongsToPlaylist: ((List<SongItem>) -> Unit)? = null,
 )
 
 /** A playlist the user can add to, for Shell's picker. [contains] is true when the songs are already in it. */

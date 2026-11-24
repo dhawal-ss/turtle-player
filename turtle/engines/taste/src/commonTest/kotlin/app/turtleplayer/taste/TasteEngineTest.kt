@@ -6,7 +6,10 @@ import app.turtleplayer.core.MINUTE_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
+import app.turtleplayer.events.HistoryLens
 import app.turtleplayer.events.InMemoryPlayEventStore
+import app.turtleplayer.events.LensedPlayEventStore
+import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.TrackFeedback
 import app.turtleplayer.events.TrackFeedbackKind
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -405,6 +408,22 @@ class TasteEngineTest {
     }
 
     @Test
+    fun rankExternalLeavesOutOtherUploadsOfAHiddenRecording() = runTest {
+        val first = user.heavyRotation[0]
+        val rest = user.likedGenres.flatMap { world.tracksOfGenre(it) }.filter { it.artistKey != first.artistKey }.distinctBy { it.artistKey }.take(10)
+        val hidden = rest[2]
+        // The same recording under another id (a video next to the audio upload): only its identity is hidden.
+        val twin = hidden.copy(key = TrackKey.youtube("twin"), youtubeId = "twin")
+        val candidates = listOf(first) + rest + twin
+
+        val ranked = engineWithHistory().rankExternal(null, candidates, hiddenRecordings = setOf(SongKeys().of(hidden)))
+        assertTrue(ranked.none { it.key == hidden.key || it.key == twin.key }, "no upload of the hidden recording")
+        assertEquals(candidates.size - 2, ranked.size)
+        // Without the hidden recordings, one upload of it stays (duplicates still collapse to the first).
+        assertEquals(candidates.size - 1, engineWithHistory().rankExternal(null, candidates).size)
+    }
+
+    @Test
     fun lessLikeThisSurvivesARestartAndKeepsTheTrackOutOfRadio() = runTest {
         val engine = engineWithHistory()
         val seed = user.heavyRotation[0]
@@ -515,6 +534,27 @@ class TasteEngineTest {
         val engine = world.engine(store, clock)
         engine.onFeedback(live)
         assertEquals(w.addedToPlaylist * (w.decay(DAY_MS) + 1.0), engine.profile().track(fresh.key)!!.affinity, 1e-9)
+    }
+
+    @Test
+    fun aStoredSaveIsMeasurementOnlyAndLeavesTheProfileAlone() = runTest {
+        val store = InMemoryPlayEventStore().also { it.appendAll(history) }
+        val fresh = world.tracks.first { t -> history.none { it.trackKey == t.key } }
+        store.appendFeedback(TrackFeedback(track = fresh, kind = TrackFeedbackKind.SAVED, atMs = clock.now - DAY_MS, detail = TrackFeedback.SAVED_LIKED))
+        assertNull(world.engine(store, clock).profile().track(fresh.key), "a save does not make an unheard song known")
+    }
+
+    @Test
+    fun aLiveSaveChangesNeitherRecommendationsNorUpNext() = runTest {
+        val engine = engineWithHistory()
+        val queue = engine.startAutoplay(user.heavyRotation[0])
+        val before = engine.recommendations(20).map { it.candidate.key }
+        val profile = engine.profile()
+        val target = queue.last().track
+        engine.onFeedback(TrackFeedback(track = target, kind = TrackFeedbackKind.SAVED, atMs = clock.now, detail = TrackFeedback.SAVED_LIBRARY))
+        assertEquals(before, engine.recommendations(20).map { it.candidate.key })
+        assertEquals(profile.track(target.key)?.affinity, engine.profile().track(target.key)?.affinity)
+        assertEquals(queue.map { it.key }, engine.upNext().map { it.key }, "no rerank")
     }
 
     @Test
@@ -661,5 +701,196 @@ class TasteEngineTest {
             clock.now += 200_000
         }
         assertEquals(afterStart, calls)
+    }
+
+    // ---- Learning bound to a queue occurrence ----------------------------------------------------
+
+    private val discoveryTag = SurfaceTag.format(PlayOrigin(PlayPlace.RADIO, CandidateSource.UPSTREAM_RADIO, SlotKind.DISCOVERY, served = Served.RANKED))
+
+    @Test
+    fun aRankedSongPlayedWithoutItsOwnTagTeachesNothingAboutDiscovery() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = world.tracks.filter { it.artistKey != seed.artistKey }.distinctBy { it.artistKey }.take(30)
+        val pick = engine.rankExternal(seed, candidates).firstOrNull { it.slot == SlotKind.DISCOVERY }
+        assertNotNull(pick, "a 30-song page has a discovery slot")
+        val start = engine.explorationState
+        // Played later from somewhere else: untagged, and from a search (a tag without a slot).
+        engine.onPlayEvent(play(pick.track, clock.now, EndReason.SKIPPED, msPlayed = 3_000))
+        clock.now += 3_000
+        engine.onPlayEvent(play(pick.track, clock.now, EndReason.SKIPPED, msPlayed = 3_000, surfaceDetail = "search/-/-"))
+        clock.now += 3_000
+        assertEquals(start, engine.explorationState)
+    }
+
+    @Test
+    fun aReplayOrBackStepOfADiscoveryPickIsNotAnOutcome() = runTest {
+        val engine = engineWithHistory()
+        val track = world.tracks.last()
+        val start = engine.explorationState
+        engine.onPlayEvent(play(track, clock.now, replayed = true, surfaceDetail = discoveryTag))
+        engine.onPlayEvent(play(track, clock.now, EndReason.SKIPPED, msPlayed = 3_000, startReason = StartReason.USER_PREVIOUS, surfaceDetail = discoveryTag))
+        assertEquals(start, engine.explorationState)
+        // Control: the pick's own play, heard to the end, is a success.
+        engine.onPlayEvent(play(track, clock.now, surfaceDetail = discoveryTag))
+        assertTrue(engine.explorationState.alpha > start.alpha)
+    }
+
+    /**
+     * One song by each of the listener's favourite artists (not the seed's): their long histories
+     * keep them near the top after two skips, so only the session push-back can put one last.
+     */
+    private fun favouritesPage(seed: TrackMeta): List<TrackMeta> =
+        user.favoriteArtists.filter { it != seed.artistKey }.mapNotNull { a ->
+            world.tracksOf(a).firstOrNull { t -> t !in user.heavyRotation && t.key !in user.discoverLate }
+        }
+
+    /** Quick-skips two songs by [artist] at the current clock, off the page's albums (so the album cap stays out of it). */
+    private suspend fun TasteEngine.skipTwice(artist: ArtistKey, page: List<TrackMeta>) {
+        val pageAlbums = page.mapNotNull { it.albumKey }.toSet()
+        for (t in world.tracksOf(artist).filter { it.albumKey !in pageAlbums }.take(2)) {
+            onPlayEvent(play(t, clock.now, EndReason.SKIPPED, msPlayed = 5_000))
+            clock.now += 5_000
+        }
+    }
+
+    /** Ranks a page of favourites, quick-skips its top artist twice and returns (engine, page, that artist). */
+    private suspend fun skippedTwice(seed: TrackMeta): Triple<TasteEngine, List<TrackMeta>, ArtistKey> {
+        val engine = engineWithHistory()
+        val candidates = favouritesPage(seed)
+        val skipped = engine.rankExternal(seed, candidates).first().track.artistKey
+        engine.skipTwice(skipped, candidates)
+        return Triple(engine, candidates, skipped)
+    }
+
+    @Test
+    fun skipsFromAnEarlierOccurrenceNoLongerPushAnArtistBack() = runTest {
+        val seed = user.heavyRotation[0]
+        // A new listening session (the tracker's sessionId).
+        skippedTwice(seed).let { (engine, candidates, skipped) ->
+            engine.onPlayEvent(play(seed, clock.now, sessionId = "s2"))
+            clock.now += 200_000
+            assertTrue(engine.rankExternal(seed, candidates).last().track.artistKey != skipped, "new session")
+        }
+        // Over half an hour without a play.
+        skippedTwice(seed).let { (engine, candidates, skipped) ->
+            clock.now += 31 * MINUTE_MS
+            assertTrue(engine.rankExternal(seed, candidates).last().track.artistKey != skipped, "idle")
+        }
+        // A new queue occurrence.
+        skippedTwice(seed).let { (engine, candidates, skipped) ->
+            engine.beginOccurrence("q:2")
+            assertTrue(engine.rankExternal(seed, candidates, station = "q:2").last().track.artistKey != skipped, "new occurrence")
+        }
+        // Control: the same occurrence and session keep it at the back.
+        skippedTwice(seed).let { (engine, candidates, skipped) ->
+            assertEquals(skipped, engine.rankExternal(seed, candidates).last().track.artistKey, "same session")
+        }
+    }
+
+    @Test
+    fun playsInsideAnOccurrenceSurviveItsFirstRanking() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = favouritesPage(seed)
+        val skipped = engine.rankExternal(seed, candidates).first().track.artistKey
+        // The occurrence begins eagerly, before its plays; its first ranking keeps what they taught.
+        engine.beginOccurrence("q:2")
+        engine.skipTwice(skipped, candidates)
+        assertEquals(skipped, engine.rankExternal(seed, candidates, station = "q:2").last().track.artistKey)
+        // A station key the engine has not seen is a new occurrence (the backstop when the begin lags).
+        assertTrue(engine.rankExternal(seed, candidates, station = "q:3").last().track.artistKey != skipped)
+    }
+
+    @Test
+    fun theFirstSongOfAnOccurrenceNoticedLateStillCounts() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = favouritesPage(seed)
+        val skipped = engine.rankExternal(seed, candidates).first().track.artistKey
+        val pageAlbums = candidates.mapNotNull { it.albumKey }.toSet()
+        val (first, second) = world.tracksOf(skipped).filter { it.albumKey !in pageAlbums }.take(2)
+        // A queue replaced outside the app is only seen as its first song starts: the boundary lands just after it.
+        val firstStarted = clock.now
+        clock.now += 300
+        engine.beginOccurrence("q:2")
+        clock.now += 4_700
+        engine.onPlayEvent(play(first, firstStarted, EndReason.SKIPPED, msPlayed = 5_000))
+        engine.onPlayEvent(play(second, clock.now, EndReason.SKIPPED, msPlayed = 5_000))
+        clock.now += 5_000
+        assertEquals(skipped, engine.rankExternal(seed, candidates, station = "q:2").last().track.artistKey)
+    }
+
+    @Test
+    fun aLatePageForAnOccurrenceAlreadyLeftDoesNotResetTheCurrentOne() = runTest {
+        val engine = engineWithHistory()
+        val seed = user.heavyRotation[0]
+        val candidates = favouritesPage(seed)
+        val skipped = engine.rankExternal(seed, candidates).first().track.artistKey
+        engine.beginOccurrence("q:1")
+        clock.now += 10_000
+        engine.beginOccurrence("q:2")
+        clock.now += 10_000
+        engine.skipTwice(skipped, candidates)
+        // A page ranked for q:1 comes back after the listener moved on to q:2.
+        engine.rankExternal(seed, candidates, station = "q:1")
+        engine.beginOccurrence("q:1")
+        assertEquals(skipped, engine.rankExternal(seed, candidates, station = "q:2").last().track.artistKey)
+    }
+
+    @Test
+    fun aNewOccurrenceKeepsExplorationAndControls() = runTest {
+        val engine = engineWithHistory()
+        engine.onPlayEvent(play(world.tracks.last(), clock.now, surfaceDetail = discoveryTag))
+        engine.lessLikeThis(LessLikeThis.Track(world.tracks[1].key, world.tracks[1].artistKey))
+        engine.setDiscoveryDial(DiscoveryDial.fromPosition(0.8))
+        val exploration = engine.explorationState
+        val controls = engine.listenerControls
+        val recent = engine.recentlyRecommended()
+        engine.beginOccurrence("q:7")
+        engine.rankExternal(null, world.tracks.take(20), station = "q:8")
+        assertEquals(exploration, engine.explorationState)
+        assertEquals(controls, engine.listenerControls)
+        assertTrue(engine.recentlyRecommended().containsAll(recent), "recently recommended memory kept")
+    }
+
+    @Test
+    fun repairedLegacySkipsNoLongerCountAgainstASong() = runTest {
+        val skipped = world.tracks.last()
+        val next = world.tracks.first()
+        // An older build labelled a replaced queue as a quick skip of the song before it.
+        val legacy = (0 until 3).flatMap { i ->
+            val at = clock.now - (i + 1) * DAY_MS
+            listOf(
+                play(skipped, at, EndReason.SKIPPED, msPlayed = 5_000, sessionId = "s$i"),
+                play(next, at + 5_000, startReason = StartReason.UNKNOWN, sessionId = "s$i").copy(position = 1),
+            )
+        }
+        val store = InMemoryPlayEventStore().also { it.appendAll(legacy) }
+        var lens = HistoryLens()
+        val engine = world.engine(LensedPlayEventStore(store) { lens }, clock)
+        assertTrue(engine.profile().tracks.getValue(skipped.key).affinity < 0)
+
+        lens = HistoryLens(repairLegacySkips = true)
+        engine.refresh()
+        assertEquals(0.0, engine.profile().tracks.getValue(skipped.key).affinity)
+        assertEquals(0, engine.profile().tracks.getValue(skipped.key).quickSkips)
+        assertEquals(6L, store.count()) // stored history is unchanged
+
+        lens = HistoryLens()
+        engine.refresh()
+        assertTrue(engine.profile().tracks.getValue(skipped.key).affinity < 0)
+    }
+
+    @Test
+    fun explorationCanBeReplacedAndIsSaved() = runTest {
+        val engine = engineWithHistory()
+        engine.lessLikeThis(LessLikeThis.Track(world.tracks[1].key, world.tracks[1].artistKey))
+        val controls = engine.listenerControls
+        val chosen = ExplorationState(alpha = 7.0, beta = 3.0)
+        engine.setExploration(chosen)
+        assertEquals(chosen, engine.explorationState)
+        assertEquals(chosen, TasteState.decode(engine.exportState())!!.exploration)
+        assertEquals(controls, engine.listenerControls)
     }
 }

@@ -803,6 +803,7 @@ fun main() {
 }
 
 fun main(args: Array<String>) {
+    app.turtleplayer.bridge.migrateDesktopDataAtStartup() // Turtle: HOOKS.md #70
     // The JDK reads this once when its default proxy selector initializes.
     if (OsUtil.isWindows) System.getProperties().putIfAbsent("java.net.useSystemProxies", "true")
     runCatching { System.getProperty("metrolist.cds.cache")?.let { File(it).mkdirs() } }
@@ -987,7 +988,7 @@ private fun runDesktopApp(args: Array<String>) {
                     turtleAppModule,
                 )
             }
-            com.metrolist.shared.turtle.TurtleUiSlots.desktopLibrary = com.metrolist.shared.turtle.DesktopLibrarySlot({ com.metrolist.desktop.state.content.LibraryContentState.librarySections.values.flatten() }, { com.metrolist.desktop.ui.screens.openHomeItem(it) }); com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras = com.metrolist.shared.turtle.DesktopPlayerExtras({ com.metrolist.desktop.state.playback.LyricsState.currentLyricsEntries }, { com.metrolist.desktop.state.playback.LyricsState.isLyricsLoading }, { com.metrolist.desktop.state.playback.LyricsState.currentLyricsOffsetMs }, { com.metrolist.desktop.state.playback.LyricsState.currentLyricsSongId }, { com.metrolist.desktop.state.playback.LyricsState.fetchLyrics(it) }, { com.metrolist.desktop.state.playback.PlayerState.removeQueueItems(setOf(it)) }, { ms, afterSong -> com.metrolist.desktop.state.playback.PlayerState.startSleepTimer(ms, afterSong, fadeOut = false) }, { com.metrolist.desktop.state.playback.PlayerState.clearSleepTimer() }, { com.metrolist.desktop.state.playback.PlayerState.sleepTimerEnabled }, { com.metrolist.desktop.state.playback.PlayerState.showAddToPlaylistSong = it })
+            com.metrolist.shared.turtle.TurtleUiSlots.desktopLibrary = com.metrolist.shared.turtle.DesktopLibrarySlot({ com.metrolist.desktop.state.content.LibraryContentState.librarySections.values.flatten() }, { com.metrolist.desktop.ui.screens.openHomeItem(it) }); com.metrolist.shared.turtle.TurtleUiSlots.desktopExtras = com.metrolist.shared.turtle.DesktopPlayerExtras({ com.metrolist.desktop.state.playback.LyricsState.currentLyricsEntries }, { com.metrolist.desktop.state.playback.LyricsState.isLyricsLoading }, { com.metrolist.desktop.state.playback.LyricsState.currentLyricsOffsetMs }, { com.metrolist.desktop.state.playback.LyricsState.currentLyricsSongId }, { com.metrolist.desktop.state.playback.LyricsState.fetchLyrics(it) }, { com.metrolist.desktop.state.playback.PlayerState.removeQueueItems(setOf(it)) }, { ms, afterSong -> com.metrolist.desktop.state.playback.PlayerState.startSleepTimer(ms, afterSong, fadeOut = false) }, { com.metrolist.desktop.state.playback.PlayerState.clearSleepTimer() }, { com.metrolist.desktop.state.playback.PlayerState.sleepTimerEnabled }, { com.metrolist.desktop.state.playback.PlayerState.showAddToPlaylistSong = it }, addSongsToPlaylist = { com.metrolist.desktop.state.playback.PlayerState.showAddToPlaylistSongs = it })
             val database =
                 try {
                     GlobalContext.get().get<MusicDatabase>()

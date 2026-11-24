@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -211,6 +212,9 @@ private class HomeLists(
 /** The Liked Songs tile's place in the shortcut grid. */
 private object LikedSongsTile
 
+/** A grid slot held for a YouTube suggestion that has not arrived yet. */
+private object PendingTile
+
 /**
  * Shell's Home, the listener's own music first: filter chips, a 2×4 grid of shortcuts (Infinity Mix
  * first), Made for you, the Infinity card, Jump back in, More like X, then at most a few of YouTube's
@@ -269,11 +273,13 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         origin: String,
     ) = ShellHomeFeedback.play(PlayPlace.HOME_GRID, origin, songs) { playback.play(song, songs) }
     InfinitySheetHost()
+    ArtistPicksSheetHost()
     if (ShellAppearance.open) ShellThemeSheet()
 
     val ground = LocalShellGround.current ?: c.ground
     val desktop = ShellPlatform.desktop
-    SideEffect { if (desktop) ShellDesktop.home = slot }
+    // Browse (both platforms), Search's category tiles and the artist picks read Home's data and opener.
+    SideEffect { ShellBrowse.home = slot }
     // Spotify's header glow: takes the color of the shortcut under the pointer, calm lime otherwise.
     var glowArt by remember { mutableStateOf<String?>(null) }
     var glowInfinity by remember { mutableStateOf(false) }
@@ -294,12 +300,17 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
         enabled = (current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal) && mode != HomeYouTubeRows.OFF,
         allowChipFeeds = mode == HomeYouTubeRows.ALL,
     )
-    // Android's upstream scrolls Home to the top when its tab is tapped again; desktop's doesn't.
-    if (desktop) OnTabReselected("home") { slot.listState.animateScrollToItem(0) }
+    // Tapping Home again closes an open mix first. Otherwise Android's upstream scrolls Home to the top
+    // itself; desktop's doesn't, so Shell does.
+    OnTabReselected("home") {
+        if (ShellMixDetails.current != null) ShellMixDetails.close() else if (desktop) slot.listState.animateScrollToItem(0)
+    }
     val likedTitle = stringResource(Res.string.shell_liked_songs)
+    // A mix's details page, open over Home's list (which keeps its scroll in upstream's list state).
+    val openMix = ShellMixDetails.current
 
     BoxWithConstraints(slot.modifier.fillMaxSize().background(ground)) {
-        if (desktop) {
+        if (desktop && openMix == null) {
             val list = slot.listState
             // Scroll position and the glow color are read in the layer and draw phases, so neither
             // scrolling nor the tint animation recomposes Home.
@@ -345,11 +356,21 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             shelvesWaitOver = true
         }
         val shelvesReady = TurtleBridge.homeShelvesReady || shelvesWaitOver
+        // Grid slots held for YouTube's suggestions pulse for at most this long: a network that never
+        // answers leaves a short grid, not pulsing tiles forever.
+        var suggestionsWaitOver by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            delay(SHELVES_WAIT_MS)
+            suggestionsWaitOver = true
+        }
+        val pendingTiles = if (suggestionsWaitOver) 0 else layout.pendingTiles
         val wide = maxWidth > 840.dp
         val gridColumns = if (wide) 4 else 2
         val mixGrid = desktop && maxWidth - 16.dp >= 900.dp
 
-        LazyColumn(
+        if (openMix != null) {
+            ShellMixPage(openMix, slot, onBack = ShellMixDetails::close)
+        } else LazyColumn(
             state = slot.listState,
             contentPadding = PaddingValues(top = slot.contentPadding.calculateTopPadding() + 12.dp, bottom = slot.contentPadding.calculateBottomPadding() + 24.dp),
             modifier = Modifier.fillMaxSize().padding(horizontal = if (desktop) 8.dp else 0.dp),
@@ -387,18 +408,22 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 item(key = "offline") { OfflineCard(Modifier.riseIn(rise, "offline", 1)) }
             }
 
-            if (waiting || !layout.gridReady || !shelvesReady) {
+            // The listener's own tiles (Infinity, Liked Songs, pins, recents) draw as soon as they are known
+            // locally; YouTube's suggestions fill the held slots when they come, never pushing a tile.
+            if (!layout.localReady) {
                 item(key = "shortcuts_loading") { PlaceholderShortcuts(gridColumns) }
             } else {
                 item(key = "shortcuts") {
                     val now = calm.value
                     // Infinity first, then Liked Songs (as in Spotify's grid), then pins, recents and suggestions.
-                    val tiles = remember(lists) { listOf<Any?>(null, LikedSongsTile) + layout.grid }
+                    val tiles = remember(lists, pendingTiles) { listOf<Any?>(null, LikedSongsTile) + layout.grid + List(pendingTiles) { PendingTile } }
                     Column(Modifier.riseIn(rise, "shortcuts", 1).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         tiles.chunked(gridColumns).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 row.forEach { item ->
-                                    if (item === LikedSongsTile) {
+                                    if (item === PendingTile) {
+                                        PulseTile(Modifier.weight(1f))
+                                    } else if (item === LikedSongsTile) {
                                         ShortcutTile(
                                             title = likedTitle,
                                             art = { m -> Box(m.background(c.surface3), contentAlignment = Alignment.Center) { Glyph(Glyphs.Heart, c.accent, 24.dp) } },
@@ -441,7 +466,22 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
             }
 
             // Made for you sits right under the grid, so the mixes are reachable without scrolling on a phone.
-            if (lists.mixes.isNotEmpty()) {
+            // Its space is held (capped) until Turtle's shelves are published, so nothing below jumps; a
+            // young profile with no mixes gets the artist picks card in the same slot.
+            val picks = TurtleBridge.artistPicks
+            if (!shelvesReady) {
+                item(key = "made_for_you_loading") { PlaceholderMixes(wide, mixGrid) }
+            } else if (lists.mixes.isEmpty() && picks != null && picks.offer) {
+                item(key = "artist_picks") {
+                    ArtistPicksCard(
+                        onPick = { ShellArtistPicks.open(shelves.flatMap { it.items } + ui.quickPicks) },
+                        // In the picks' own scope: leaving Home right after the tap must not cancel the skip.
+                        onSkip = ShellArtistPicks::skip,
+                        onPlay = ::playInfinity,
+                        modifier = Modifier.riseIn(rise, "artist_picks", 2),
+                    )
+                }
+            } else if (lists.mixes.isNotEmpty()) {
                 item(key = "made_for_you") {
                     Column(Modifier.riseIn(rise, "made_for_you", 2)) {
                         Spacer(Modifier.height(24.dp))
@@ -465,13 +505,9 @@ fun ShellHome(slot: HomeSlot) = ShellTheme {
                 }
             }
 
-            if (waiting || !shelvesReady) {
-                item(key = "infinity_loading") { PlaceholderInfinity(wide) }
-                if (!shelvesReady) return@LazyColumn
-            } else {
-                item(key = "infinity") {
-                    InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 3), onOpen = ::openInfinity)
-                }
+            // Infinity needs no network to show (its cube has fallback colours), so it never waits.
+            item(key = "infinity") {
+                InfinityCard(lists.artUrls, infinityPlaying, wide, ::playInfinity, Modifier.riseIn(rise, "infinity", 3), onOpen = ::openInfinity)
             }
 
             val music = current == HomeFilter.ALL.ordinal || current == HomeFilter.MUSIC.ordinal
@@ -596,10 +632,15 @@ private fun MixTile(mix: MixEntry, modifier: Modifier) {
             subtitle = if (mix.names.isBlank()) mix.shelf.label.orEmpty() else stringResource(Res.string.shell_and_more, mix.names),
             artUrl = mix.songs.firstOrNull()?.displayThumbnailUrl,
             tint = mix.tint,
-            onClick = {
+            // The art and title open the mix; Play plays it (as the details page's Play does).
+            onOpen = {
+                ShellMixDetails.open(MixSnapshot(mix.shelf.key, mix.shelf.title, mix.shelf.label, mix.tint, mix.songs, TurtleBridge.mixAbout(mix.shelf.key)))
+            },
+            onPlay = {
                 if (mix.songs.isNotEmpty()) {
                     ShellHomeFeedback.play(PlayPlace.HOME_TURTLE, mix.shelf.key, mix.songs) {
-                        ShellQueue.play(playback, mix.songs, mix.shelf.title)
+                        ShellQueue.play(playback, mix.songs, mix.shelf.title, sourceId = mix.shelf.key)
+                        ShellQueue.markSource(mix.shelf.key, mix.songs)
                     }
                 }
             },
@@ -708,17 +749,45 @@ private fun PlaceholderShortcuts(columns: Int) {
     }
 }
 
+/** One held grid slot, the size of a shortcut tile, pulsing until its suggestion arrives (or the wait is capped). */
 @Composable
-private fun PlaceholderInfinity(wide: Boolean) {
+private fun PulseTile(modifier: Modifier) {
+    val c = Shell.colors
+    val pulse = rememberShellPulse()
+    Box(modifier.height(56.dp).graphicsLayer { alpha = pulse.value }.clip(ShellShapes.Tile).background(c.surface2))
+}
+
+/** Made for you's space, held while Turtle's shelves are published: a title bar and a row of mix-card shapes. */
+@Composable
+private fun PlaceholderMixes(wide: Boolean, grid: Boolean) {
     val c = Shell.colors
     val pulse = rememberShellPulse()
     val desktop = ShellPlatform.desktop
-    Box(
-        Modifier.padding(16.dp, 20.dp, 16.dp, 0.dp).fillMaxWidth().height(if (wide) 180.dp else 112.dp)
-            .graphicsLayer { alpha = pulse.value }
-            .clip(if (desktop) RoundedCornerShape(8.dp) else ShellShapes.Card)
-            .background(c.surface2),
-    )
+    val label = stringResource(Res.string.shell_home_loading)
+    val card = if (wide) 180.dp else 142.dp
+    Column(Modifier.semantics { contentDescription = label }.graphicsLayer { alpha = pulse.value }) {
+        Spacer(Modifier.height(24.dp))
+        Box(Modifier.padding(horizontal = 16.dp).width(160.dp).height(24.dp).clip(RoundedCornerShape(6.dp)).background(c.surface2))
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth().then(if (grid) Modifier else Modifier.horizontalScroll(rememberScrollState(), enabled = false))
+                .padding(horizontal = if (desktop) 6.dp else 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (grid) 16.dp else if (desktop) 2.dp else 14.dp),
+        ) {
+            if (grid) {
+                repeat(MIX_GRID_COLUMNS) {
+                    Box(Modifier.weight(1f).aspectRatio(1f).clip(ShellShapes.Art).background(c.surface2))
+                }
+            } else {
+                // A row of mixes scrolls; show as many card shapes as fit (the rest are clipped, as a row is).
+                repeat(4) {
+                    Box(Modifier.width(card).aspectRatio(1f).clip(ShellShapes.Art).background(c.surface2))
+                }
+            }
+        }
+        // The title and names under each mix card.
+        Spacer(Modifier.height(44.dp))
+    }
 }
 
 /** A short note that rises from the bottom, e.g. when the Infinity Mix has nothing to play yet. */
@@ -766,12 +835,18 @@ private const val RISE_MAX_STAGGERED = 12
 @Composable
 internal fun rememberRiseIn(listState: LazyListState): RiseIn {
     val rise = remember(listState) { RiseIn(settled = listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) }
-    LaunchedEffect(rise) {
+    SettleRiseIn(rise, listState)
+    return rise
+}
+
+/** Settles [rise] once [listState] scrolls, for a [RiseIn] held outside composition (Explore's). */
+@Composable
+internal fun SettleRiseIn(rise: RiseIn, listState: LazyListState) {
+    LaunchedEffect(rise, listState) {
         if (rise.settled) return@LaunchedEffect
         snapshotFlow { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }.first { it }
         rise.settled = true
     }
-    return rise
 }
 
 /** Fade in and rise 10 dp, 300 ms Emphasized, [index] × 40 ms after the first item; once per [key]. */

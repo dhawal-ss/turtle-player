@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -83,6 +84,12 @@ import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_albums
 import app.turtleplayer.ui.generated.resources.shell_artists
 import app.turtleplayer.ui.generated.resources.shell_browse_all
+import app.turtleplayer.ui.generated.resources.shell_browse_see_all
+import app.turtleplayer.ui.generated.resources.shell_search_from_library
+import com.metrolist.shared.model.SearchSummaryPage
+import com.metrolist.shared.youtube.playback.PlaybackNetworkStateStore
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.collectAsState
 import app.turtleplayer.ui.generated.resources.shell_clear_search
 import app.turtleplayer.ui.generated.resources.shell_filter_top
 import app.turtleplayer.ui.generated.resources.shell_genre_1
@@ -194,8 +201,22 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
         // Results, de-duplicated by id once per page so LazyColumn keys stay unique.
         val filtered = s.filteredResults
         val filteredItems = remember(filtered) { filtered?.items.orEmpty().distinctBy { it.id } }
-        val summaries = remember(s.searchSummary) {
-            s.searchSummary?.summaries.orEmpty().map { it.copy(items = it.items.distinctBy { item -> item.id }) }
+        // Turtle's local stage: the listener's own songs for the submitted query, there before YouTube
+        // answers. Keyed to the query, so a newer search cancels an older one, and tagged with it, so a
+        // late answer never shows under another query. The online page (already re-ranked with the
+        // library, HOOKS.md #20) replaces it when it lands; filtered searches never use it.
+        val localPage by produceState<Pair<String, SearchSummaryPage?>?>(null, s.query, s.isQuerySubmitted) {
+            value = null
+            val q = s.query
+            if (s.isQuerySubmitted && q.isNotBlank()) value = q to ShellSearchLocal.search(q)
+        }
+        val local = localPage?.takeIf { it.first == s.query && s.isQuerySubmitted }?.second?.summaries.orEmpty()
+        val online = s.searchSummary?.summaries.orEmpty()
+        // Offline, upstream's page is a plain SQL match of the library; ours is typo-tolerant and ranked.
+        val network by remember { PlaybackNetworkStateStore.state }.collectAsState()
+        val fromLibrary = s.selectedFilter == null && local.isNotEmpty() && (online.isEmpty() || !network.connected)
+        val summaries = remember(online, local, fromLibrary) {
+            (if (fromLibrary) local else online).map { it.copy(items = it.items.distinctBy { item -> item.id }) }
         }
         val top = remember(summaries) { summaries.firstOrNull { it.isTopResult }?.items?.firstOrNull() }
         val rest = remember(summaries) { summaries.filterNot { it.isTopResult } }
@@ -248,12 +269,39 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
                         VibeChips(slot)
                     }
                     item(key = "browse") {
-                        SectionTitle(stringResource(Res.string.shell_browse_all))
+                        val openBrowse = rememberOpenBrowse()
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Box(Modifier.weight(1f)) { SectionTitle(stringResource(Res.string.shell_browse_all)) }
+                            // The whole of Browse, over Search: Back returns here. A 48 dp touch target; the
+                            // text names it, so no separate label (it would be read twice).
+                            Box(
+                                Modifier.padding(end = 8.dp).heightIn(min = 48.dp).clip(CircleShape)
+                                    .shellPressable(openBrowse, focusShape = CircleShape).padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(stringResource(Res.string.shell_browse_see_all), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink2)
+                            }
+                        }
                         val cols = if (wide) 4 else 2
+                        // YouTube Music's own categories once Home has them, or (signed in, when Home's feed has
+                        // none) once Explore's own load has: each opens its Browse page as a real route through
+                        // Home's opener, so Back returns to Search. Until then, the fixed tiles search for their name.
+                        val homeMoods = ShellBrowse.home?.uiState?.moodsAndGenres
+                        val explore = rememberExploreState(wanted = homeMoods != null && homeMoods.isEmpty())
+                        val categories = remember(homeMoods, explore.data) { ShellBrowse.categories(explore.data).take(GENRES.size) }
                         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            GENRES.withIndex().chunked(cols).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    row.forEach { (i, res) -> val g = stringResource(res); BrowseTile(g, GENRE_TINTS[i], { slot.onSearch(g) }, Modifier.weight(1f)) }
+                            if (categories.isNotEmpty()) {
+                                categories.withIndex().chunked(cols).forEach { row ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        row.forEach { (i, item) -> BrowseTile(item.title, GENRE_TINTS[i % GENRE_TINTS.size], { ShellBrowse.openItem(item) }, Modifier.weight(1f)) }
+                                        repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
+                                    }
+                                }
+                            } else {
+                                GENRES.withIndex().chunked(cols).forEach { row ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        row.forEach { (i, res) -> val g = stringResource(res); BrowseTile(g, GENRE_TINTS[i], { slot.onSearch(g) }, Modifier.weight(1f)) }
+                                    }
                                 }
                             }
                         }
@@ -276,6 +324,14 @@ fun ShellSearch(slot: SearchSlot) = ShellTheme {
                         Row(Modifier.horizontalScroll(rememberScrollState()).padding(16.dp, 14.dp, 16.dp, 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             val filters = if (Settings.shared.hidePodcasts) FILTERS else FILTERS + PODCAST_FILTERS
                             filters.forEach { (f, res) -> ShellChip(stringResource(res), s.selectedFilter == f, { slot.onFilterSelected(f) }) }
+                        }
+                    }
+                    if (fromLibrary) {
+                        item(key = "from_library") {
+                            Text(
+                                stringResource(Res.string.shell_search_from_library), style = Shell.type.bodySmall, color = c.ink2,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                            )
                         }
                     }
                     when {
@@ -650,4 +706,10 @@ private fun kindOf(item: YTItem): String? = when (item) {
     is EpisodeItem -> stringResource(Res.string.shell_sp_kind_episode)
     is SongItem -> if (item.isPodcast) stringResource(Res.string.shell_sp_kind_episode) else stringResource(Res.string.shell_kind_song)
     else -> null
+}
+
+/** Turtle's local search stage as ShellSearch reaches it: the bridge in the app, a fake in headless UI tests. */
+internal object ShellSearchLocal {
+    val bridge: suspend (String) -> SearchSummaryPage? = { q -> TurtleBridge.searchLocal(q) }
+    var search: suspend (String) -> SearchSummaryPage? = bridge
 }

@@ -8,6 +8,7 @@ import app.turtleplayer.core.MINUTE_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.core.TrackMeta
 import app.turtleplayer.events.EndReason
+import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
@@ -171,10 +172,13 @@ fun play(
     replayed: Boolean = false,
     lessLikeThis: Boolean = false,
     surfaceDetail: String? = null,
+    startReason: StartReason = StartReason.AUTOPLAY,
+    sessionId: String = "s",
+    source: EventSource = EventSource.LOCAL,
 ) = PlayEvent(
-    track = track, sessionId = "s", position = 0, surface = Surface.AUTOPLAY, startReason = StartReason.AUTOPLAY,
+    track = track, sessionId = sessionId, position = 0, surface = Surface.AUTOPLAY, startReason = startReason,
     endReason = end, startedAtMs = atMs, msPlayed = msPlayed, durationMs = 200_000, liked = liked, replayed = replayed,
-    lessLikeThis = lessLikeThis, surfaceDetail = surfaceDetail,
+    lessLikeThis = lessLikeThis, surfaceDetail = surfaceDetail, source = source,
 )
 
 class MutableClock(var now: Long) : Clock {

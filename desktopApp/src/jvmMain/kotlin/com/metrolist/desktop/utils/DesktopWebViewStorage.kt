@@ -12,7 +12,7 @@ internal fun windowsWebViewDataDirectory(
     userHome: String,
 ): File {
     val baseDirectory = localAppData?.takeIf(String::isNotBlank)?.let(::File) ?: File(userHome, "AppData/Local")
-    return File(baseDirectory, "Metrolist/WebView2")
+    return File(baseDirectory, "${com.metrolist.shared.turtle.TurtleDesktopPaths.WINDOWS_DIR}/WebView2") // Turtle: HOOKS.md #68
 }
 
 internal fun desktopWebViewDataDirectory(

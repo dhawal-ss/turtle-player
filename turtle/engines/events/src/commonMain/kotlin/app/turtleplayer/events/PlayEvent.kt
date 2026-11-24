@@ -84,6 +84,11 @@ data class PlayEvent(
     val source: EventSource = EventSource.LOCAL,
     /** Free-form origin detail, e.g. the shelf or generator that suggested this track. */
     val surfaceDetail: String? = null,
+    /**
+     * Revision of the end-reason labelling that produced this play ([LABEL_VERSION] for plays the
+     * tracker records now); null for plays stored before versioning and for imports.
+     */
+    val labelVersion: Int? = null,
 ) {
     val trackKey: TrackKey get() = track.key
     val artistKey: ArtistKey get() = track.artistKey
@@ -104,5 +109,11 @@ data class PlayEvent(
     companion object {
         const val QUICK_SKIP_MS = 30_000L
         const val LISTEN_MS = 30_000L
+
+        /**
+         * Current end-reason labelling revision. 2: a track change the player could not classify is
+         * UNKNOWN, never a skip. Plays stored before versioning carry null.
+         */
+        const val LABEL_VERSION = 2
     }
 }

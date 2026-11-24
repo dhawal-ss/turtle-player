@@ -61,7 +61,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -162,6 +164,7 @@ internal enum class PlayerSurface { LYRICS, QUEUE, MORE, SLEEP, DEVICES }
 // ---------------------------------------------------------------------------------------------
 
 /** Now playing on top, then what plays next: tap to jump, drag the handle to reorder, swipe or ✕ to remove. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun ShellQueueList(
     state: PlaybackUiState,
@@ -169,11 +172,13 @@ internal fun ShellQueueList(
     services: ShellPlayerServices,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    // Desktop passes one it keeps, so the scroll survives the panel moving between docked and overlay
+    // (a drag in progress does not: its order lives in this composition).
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val c = Shell.colors
     val queue = state.queue
     val current = state.currentQueueIndex
-    val listState = rememberLazyListState()
     val editor = services.queueEditor
     val upcoming = remember(queue, current) { if (current >= 0) (current + 1 until queue.size).toList() else queue.indices.toList() }
     val played = remember(queue, current) { if (current >= 0) (0..current.coerceAtMost(queue.lastIndex)).toList() else emptyList() }
@@ -242,16 +247,28 @@ internal fun ShellQueueList(
         item(key = "next-label") {
             // Spicetify's "queue time": how long what is queued will play.
             val totalSec = upcoming.sumOf { queue[it].duration ?: 0L }
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.weight(1f))
-                if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, queueLength(totalSec)))
-                if (editor != null && upcoming.isNotEmpty()) {
-                    Text(
-                        stringResource(Res.string.shell_np_queue_clear), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink,
-                        modifier = Modifier.padding(start = 12.dp).clip(CircleShape).background(c.ink.copy(alpha = 0.1f))
-                            .shellPressable({ remove(upcoming.toSet(), clearedText) }, focusShape = CircleShape).padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+            // The title owns its line with Clear beside it (wrapping below it when text is large), and the
+            // summary gets its own line, so "Next in queue" never breaks inside a word in a narrow panel.
+            Column(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // FlowRow breaks lines on a weighted item's minimum width (its longest word), which kept
+                    // Clear beside the title and squeezed the title onto two lines; its one-line width counts instead.
+                    IndexLabel(stringResource(Res.string.shell_next_in_queue), Modifier.weight(1f).width(androidx.compose.foundation.layout.IntrinsicSize.Max))
+                    if (editor != null && upcoming.isNotEmpty()) {
+                        Text(
+                            stringResource(Res.string.shell_np_queue_clear), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink,
+                            maxLines = 1,
+                            modifier = Modifier.clip(CircleShape).background(c.ink.copy(alpha = 0.1f))
+                                .shellPressable({ remove(upcoming.toSet(), clearedText) }, focusShape = CircleShape).padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
                 }
+                if (upcoming.isNotEmpty() && totalSec > 0) IndexLabel(stringResource(Res.string.shell_np_queue_left, upcoming.size, queueLength(totalSec)))
             }
         }
         if (upcoming.isEmpty()) {
@@ -415,7 +432,7 @@ internal fun ShellMoreActions(
     if (albumId != null && openAlbum != null) {
         ActionRow(Glyphs.Album, stringResource(Res.string.shell_np_go_to_album)) { onDone(); openAlbum(albumId) }
     }
-    ActionRow(Glyphs.Radio, stringResource(Res.string.shell_np_start_radio)) { onDone(); controller.startRadio(song) }
+    ActionRow(Glyphs.Radio, stringResource(Res.string.shell_np_start_radio)) { onDone(); ShellActions.startRadio(controller, song) }
     services.download?.let { download ->
         val done = services.isDownloaded(song.id)
         ActionRow(Glyphs.Download, stringResource(if (done) Res.string.shell_np_downloaded else Res.string.shell_np_download), enabled = !done) { onDone(); download(song) }

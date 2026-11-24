@@ -375,6 +375,8 @@ class TasteProfileBuilder(
      * A stored event (id > 0) counts once, however often it is handed in.
      */
     fun addFeedback(f: TrackFeedback) {
+        // A save is recorded for measurement only: taste reads saves from the library itself.
+        if (f.kind == TrackFeedbackKind.SAVED) return
         if (f.id > 0 && !feedbackIds.add(f.id)) return
         val t = tracks.getOrPut(f.track.key) { TrackAcc(f.track) }
         val a = artists.getOrPut(f.track.artistKey) { ArtistAcc() }
@@ -392,6 +394,7 @@ class TasteProfileBuilder(
                 a.affinity.add(weights.lessLikeThis, f.atMs, weights)
             }
             TrackFeedbackKind.UNDO_NOT_INTERESTED -> t.undoneAt = maxOf(t.undoneAt, f.atMs)
+            TrackFeedbackKind.SAVED -> Unit
         }
     }
 

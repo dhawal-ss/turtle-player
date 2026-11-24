@@ -6,8 +6,35 @@
     <string name="shell_home_offline_body">Your Infinity Mix still plays from what you’ve heard.</string>
     <string name="shell_home_infinity_empty">Infinity needs a few plays first. Search for something you love.</string>
     <string name="shell_explore_loading">Loading Explore</string>
-    <string name="shell_explore_offline">Explore needs a connection. It fills in when you’re back online.</string>
+    <string name="shell_explore_offline">Explore needs a connection. Try again once you are online.</string>
+    <string name="shell_explore_failed">Explore did not load. Check your connection and try again.</string>
+    <string name="shell_explore_retry">Try again</string>
     <string name="shell_home_jump_back_in">Jump back in</string>
     <string name="shell_home_not_interested">Not interested</string>
     <string name="shell_home_not_interested_done">Hidden. You can undo this in Settings › Recommendations</string>
+    <!-- A Turtle mix opened from Made for you: what it is made of, how often it changes, Save. -->
+    <string name="shell_mix_kind">Mix</string>
+    <string name="shell_mix_save">Save to a playlist</string>
+    <!-- How much of a mix the listener knows is counted over the songs the page lists; %1$d% / %2$d% is a whole percent, 1 to 99 while some but not all are known. -->
+    <string name="shell_mix_about_daily">Picked for your taste.</string>
+    <string name="shell_mix_about_daily_new">All new to you, picked for your taste.</string>
+    <string name="shell_mix_about_daily_share">You know %1$d% of these songs, the rest are new to you.</string>
+    <string name="shell_mix_about_daily_known">You know all of these songs.</string>
+    <string name="shell_mix_about_artist">Built around %1$s.</string>
+    <string name="shell_mix_about_artist_new">Built around %1$s. All new to you so far.</string>
+    <string name="shell_mix_about_artist_share">Built around %1$s. You know %2$d% of these songs.</string>
+    <string name="shell_mix_about_artist_known">Built around %1$s. You know all of these songs.</string>
+    <string name="shell_mix_about_more_like">Songs like %1$s.</string>
+    <string name="shell_mix_about_more_like_replayed">Songs like %1$s, which you keep coming back to.</string>
+    <string name="shell_mix_about_more_like_liked">Songs like %1$s, which you liked.</string>
+    <string name="shell_mix_about_more_like_listened">Songs like %1$s, which you played lately.</string>
+    <string name="shell_mix_about_weekly">Only songs you have never played, picked for your taste.</string>
+    <string name="shell_mix_about_weekly_share">Picked for your taste. You know %1$d% of it by now.</string>
+    <string name="shell_mix_about_fresh">New releases from your artists.</string>
+    <string name="shell_mix_about_rediscover">Songs you loved but have not played for 60 days or more.</string>
+    <string name="shell_mix_about_on_repeat">The songs you have finished most in the last 30 days.</string>
+    <string name="shell_mix_refresh_daily">Refreshes daily</string>
+    <string name="shell_mix_refresh_weekly">Refreshes on Mondays</string>
+    <string name="shell_mix_refresh_live">Updates as you listen</string>
+    <string name="shell_mix_shuffle_on">Shuffle is on, so this mix will play shuffled.</string>
 </resources>

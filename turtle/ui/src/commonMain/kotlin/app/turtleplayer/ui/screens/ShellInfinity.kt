@@ -201,15 +201,15 @@ internal object ShellInfinity {
     }
 
     /**
-     * After the dial or the picks change: drops the mix songs after the next one and refills them
-     * with the new blend, so steering is heard within a song. Returns false when no mix is playing.
+     * After the dial or the picks change: drops the mix songs after the next two and refills them
+     * with the new blend, so steering is heard within a song. Songs the listener added stay (the
+     * bridge decides which go). Returns false when no mix is playing.
      */
     fun resteer(controller: PlaybackController): Boolean {
         if (!isActive(controller)) return false
         scope.launch {
             val s = controller.state.value
-            val keepThrough = s.currentQueueIndex + 1
-            removeQueued(controller, (keepThrough + 1..s.queue.lastIndex).toSet())
+            removeQueued(controller, TurtleBridge.infinityResteerRemovals(s.queue.map { it.id }, s.currentQueueIndex))
             delay(RESTEER_SETTLE_MS)
             refill(controller)
         }

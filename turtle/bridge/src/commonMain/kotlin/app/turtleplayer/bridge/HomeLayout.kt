@@ -61,7 +61,7 @@ data class HomeRowsPick(
 class HomeLayout(
     /** Up to [GRID_TILES] shortcut tiles after Infinity and Liked Songs. */
     val grid: List<YTItem>,
-    /** False while recents, the setting or (Matched, tiles short) the pick are not known yet: draw the placeholder. */
+    /** False while recents, the setting or (Matched, tiles short) the pick are not known yet: more tiles may still join. */
     val gridReady: Boolean,
     val mixes: List<HomeShelf>,
     val moreLike: List<HomeShelf>,
@@ -73,7 +73,16 @@ class HomeLayout(
     val orderedRows: Set<String> = emptySet(),
     /** Keys of [youtubeRows] Turtle could order but leaves in YouTube's order today, to compare against [orderedRows]. */
     val comparisonRows: Set<String> = emptySet(),
+    /**
+     * The listener's own tiles are known: recents, the setting and the pins (upstream restores them
+     * from the local database, so they never wait for the network). Draw the grid from here on; only
+     * suggestions can still join, and they only ever append after the tiles already shown.
+     */
+    val localReady: Boolean = gridReady,
 ) {
+    /** Grid slots held for suggestions that may still arrive (none once [gridReady]). Draw them as pending tiles. */
+    val pendingTiles: Int get() = if (gridReady) 0 else (GRID_TILES - grid.size).coerceAtLeast(0)
+
     /** Where a grid tile came from, for play attribution: "pin", "recent" or "youtube:<row key>". */
     fun gridOrigin(item: YTItem): String = origins[canonicalHomeItemId(item)] ?: ORIGIN_RECENT
 
@@ -209,7 +218,8 @@ class HomeLayout(
             }
 
             val ownTiles = (pinned + recents.orEmpty()).distinctBy(::canonicalHomeItemId).size
-            val gridReady = recents != null && mode != null && (ownTiles >= GRID_TILES || mode != HomeYouTubeRows.MATCHED || pick != null)
+            val localReady = recents != null && mode != null && !state.isRestoringCache
+            val gridReady = localReady && (ownTiles >= GRID_TILES || mode != HomeYouTubeRows.MATCHED || pick != null)
 
             val gridIds = origins.keys
             val jumpBackInRow =
@@ -256,7 +266,7 @@ class HomeLayout(
                     }
                 }
 
-            return HomeLayout(grid, gridReady, mixes, moreLike, jumpBackInRow, youtubeRows, origins, ordered, comparison)
+            return HomeLayout(grid, gridReady, mixes, moreLike, jumpBackInRow, youtubeRows, origins, ordered, comparison, localReady)
         }
 
         /**

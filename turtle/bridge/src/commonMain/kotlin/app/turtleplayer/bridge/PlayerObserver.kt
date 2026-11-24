@@ -6,6 +6,7 @@ import app.turtleplayer.events.ListeningSessionTracker
 import app.turtleplayer.events.PlaybackSignal
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
+import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.SurfaceTag
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.ui.playback.PlaybackController
@@ -14,9 +15,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -59,20 +63,45 @@ class PlayerObserver(
     private val isBookChapter: (String) -> Boolean = { TurtleSpoken.bookOf(it) != null },
     /** Awaited once before the first song is classified, so a restored chapter is known as a book. */
     private val spokenReady: suspend () -> Unit = { TurtleSpoken.load() },
+    /** Ages pending tags for pruning; tests replace it. */
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
     private val mutex = Mutex()
     private var current: SongItem? = null
     private val currentId: String? get() = current?.id
 
+    // The queue occurrence: one Home mix, search pick, station or Infinity Mix, from the moment it is
+    // started until the next one. Learning is bound to it: a tag is only good inside the occurrence it
+    // was written for, and the taste engine starts a fresh short-term session at each new one.
+    private val occurrenceFlow = MutableStateFlow(0L)
+
+    /** The current queue occurrence; moves on whenever a new one begins (see [beginOccurrence]). */
+    val occurrences: StateFlow<Long> = occurrenceFlow.asStateFlow()
+
+    // The occurrence when the current song started: a queue replaced while it is unchanged was
+    // replaced outside Turtle (a playlist tapped in upstream's screens), which begins a new one.
+    private var occurrenceAtStart = 0L
+
     // Why our engines queued a song (QueueItem.surfaceDetail), so its play is attributed to the right generator,
     // with the stamp it was given: the newer of a song's own tag and its queue's attribution wins.
-    private val pendingTags = LinkedHashMap<String, Pair<String, Long>>()
+    private class Tag(
+        val detail: String,
+        val stamp: Long,
+        val occurrence: Long,
+        val at: TimeMark,
+    )
+
+    private val pendingTags = LinkedHashMap<String, Tag>()
     private val stamps = AtomicLong(0)
 
     private class QueueTags(
         val tags: Map<String, String>,
         val stamp: Long,
+        val occurrence: Long,
     )
+
+    // The tag the playing song was bound to when it started (null: not attributed).
+    private var currentTag: String? = null
 
     // The queue the listener started (song id to surface detail), until a song outside it plays.
     private val queueTags = AtomicReference<QueueTags?>(null)
@@ -158,21 +187,62 @@ class PlayerObserver(
     /** The song playing now, if any. */
     suspend fun currentSong(): SongItem? = mutex.withLock { current }
 
-    /** Remembers why [songId] was queued until it starts playing. */
-    suspend fun tag(songId: String, surfaceDetail: String) = mutex.withLock {
+    /** The current queue occurrence (see [occurrences]). Read it before async work that tags songs. */
+    fun occurrence(): Long = occurrenceFlow.value
+
+    /** Where the playing song came from, as bound when it started; null when it was not attributed. */
+    suspend fun currentOrigin(): PlayOrigin? = mutex.withLock { SurfaceTag.parse(currentTag) }
+
+    /**
+     * A new queue occurrence begins (the Infinity Mix starts, Shell's Start radio): tags and the
+     * attributed queue of the last one are dropped. Returns the new occurrence, to tag its songs with.
+     */
+    suspend fun beginOccurrence(): Long =
+        mutex.withLock {
+            pendingTags.clear()
+            queueTags.store(null)
+            nextOccurrence()
+        }
+
+    /**
+     * Remembers why [songId] was queued until it starts playing. [gen] is the occurrence the song
+     * was picked for (read before any slow work): a tag for an earlier one is dropped.
+     */
+    suspend fun tag(
+        songId: String,
+        surfaceDetail: String,
+        gen: Long = occurrence(),
+    ) = mutex.withLock { tagLocked(songId, surfaceDetail, gen) }
+
+    /** [tag] for a whole page under one lock. */
+    suspend fun tagAll(
+        tags: List<Pair<String, String>>,
+        gen: Long,
+    ) = mutex.withLock { for ((id, detail) in tags) tagLocked(id, detail, gen) }
+
+    private fun tagLocked(
+        songId: String,
+        surfaceDetail: String,
+        gen: Long,
+    ) {
+        if (gen != occurrence()) return
         pendingTags.remove(songId)
-        pendingTags[songId] = surfaceDetail to stamps.incrementAndFetch()
+        pendingTags[songId] = Tag(surfaceDetail, stamps.incrementAndFetch(), gen, timeSource.markNow())
         while (pendingTags.size > MAX_TAGS) pendingTags.remove(pendingTags.keys.first())
     }
 
     /**
-     * The queue the listener is starting, song id → surface detail. Replaces the previous queue's and
-     * lasts until a song outside it starts. Not suspending: call it on the UI thread right before
-     * starting playback. A per-song [tag] made later wins over it, and an earlier one loses.
+     * The queue the listener is starting, song id → surface detail. It begins a new queue occurrence,
+     * replaces the previous queue's attribution and lasts until a song outside it starts. Not
+     * suspending: call it on the UI thread right before starting playback. A per-song [tag] made
+     * later (in the same occurrence) wins over it, and an earlier one loses.
      */
     fun attribute(tags: Map<String, String>) {
-        queueTags.store(QueueTags(tags.toMap(), stamps.incrementAndFetch()))
+        val occ = nextOccurrence()
+        queueTags.store(QueueTags(tags.toMap(), stamps.incrementAndFetch(), occ))
     }
+
+    private fun nextOccurrence(): Long = occurrenceFlow.updateAndGet { it + 1 }
 
     /** Records the play that was in progress when the app last stopped, then saves the open play every few seconds. */
     fun startCheckpoints(scope: CoroutineScope) {
@@ -182,6 +252,20 @@ class PlayerObserver(
                 delay(CHECKPOINT_MS)
                 guarded("checkpoint") { tracker.checkpoint() }
             }
+        }
+    }
+
+    /**
+     * Follows the listener's "pause listening history" setting live: the moment it turns on, the play in
+     * progress is dropped (even if history is back on before it ends) and its saved checkpoint cleared.
+     * Explicit votes (likes, playlist adds, Not interested) are recorded elsewhere and still apply.
+     */
+    fun followHistoryPause(
+        scope: CoroutineScope,
+        paused: Flow<Boolean>,
+    ) {
+        scope.launch {
+            paused.distinctUntilChanged().collect { if (it) guarded("history paused") { tracker.onHistoryPaused() } }
         }
     }
 
@@ -200,7 +284,20 @@ class PlayerObserver(
             previous == null -> StartReason.UNKNOWN
             else -> classify(previous, music)
         }
-        start(music, reason, playing)
+        // Was the queue the last song played in replaced? Read before start(), which forgets the flag. The
+        // live queue catches a tap that changes queue and song within one sample. Only a state showing this
+        // change (the old or the new song) is trusted: one nobody has collected lately (an Android state
+        // shared while subscribed, Shell collapsed or backgrounded) holds an old queue without later songs.
+        // For the same reason classify's "previous song not in its queue" is no evidence: that queue may
+        // be from a song before it, when no fresh sample came while it played.
+        val replaced =
+            previous != null &&
+                (
+                    replacedQueueSeen ||
+                        controller()?.state?.value?.takeIf { it.currentSong?.id == music.id || it.currentSong?.id == previous.id }
+                            ?.queue?.let { q -> q.isNotEmpty() && q.none { it.id == previous.id } } == true
+                )
+        start(music, reason, playing, replaced)
     }
 
     /** How the listener got from [previous] to [next], judged from the queue they were in. */
@@ -234,7 +331,12 @@ class PlayerObserver(
         }
     }
 
-    private suspend fun start(song: SongItem, reason: StartReason, playing: Boolean) {
+    private suspend fun start(
+        song: SongItem,
+        reason: StartReason,
+        playing: Boolean,
+        replaced: Boolean = false,
+    ) {
         current = song
         endedByEof = false
         startedAt = TimeSource.Monotonic.markNow()
@@ -243,17 +345,31 @@ class PlayerObserver(
         durationSent = false
         replacedQueueSeen = false
         reckonFrom(0, playing)
-        val own = pendingTags.remove(song.id)
+        if (replaced && occurrence() == occurrenceAtStart) {
+            // The queue was replaced and Turtle began nothing since the last song started: the listener
+            // started something outside Turtle. A new occurrence, and nothing queued for the last one
+            // (a radio page's tags) may label it.
+            pendingTags.clear()
+            queueTags.store(null)
+            nextOccurrence()
+            TurtleLog.info("player observer: queue replaced outside Turtle, new occurrence")
+        }
+        val occ = occurrence()
+        occurrenceAtStart = occ
+        val own = pendingTags.remove(song.id)?.takeIf { it.occurrence == occ }
         val q = queueTags.load()
-        val fromQueue = q?.tags?.get(song.id)
+        if (q != null && q.occurrence != occ) queueTags.compareAndSet(q, null)
+        val live = q?.takeIf { it.occurrence == occ }
+        val fromQueue = live?.tags?.get(song.id)
         // A song outside the attributed queue: the listener moved on, so the attribution ends.
-        if (q != null && fromQueue == null) queueTags.compareAndSet(q, null)
+        if (live != null && fromQueue == null) queueTags.compareAndSet(live, null)
         val tag =
             when {
                 own == null -> fromQueue
-                fromQueue == null || own.second > q.stamp -> own.first
+                fromQueue == null || own.stamp > live.stamp -> own.detail
                 else -> fromQueue
             }
+        currentTag = tag
         val origin = SurfaceTag.parse(tag)
         tracker.onSignal(
             PlaybackSignal.TrackStarted(
@@ -281,6 +397,7 @@ class PlayerObserver(
         } else {
             queue = state.queue
             queueIndex = state.currentQueueIndex
+            pruneTags(state.queue)
         }
         if (!durationSent && current?.duration == null && state.durationMs > 0) {
             durationSent = true
@@ -298,6 +415,19 @@ class PlayerObserver(
         lastPositionAt = TimeSource.Monotonic.markNow()
         lastPlaying = state.isPlaying
         reckonFrom(position, state.isPlaying)
+    }
+
+    /**
+     * Drops tags of an earlier occurrence, and tags for songs that have not reached the live [queue]
+     * within [TAG_GRACE_MS] (a radio page's songs that were never queued, or were taken off again).
+     */
+    private fun pruneTags(queue: List<SongItem>) {
+        if (pendingTags.isEmpty()) return
+        val occ = occurrence()
+        val queued = queue.mapTo(HashSet()) { it.id }
+        pendingTags.entries.removeAll { (id, t) ->
+            t.occurrence != occ || (id !in queued && t.at.elapsedNow().inWholeMilliseconds > TAG_GRACE_MS)
+        }
     }
 
     /** Where the current song's playhead should be: the last known point plus the time played since. */
@@ -322,6 +452,9 @@ class PlayerObserver(
     private companion object {
         const val REPEAT_DETECT_MS = 1_500L
         const val MAX_TAGS = 500
+
+        // How long a tagged song may stay out of the live queue before its tag is dropped (queueing lags tagging).
+        const val TAG_GRACE_MS = 10_000L
         const val SAMPLE_MS = 1_000L
         const val SEEK_TOLERANCE_MS = 3_000L
         const val STALE_EOF_MS = 2_000L
@@ -330,3 +463,6 @@ class PlayerObserver(
         const val CROSSFADE_WINDOW_MS = 16_000L
     }
 }
+
+/** The taste engine's key for queue occurrence [occurrence] ([app.turtleplayer.taste.TasteEngine.beginOccurrence]). */
+internal fun stationKey(occurrence: Long): String = "q:$occurrence"

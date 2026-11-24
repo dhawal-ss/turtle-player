@@ -8,10 +8,12 @@ import app.turtleplayer.taste.CoListeningStore
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.model.SongItem
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlin.time.TimeSource
 
@@ -39,16 +41,36 @@ class CoListeningSync(
         guarded("radio page") { graph.observeRadio(seed, page.map { it.toTrackMeta() }) }
     }
 
+    // Rebuilds asked for out of turn (artist picks), each completed once the loop has handled it.
+    // A request a cancelled receive took but never delivered goes back in, so no caller waits forever.
+    private val rebuildRequests: Channel<CompletableDeferred<Unit>> =
+        Channel(Channel.UNLIMITED) { lost -> requeue(lost) }
+
+    private fun requeue(request: CompletableDeferred<Unit>) {
+        if (rebuildRequests.trySend(request).isFailure) request.complete(Unit)
+    }
+
+    /**
+     * Rebuilds the vectors now, in the sync loop (never beside it), if the graph changed since the
+     * last build; returns once that is done. Waits for [start]'s loop, so callers bound it with a timeout.
+     */
+    suspend fun rebuildNow() {
+        val done = CompletableDeferred<Unit>()
+        rebuildRequests.send(done)
+        done.await()
+    }
+
     fun start(scope: CoroutineScope, taste: TasteEngine) {
         scope.launch {
             guarded("load") { load() }
             var built = -1L
             var builtAt = TimeSource.Monotonic.markNow()
             var saved = graph.version()
+            val requests = ArrayList<CompletableDeferred<Unit>>()
             while (isActive) {
                 val now = graph.version()
                 // Rebuilding the vectors is the costly part, so it waits; the first data is used at once.
-                val due = built < 0 || store.artistCount == 0 || builtAt.elapsedNow().inWholeMilliseconds >= REBUILD_INTERVAL_MS
+                val due = requests.isNotEmpty() || built < 0 || store.artistCount == 0 || builtAt.elapsedNow().inWholeMilliseconds >= REBUILD_INTERVAL_MS
                 if (now != built && due) {
                     guarded("rebuild") {
                         store.rebuild()
@@ -63,7 +85,11 @@ class CoListeningSync(
                     guarded("save") { save() }
                     saved = now
                 }
-                delay(SAVE_INTERVAL_MS)
+                requests.forEach { it.complete(Unit) }
+                requests.clear()
+                // Sleeps until the next save, or until a rebuild is asked for.
+                withTimeoutOrNull(SAVE_INTERVAL_MS) { rebuildRequests.receive() }?.let(requests::add)
+                while (true) requests += rebuildRequests.tryReceive().getOrNull() ?: break
             }
         }
         scope.launch { events.newEvents.collect { guarded("play") { graph.observePlay(it) } } }

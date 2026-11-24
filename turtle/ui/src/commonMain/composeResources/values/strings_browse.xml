@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Search, next to Browse all: opens the whole Browse (Explore) page. -->
+    <string name="shell_browse_see_all">See all</string>
+    <!-- Search results from the listener's own library, shown while YouTube Music answers. -->
+    <string name="shell_search_from_library">From your library</string>
+</resources>

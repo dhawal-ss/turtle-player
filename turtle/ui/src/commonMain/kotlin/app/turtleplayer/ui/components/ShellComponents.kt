@@ -67,7 +67,10 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
@@ -198,18 +201,30 @@ fun rememberHover(): Pair<MutableInteractionSource, Boolean> {
 
 /** Spotify's hover play button: a lime circle that rises into place over artwork or a tile. */
 @Composable
-fun HoverPlayButton(visible: Boolean, size: Dp, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun HoverPlayButton(visible: Boolean, size: Dp, onClick: () -> Unit, modifier: Modifier = Modifier, touchSize: Dp = size) {
     AnimatedVisibility(
         visible,
         enter = fadeIn(ShellMotion.emphasized()) + slideInVertically(ShellMotion.emphasized()) { it / 3 },
         exit = fadeOut(ShellMotion.exit()) + slideOutVertically(ShellMotion.exit()) { it / 3 },
         modifier = modifier,
     ) {
-        Box(
-            Modifier.size(size).shadow(10.dp, CircleShape).clip(CircleShape).background(Shell.colors.accent)
-                .shellPressable(onClick, label = stringResource(Res.string.shell_play)),
-            contentAlignment = Alignment.Center,
-        ) { PlayGlyph(Shell.colors.onAccent, size * 0.45f) }
+        if (touchSize > size) {
+            // A small visible button inside a full touch target (48 dp on phones).
+            Box(
+                Modifier.size(touchSize).shellPressable(onClick, label = stringResource(Res.string.shell_play), focusShape = CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.size(size).shadow(10.dp, CircleShape).clip(CircleShape).background(Shell.colors.accent), contentAlignment = Alignment.Center) {
+                    PlayGlyph(Shell.colors.onAccent, size * 0.45f)
+                }
+            }
+        } else {
+            Box(
+                Modifier.size(size).shadow(10.dp, CircleShape).clip(CircleShape).background(Shell.colors.accent)
+                    .shellPressable(onClick, label = stringResource(Res.string.shell_play)),
+                contentAlignment = Alignment.Center,
+            ) { PlayGlyph(Shell.colors.onAccent, size * 0.45f) }
+        }
     }
 }
 
@@ -253,28 +268,52 @@ fun Modifier.cardHover(hovered: Boolean): Modifier {
     return this.clip(RoundedCornerShape(8.dp)).background(bg).padding(10.dp)
 }
 
-/** Square mix card with the name set on the artwork and a "who's in it" line below. */
+/**
+ * Square mix card with the name set on the artwork and a "who's in it" line below. The card opens
+ * the mix ([onOpen]); its own Play button plays it ([onPlay]). On desktop Play shows on hover or
+ * while the card or the button has keyboard focus; touch screens never hover, so it always shows
+ * there. Screen readers get Play as a custom action on the card.
+ */
 @Composable
 fun MixCard(
     title: String,
     subtitle: String,
     artUrl: String?,
     tint: Color,
-    onClick: () -> Unit,
+    onOpen: () -> Unit,
+    onPlay: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
 ) {
     val (source, hovered) = rememberHover()
+    // Focus within, not on: moving focus from the card onto its Play button must keep the button shown.
+    var focusWithin by remember { mutableStateOf(false) }
+    val desktop = ShellPlatform.desktop
+    val playLabel = stringResource(Res.string.shell_play)
     Column(
-        modifier.hoverable(source).cardHover(hovered).shellPressable(onClick, onLongClick = onLongClick),
+        modifier.onFocusChanged { focusWithin = it.hasFocus }.hoverable(source).cardHover(hovered)
+            .semantics { customActions = listOf(CustomAccessibilityAction(playLabel) { onPlay(); true }) }
+            .shellPressable(onOpen, label = title, onLongClick = onLongClick),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(ShellShapes.Art).background(tint)) {
             if (artUrl != null) {
                 AsyncImage(model = artUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.55f })
             }
-            Text(title, style = Shell.type.headline.copy(fontSize = Shell.type.headline.fontSize * 0.68f), color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
-            HoverPlayButton(hovered, 44.dp, onClick, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+            // The title keeps clear of Play's circle (8 dp inset) at both sizes: on desktop too, where Play
+            // shows only on hover, so hovering never hides the end of the name. Line height scales with the size.
+            val headline = Shell.type.headline
+            Text(
+                title, style = headline.copy(fontSize = headline.fontSize * 0.68f, lineHeight = headline.lineHeight * 0.68f), color = Color.White,
+                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = if (desktop) 56.dp else 52.dp),
+            )
+            // Phones: a 36 dp button in a 48 dp touch target, its circle where the 8 dp inset puts it.
+            HoverPlayButton(
+                !desktop || hovered || focusWithin, if (desktop) 44.dp else 36.dp, onPlay,
+                Modifier.align(Alignment.BottomEnd).padding(if (desktop) 8.dp else 2.dp),
+                touchSize = if (desktop) 44.dp else 48.dp,
+            )
         }
         Text(subtitle, style = Shell.type.bodySmall, color = Shell.colors.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }

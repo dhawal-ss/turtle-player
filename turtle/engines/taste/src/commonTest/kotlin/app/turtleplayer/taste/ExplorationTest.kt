@@ -1,6 +1,8 @@
 package app.turtleplayer.taste
 
 import app.turtleplayer.events.EndReason
+import app.turtleplayer.events.EventSource
+import app.turtleplayer.events.StartReason
 import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.test.Test
@@ -72,6 +74,13 @@ class ExplorationTest {
         assertEquals(DiscoveryOutcome.SUCCESS, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 90_000, liked = true)))
         assertEquals(DiscoveryOutcome.FAILURE, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 5_000)))
         assertEquals(DiscoveryOutcome.NEUTRAL, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 90_000)))
+        // Only a play the pick itself started is an outcome: replays, steps back and imports are not.
+        assertEquals(DiscoveryOutcome.NEUTRAL, policy.outcomeOf(play(t, 0, replayed = true)))
+        assertEquals(DiscoveryOutcome.NEUTRAL, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 5_000, replayed = true)))
+        assertEquals(DiscoveryOutcome.NEUTRAL, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 5_000, startReason = StartReason.USER_PREVIOUS)))
+        assertEquals(DiscoveryOutcome.NEUTRAL, policy.outcomeOf(play(t, 0, source = EventSource.SPOTIFY_IMPORT)))
+        // An explicit Less like this stays a failure, even on a replay.
+        assertEquals(DiscoveryOutcome.FAILURE, policy.outcomeOf(play(t, 0, EndReason.SKIPPED, msPlayed = 5_000, replayed = true, lessLikeThis = true)))
     }
 
     @Test

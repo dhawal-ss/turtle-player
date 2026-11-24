@@ -2,6 +2,8 @@ package app.turtleplayer.bridge
 
 import androidx.sqlite.SQLiteDriver
 import app.turtleplayer.core.Clock
+import app.turtleplayer.events.HistoryLens
+import app.turtleplayer.events.LensedPlayEventStore
 import app.turtleplayer.events.ListeningSessionTracker
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.LocalTimeResolver
@@ -9,9 +11,7 @@ import app.turtleplayer.events.PlayEventStore
 import app.turtleplayer.events.imports.ListenBrainzHistoryImporter
 import app.turtleplayer.events.imports.PlayerHistoryImporter
 import app.turtleplayer.events.imports.SpotifyHistoryImporter
-import app.turtleplayer.search.HistoryAffinityProvider
 import app.turtleplayer.search.LocalLibrary
-import app.turtleplayer.search.SearchEngine
 import app.turtleplayer.taste.CatalogWithObserved
 import app.turtleplayer.taste.CoListeningGraph
 import app.turtleplayer.taste.CoListeningStore
@@ -22,10 +22,13 @@ import app.turtleplayer.taste.Served
 import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
 import com.metrolist.shared.db.MusicDatabase
+import com.metrolist.shared.model.ArtistItem
 import com.metrolist.shared.model.RadioQueuePage
+import com.metrolist.shared.model.SearchSummaryPage
 import com.metrolist.shared.model.SongItem
 import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.settings.Settings
+import com.metrolist.shared.state.SongLikeState
 import com.metrolist.shared.ui.playback.PlaybackController
 import com.metrolist.shared.ui.screens.HomeShelf
 import kotlinx.coroutines.CancellationException
@@ -93,7 +96,12 @@ val turtleModule: Module = module {
         val spec = turtleDatabaseSpec()
         SqlitePlayEventStore(spec.driver, spec.path)
     }
-    single<PlayEventStore> { get<SqlitePlayEventStore>() }
+    // History as taste reads it: through the listener's repair and reset (TasteHistoryLens), read on
+    // every history read. Only since() differs; writes and the live stream go straight to the database.
+    single<PlayEventStore> {
+        val db = get<SqlitePlayEventStore>()
+        LensedPlayEventStore(db) { HistoryLens.decode(db.pref(PREF_HISTORY_LENS)) }
+    }
     single {
         ListeningSessionTracker(
             get(), Clock.System, deviceTime,
@@ -109,7 +117,6 @@ val turtleModule: Module = module {
     single { LocalLibrary() }
     single { LibrarySync({ get<MusicDatabase>() }, get(), get()) }
 
-    single { SearchEngine(library = get(), online = YouTubeOnlineSearch(get()), affinity = HistoryAffinityProvider(get())) }
 
     // Co-listening learned on device from radio pages and back-to-back plays (no downloaded packs yet).
     single { CoListeningGraph() }
@@ -131,7 +138,14 @@ val turtleModule: Module = module {
     single { TurtleHomeRows(get(), get(), get(), database = { get<MusicDatabase>() }, blockChanges = get<UpstreamBlocks>().changes) }
     single { InfinityMix(get(), get(), get(), get()) }
     single { PlaylistAddWatcher({ get<MusicDatabase>() }, get(), get(), get()) }
-    single { TurtleRuntime(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    // Saves with their time, for the discovery measurement; recorded only while history is recording, like plays.
+    single { SaveWatcher(get(), get<LibrarySync>().saved, likes = { SongLikeState.newLikes }, recording = { !listenHistoryPaused() }) }
+    single {
+        TurtleRuntime(
+            get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(),
+            saves = get(),
+        )
+    }
 }
 
 /**
@@ -218,6 +232,38 @@ object TurtleBridge {
             emptyList()
         }
 
+    /**
+     * Queue indices to drop when the listener re-steers the Infinity Mix ([queueIds] is the whole
+     * queue, [currentIndex] the playing song): the mix's own songs after its next two. Songs the
+     * listener added stay. Empty when unavailable or the mix is no longer the listener's queue.
+     */
+    suspend fun infinityResteerRemovals(
+        queueIds: List<String>,
+        currentIndex: Int,
+    ): Set<Int> =
+        try {
+            runtime?.infinity?.resteerRemovals(queueIds, currentIndex).orEmpty()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("infinity: could not work out what to re-steer", e)
+            emptySet()
+        }
+
+    /**
+     * A new queue occurrence begins (Shell's Start radio): what Turtle learned and tagged for the last
+     * queue stops applying. Call it before starting the new queue. No-op without our runtime.
+     */
+    suspend fun beginOccurrence() {
+        try {
+            runtime?.observer?.beginOccurrence()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("player observer: could not begin a queue occurrence", e)
+        }
+    }
+
     /** Forgets the Infinity Mix's tuning and picks (listening history is kept). */
     suspend fun infinityStartFresh() {
         runtime?.infinity?.startFresh()
@@ -226,6 +272,85 @@ object TurtleBridge {
     /** Saves the genres and moods the Infinity Mix is built from. */
     suspend fun setInfinityGenres(ids: List<String>) {
         runtime?.infinity?.setGenres(ids)
+    }
+
+    /**
+     * About how many favourites the Infinity Mix could pick from now, for the dial's explanation; null
+     * when our runtime is unavailable or the count fails. Off the calling thread; never waits on a batch.
+     */
+    suspend fun infinityFavourites(): Int? =
+        try {
+            withContext(Dispatchers.Default) { runtime?.infinity?.favouriteCount() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("infinity: could not count favourites", e)
+            null
+        }
+
+    /**
+     * Search's local stage: songs from the listener's library for [query], shown while YouTube Music
+     * answers and preferred offline. Null until the library index is ready, when nothing matches, or
+     * when our runtime is unavailable (fail open). Off the calling thread.
+     */
+    suspend fun searchLocal(query: String): SearchSummaryPage? =
+        try {
+            withContext(Dispatchers.Default) { runtime?.searchLocal(query) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("search: local stage unavailable", e)
+            null
+        }
+
+    /**
+     * Artist picks for a young profile (ArtistPicks.kt); null until first read or when our runtime is
+     * absent. Compose state: Home's card and the picks sheet follow changes. Read during composition,
+     * so a runtime that cannot be built (Koin only maps a missing definition to null) fails open here.
+     */
+    val artistPicks: ArtistPicksState?
+        get() =
+            try {
+                GlobalContext.getOrNull()?.getOrNull<TurtleRuntime>()?.artistPicks?.state
+            } catch (e: Exception) {
+                TurtleLog.error("artist picks unavailable", e)
+                null
+            }
+
+    /** Reads the picks state again (the sheet opening). Off the calling thread; fails open. */
+    suspend fun loadArtistPicks() = artistPicksCall("read artist picks") { it.refresh() }
+
+    /** Artists matching [query] for the picks sheet; empty offline, on failure or without our runtime. */
+    suspend fun searchArtists(query: String): List<ArtistItem> =
+        try {
+            withContext(Dispatchers.Default) { runtime?.artistPicks?.search(query).orEmpty() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("artist picks: search failed", e)
+            emptyList()
+        }
+
+    /** Saves the listener's starting artists (replacing earlier ones); Made for you is rebuilt from them. */
+    suspend fun saveArtistPicks(picks: List<ArtistItem>) = artistPicksCall("save artist picks") { it.save(picks) }
+
+    /** "Skip" on Home's artist picks card. */
+    suspend fun skipArtistPicks() = artistPicksCall("skip artist picks") { it.skip() }
+
+    /** Forgets the starting artists (history is untouched). */
+    suspend fun clearArtistPicks() = artistPicksCall("clear artist picks") { it.clear() }
+
+    private suspend fun artistPicksCall(
+        what: String,
+        block: suspend (TurtleArtistPicks) -> Unit,
+    ) {
+        try {
+            withContext(Dispatchers.Default) { runtime?.artistPicks?.let { block(it) } }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not $what", e)
+        }
     }
 
     /** Picks, tuning and the reason behind each mix song, for the Infinity sheet and Now Playing. */
@@ -303,6 +428,34 @@ object TurtleBridge {
         }
     }
 
+    /** Repairing older skips and resetting taste, for Turtle's settings; current after [loadTasteRepair]. */
+    val tasteRepair: StateFlow<TasteRepairState> get() = tasteRepairState
+
+    /** Reads the saved options and counts the older skips (no-op when our runtime is unavailable). Off the calling thread. */
+    suspend fun loadTasteRepair() = tasteRepairCall("read taste repair") { it.loadTasteRepair() }
+
+    /** Turns the repair of older skips on or off; taste, Home and search follow. Off the calling thread. */
+    suspend fun setRepairOlderSkips(on: Boolean) = tasteRepairCall("change the skip repair") { it.setRepairOlderSkips(on) }
+
+    /** Resets taste (stored history is kept; explicit likes and hides stay). Off the calling thread. */
+    suspend fun resetTaste() = tasteRepairCall("reset taste") { it.resetTaste() }
+
+    /** Takes the last taste reset back. Off the calling thread. */
+    suspend fun undoTasteReset() = tasteRepairCall("undo the taste reset") { it.undoTasteReset() }
+
+    private suspend fun tasteRepairCall(
+        what: String,
+        block: suspend (TurtleRuntime) -> Unit,
+    ) {
+        try {
+            withContext(Dispatchers.Default) { runtime?.let { block(it) } }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TurtleLog.error("could not $what", e)
+        }
+    }
+
     /** "Less like this" on a song (no-op when our runtime is unavailable). */
     suspend fun lessLikeThis(song: SongItem) { runtime?.lessLikeThis(song) }
 
@@ -351,6 +504,22 @@ object TurtleBridge {
 
     /** Our current home shelves (Turtle mixes), for screens that lay them out themselves. */
     val homeShelves: List<HomeShelf> get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.shelves.orEmpty()
+
+    /** What Turtle's Home row [homeKey] is made of, for its details page; null when unknown or our module is absent. */
+    fun mixAbout(homeKey: String): MixAbout? = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.about(homeKey)
+
+    /**
+     * Shell is about to save [songIds] to a playlist in one go (a Turtle mix's Save): that is one
+     * action, so the playlist-add watcher records none of them as a separate "added to playlist"
+     * like. Call before opening the playlist picker. Fails open.
+     */
+    fun expectBulkPlaylistAdd(songIds: Collection<String>) {
+        try {
+            GlobalContext.getOrNull()?.getOrNull<PlaylistAddWatcher>()?.expectBulk(songIds)
+        } catch (e: Exception) {
+            TurtleLog.error("could not mark a bulk playlist save", e)
+        }
+    }
 
     /** False until startup's Turtle shelves are published; true when our module is absent (fail open). Compose state. */
     val homeShelvesReady: Boolean get() = GlobalContext.getOrNull()?.getOrNull<TurtleHomeShelves>()?.ready ?: true
@@ -414,11 +583,39 @@ object TurtleBridge {
     /**
      * Hook: re-rank upstream's filtered radio page with the taste engine. [seedId] is the song the
      * station was started from; null when no station was asked for, so the playing song seeds it.
+     * [songsOnly]: the queue takes no videos or podcast episodes (upstream's `recommendationsSongsOnly`),
+     * which matters for pages fetched past a page of ruled-out songs, as no caller filtered them.
      */
     suspend fun rankRadio(
         page: RadioQueuePage,
         seedId: String? = null,
-    ): RadioQueuePage = runtime?.rankRadio(page, seedId) ?: page
+        songsOnly: Boolean = false,
+    ): RadioQueuePage = runtime?.rankRadio(page, seedId, songsOnly) ?: page
+
+    /**
+     * YouTube Music's Explore page (moods and genres, new releases, charts, community playlists) for
+     * Shell's Explore, loaded on its own (TurtleExplore.kt): signed in, Home's feed does not carry it.
+     * Independent of the runtime and Koin; an empty state when the loader cannot be reached.
+     */
+    val explore: StateFlow<ExploreState>
+        get() =
+            try {
+                TurtleExplore.shared.state
+            } catch (e: Exception) {
+                TurtleLog.error("explore unavailable", e)
+                noExplore
+            }
+
+    /** Loads Explore in the background unless a fresh one is kept; [force] reloads (Retry). Never throws. */
+    fun loadExplore(force: Boolean = false) {
+        try {
+            TurtleExplore.shared.load(force)
+        } catch (e: Exception) {
+            TurtleLog.error("explore: could not start a load", e)
+        }
+    }
+
+    private val noExplore: StateFlow<ExploreState> = kotlinx.coroutines.flow.MutableStateFlow(ExploreState(failed = true))
 
     // Spoken word (TurtleSpoken.kt): podcast shelves, the audiobook catalog and per-book resume.
     /** Podcasts and audiobooks for Shell; independent of the runtime, so it works before it starts. */

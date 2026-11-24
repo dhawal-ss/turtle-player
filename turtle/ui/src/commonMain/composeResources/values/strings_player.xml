@@ -24,7 +24,7 @@
     <string name="shell_np_never_song">Never play this song</string>
     <string name="shell_np_never_artist">Never play %1$s</string>
     <string name="shell_np_never_done">Blocked. Undo it in Settings, Privacy.</string>
-    <string name="shell_np_queue_left">%1$d SONGS · %2$s</string>
+    <string name="shell_np_queue_left">%1$d&#160;SONGS · %2$s</string>
     <string name="shell_np_queue_clear">Clear queue</string>
     <string name="shell_np_queue_removed">Removed from queue</string>
     <string name="shell_np_queue_cleared">Queue cleared</string>

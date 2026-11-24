@@ -15,7 +15,7 @@ actual suspend fun clearWebCookies() {
             osName.contains("win", ignoreCase = true) -> {
                 val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)
                 val baseDirectory = localAppData?.let(::File) ?: File(userHome, "AppData/Local")
-                val appDirectory = File(baseDirectory, "Metrolist")
+                val appDirectory = File(baseDirectory, com.metrolist.shared.turtle.TurtleDesktopPaths.WINDOWS_DIR) // Turtle: HOOKS.md #68
                 listOf(
                     File(appDirectory, "WebView2"),
                     File(appDirectory, "login-helper"),

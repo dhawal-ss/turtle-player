@@ -1,7 +1,12 @@
 package app.turtleplayer.bridge
 
+import app.turtleplayer.core.TrackKey
+import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayEventStore
+import app.turtleplayer.events.imports.ExportFile
+import app.turtleplayer.events.imports.SpotifyHistoryImporter
 import app.turtleplayer.taste.CoListeningGraph
+import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.taste.Served
 import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteEngine
@@ -39,6 +44,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -82,8 +88,18 @@ class TurtleRuntimeTest {
 
     private fun testStore(db: SqlitePlayEventStore): Module = module { single<SqlitePlayEventStore> { db } }
 
-    /** The runtime as Koin builds it, with the radio ranking budget [rankTimeoutMs]. */
-    private fun runtimeWith(rankTimeoutMs: Long): Module =
+    /** Radio continuations asked for: no test reaches YouTube, and one that pages without a fake fails. */
+    private val noNetwork: suspend (String) -> RadioQueuePage = { throw AssertionError("radio paged to $it without a fake") }
+
+    /**
+     * The runtime as Koin builds it, with the radio ranking budget [rankTimeoutMs], upstream's content
+     * settings [blocked] (none, so the developer's own settings never leak in) and next radio pages [continueRadio].
+     */
+    private fun runtimeWith(
+        rankTimeoutMs: Long,
+        blocked: (SongItem) -> Boolean = { false },
+        continueRadio: suspend (String) -> RadioQueuePage = noNetwork,
+    ): Module =
         module {
             single {
                 TurtleRuntime(
@@ -103,15 +119,42 @@ class TurtleRuntimeTest {
                     get(),
                     get(),
                     rankTimeoutMs = rankTimeoutMs,
+                    blocked = blocked,
+                    continueRadio = continueRadio,
                 )
             }
         }
 
     /** A generous budget, so a slow cold start cannot turn a ranking test into a timeout test. */
-    private suspend fun bootTurtle(rankTimeoutMs: Long = 30_000): Koin {
+    private suspend fun bootTurtle(
+        rankTimeoutMs: Long = 30_000,
+        blocked: (SongItem) -> Boolean = { false },
+        continueRadio: suspend (String) -> RadioQueuePage = noNetwork,
+    ): Koin {
         val db = turtleDb()
-        return startKoin { modules(listOf(upstreamDb(), turtleModule, testStore(db), runtimeWith(rankTimeoutMs))) }.koin
+        return startKoin { modules(listOf(upstreamDb(), turtleModule, testStore(db), runtimeWith(rankTimeoutMs, blocked, continueRadio))) }.koin
     }
+
+    /** An app restart: the running runtime stops, a new one starts on the same databases with an empty song cache. */
+    private suspend fun restartTurtle(rankTimeoutMs: Long = 30_000): Koin {
+        GlobalContext.getOrNull()?.getOrNull<TurtleScope>()?.scope?.cancel()
+        stopKoin()
+        hiddenEntriesState.value = emptyList()
+        return bootTurtle(rankTimeoutMs).also { koin ->
+            // Started by the first hook call in the app; here at once, and waited for until the Hidden list is back.
+            koin.get<TurtleRuntime>().start()
+            withTimeout(30_000) { while (hiddenEntriesState.value.isEmpty()) delay(20) }
+        }
+    }
+
+    /** A radio page with no chips. */
+    private fun page(
+        vararg songs: SongItem,
+        continuation: String? = null,
+        chips: List<RadioQueueChip> = emptyList(),
+    ) = RadioQueuePage(songs = songs.toList(), chips = chips, continuation = continuation)
+
+    private fun RadioQueuePage.ids() = songs.map { it.id }
 
     private suspend fun awaitPlaying(
         koin: Koin,
@@ -199,6 +242,26 @@ class TurtleRuntimeTest {
         }
 
     @Test
+    fun aRadioPageOutlivedByANewOccurrenceLabelsNothing() =
+        runBlocking {
+            val current = MutableStateFlow<SongItem?>(null)
+            TurtleBridge.observePlayer(scope, current, MutableStateFlow(true), MutableSharedFlow<Long>())
+            val koin = bootTurtle()
+            val observer = koin.get<PlayerObserver>()
+            val page = page(song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y"), song("z1", "Three", "Artist Z"))
+            TurtleBridge.rankRadio(page)
+            // Control: a ranked song played in the same occurrence carries the radio's tag.
+            current.value = page.songs[0]
+            awaitPlaying(koin, "x1")
+            assertEquals(PlayPlace.RADIO, observer.currentOrigin()?.place)
+            // Shell's Start radio (or the Infinity Mix) begins a new occurrence: the old page's tags are gone.
+            TurtleBridge.beginOccurrence()
+            current.value = page.songs[1]
+            awaitPlaying(koin, "y1")
+            assertNull(observer.currentOrigin())
+        }
+
+    @Test
     fun unknownStationRanksWithoutDroppingTheFirstCandidate() =
         runBlocking {
             // A cold observer: attached, nothing playing.
@@ -240,16 +303,23 @@ class TurtleRuntimeTest {
     @Test
     fun unrankedPagesStillLeaveOutNotInterestedSongs() =
         runBlocking {
-            // A zero budget always takes the timeout path.
-            val koin = bootTurtle(rankTimeoutMs = 0)
+            // A zero budget always takes the timeout path. The station ends after the page "next" leads to.
+            val asked = mutableListOf<String>()
+            val koin =
+                bootTurtle(rankTimeoutMs = 0, continueRadio = {
+                    asked += it
+                    page()
+                })
             val hidden = song("h1", "Hidden", "Artist H")
             TurtleBridge.notInterested(NotInterested.Song(hidden))
             assertTrue(hidden.toTrackMeta().key in koin.get<TasteEngine>().controls.lessLikeThisTracks)
             val chips = listOf(RadioQueueChip(id = "c1", title = "Chill", playlistId = "RDc1", params = null, isSelected = false))
 
+            // Nothing left on the page: it pages on, finds the station's end, and keeps the chips.
             val single = TurtleBridge.rankRadio(RadioQueuePage(songs = listOf(hidden), chips = chips, continuation = "next"), seedId = "s1")
             assertEquals(emptyList(), single.songs)
-            assertEquals("next", single.continuation)
+            assertEquals(listOf("next"), asked)
+            assertEquals(null, single.continuation)
             assertEquals(chips, single.chips)
 
             val page =
@@ -262,5 +332,179 @@ class TurtleRuntimeTest {
             assertEquals(listOf("x1", "y1"), timedOut.songs.map { it.id })
             assertEquals("more", timedOut.continuation)
             assertEquals(chips, timedOut.chips)
+        }
+
+    // The same recording as h1 under another id (the video next to the audio upload).
+    private val hidden = song("h1", "Hidden", "Artist H")
+    private val hiddenTwin = song("h2", "Hidden", "Artist H")
+
+    @Test
+    fun hiddenAlternateUploadStaysOutOnEveryBranch() =
+        runBlocking {
+            // Timeout path, and a page left with one song.
+            bootTurtle(rankTimeoutMs = 0)
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+            val timedOut = TurtleBridge.rankRadio(page(hiddenTwin, song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y")))
+            assertEquals(listOf("x1", "y1"), timedOut.ids())
+            val single = TurtleBridge.rankRadio(page(hiddenTwin, song("x1", "One", "Artist X")))
+            assertEquals(listOf("x1"), single.ids())
+
+            // Ranked path, on the same saved state.
+            restartTurtle(rankTimeoutMs = 30_000)
+            val ranked =
+                TurtleBridge.rankRadio(
+                    page(
+                        hiddenTwin,
+                        song("x1", "One", "Artist X"),
+                        song("y1", "Two", "Artist Y"),
+                        song("z1", "Three", "Artist Z"),
+                    ),
+                )
+            assertEquals(setOf("x1", "y1", "z1"), ranked.ids().toSet())
+        }
+
+    @Test
+    fun hiddenAlternateUploadStaysOutAfterRestart() =
+        runBlocking {
+            bootTurtle(rankTimeoutMs = 0)
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+
+            // A new launch: the song cache no longer knows h1; only the saved Hidden record names its recording.
+            val koin = restartTurtle(rankTimeoutMs = 0)
+            assertEquals(null, koin.get<SongCache>().get(hidden.id))
+            val kept = TurtleBridge.rankRadio(page(hiddenTwin, song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y")))
+            assertEquals(listOf("x1", "y1"), kept.ids())
+        }
+
+    @Test
+    fun fallbackDedupesRecordingsAndDropsSeedUpload() =
+        runBlocking {
+            val koin = bootTurtle(rankTimeoutMs = 0)
+            val station = song("s1", "Station Song", "Artist S")
+            koin.get<SongCache>().putAll(listOf(station))
+            val page =
+                page(
+                    song("s2", "Station Song", "Artist S"),
+                    song("x1", "One", "Artist X"),
+                    song("x2", "One", "Artist X"),
+                    song("y1", "Two", "Artist Y"),
+                    continuation = "more",
+                )
+
+            val kept = TurtleBridge.rankRadio(page, seedId = station.id)
+            assertEquals(listOf("x1", "y1"), kept.ids(), "one upload per song, none of the station's own song")
+            assertEquals("more", kept.continuation)
+        }
+
+    @Test
+    fun blockedOnlyPageContinuesToTheNextEligiblePage() =
+        runBlocking {
+            val asked = mutableListOf<String>()
+            bootTurtle(rankTimeoutMs = 0, continueRadio = {
+                asked += it
+                page(song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y"), continuation = "p3")
+            })
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+            val chips = listOf(RadioQueueChip(id = "c1", title = "Chill", playlistId = "RDc1", params = null, isSelected = false))
+
+            val next = TurtleBridge.rankRadio(page(hidden, hiddenTwin, continuation = "p2", chips = chips))
+            assertEquals(listOf("p2"), asked)
+            assertEquals(listOf("x1", "y1"), next.ids())
+            assertEquals("p3", next.continuation, "the token after the page served, so the station moves on")
+            assertEquals(chips, next.chips, "the station's chips stay")
+        }
+
+    @Test
+    fun allBlockedPagesEndBoundedWithTheLastContinuation() =
+        runBlocking {
+            val asked = mutableListOf<String>()
+            bootTurtle(rankTimeoutMs = 0, continueRadio = { token ->
+                asked += token
+                page(hidden, continuation = "p${token.removePrefix("p").toInt() + 1}")
+            })
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+
+            val ended = TurtleBridge.rankRadio(page(hidden, continuation = "p1"))
+            assertEquals(listOf("p1", "p2", "p3"), asked, "at most three extra pages")
+            assertEquals(emptyList(), ended.songs)
+            assertEquals("p4", ended.continuation, "the next attempt starts after the pages already seen")
+        }
+
+    @Test
+    fun extraPagesNeverOfferTheStationsOwnSong() =
+        runBlocking {
+            // The station's song is unknown to the player and the cache (desktop's playFromId), so only its id
+            // marks it; the caller took it off the first page, but not off the pages fetched past it.
+            bootTurtle(rankTimeoutMs = 0, continueRadio = {
+                page(song("st", "Station", "Artist S"), song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y"))
+            })
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+
+            val next = TurtleBridge.rankRadio(page(hidden, continuation = "p2"), seedId = "st")
+            assertEquals(listOf("x1", "y1"), next.ids())
+        }
+
+    @Test
+    fun songsOnlyExtraPagesDropVideos() =
+        runBlocking {
+            val video = song("v1", "Video", "Artist V").copy(musicVideoType = "MUSIC_VIDEO_TYPE_OMV")
+            bootTurtle(rankTimeoutMs = 0, continueRadio = { page(video, song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y")) })
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+
+            val songsOnly = TurtleBridge.rankRadio(page(hidden, continuation = "p2"), songsOnly = true)
+            assertEquals(listOf("x1", "y1"), songsOnly.ids())
+            val any = TurtleBridge.rankRadio(page(hidden, continuation = "p2"))
+            assertEquals(listOf("v1", "x1", "y1"), any.ids())
+        }
+
+    @Test
+    fun upstreamSettingsAppliedAtRankTime() =
+        runBlocking {
+            // The listener blocked x1 in upstream's settings after the page was fetched.
+            bootTurtle(blocked = { it.id == "x1" })
+            val ranked =
+                TurtleBridge.rankRadio(
+                    page(
+                        song("x1", "One", "Artist X"),
+                        song("y1", "Two", "Artist Y"),
+                        song("z1", "Three", "Artist Z"),
+                    ),
+                )
+            assertEquals(setOf("y1", "z1"), ranked.ids().toSet())
+        }
+
+    @Test
+    fun exclusionFailureStillDropsNotInterested() =
+        runBlocking {
+            bootTurtle(rankTimeoutMs = 0, blocked = { error("settings unreadable") })
+            TurtleBridge.notInterested(NotInterested.Song(hidden))
+            val kept = TurtleBridge.rankRadio(page(hidden, song("x1", "One", "Artist X"), song("y1", "Two", "Artist Y")))
+            assertEquals(listOf("x1", "y1"), kept.ids())
+        }
+
+    @Test
+    fun committedHistoryImportReachesTasteAtOnceAndCanBeRemoved() =
+        runBlocking {
+            val koin = bootTurtle()
+            val runtime = koin.get<TurtleRuntime>()
+            runtime.start()
+            // Within taste's history window: yesterday.
+            val ts = java.time.Instant.ofEpochMilli(System.currentTimeMillis() - 86_400_000L).toString()
+            val text =
+                """[{"ts":"$ts","ms_played":210000,"master_metadata_track_name":"Blinding Lights",
+                "master_metadata_album_artist_name":"The Weeknd","reason_start":"clickrow","reason_end":"trackdone","incognito_mode":false}]"""
+            val staged = koin.get<SpotifyHistoryImporter>().stage(listOf(ExportFile("Streaming_History_Audio_2026.json", text)))
+            assertTrue(staged.preview.canCommit)
+            val taste = koin.get<TasteEngine>()
+            val key = TrackKey.fromMeta("The Weeknd", "Blinding Lights")
+            assertNull(taste.profile().tracks[key], "staging writes nothing")
+
+            assertTrue(runtime.commitHistoryImport(staged).committed)
+            assertNotNull(taste.profile().tracks[key], "taste reads the import without waiting for a play")
+            assertEquals(1L, koin.get<SqlitePlayEventStore>().sourceRange(EventSource.SPOTIFY_IMPORT)?.count)
+
+            runtime.removeImportedHistory(EventSource.SPOTIFY_IMPORT)
+            assertNull(taste.profile().tracks[key], "removing the import rebuilds taste without it")
+            assertNull(koin.get<SqlitePlayEventStore>().sourceRange(EventSource.SPOTIFY_IMPORT))
         }
 }

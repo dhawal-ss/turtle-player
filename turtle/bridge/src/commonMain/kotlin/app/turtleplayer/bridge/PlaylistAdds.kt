@@ -13,7 +13,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -32,11 +35,14 @@ data class Membership(
  * is only the baseline. A pair seen in any earlier snapshot of this run never counts again (reorders,
  * removals then re-adds, delete-and-reinsert syncs). New pairs wait per playlist until it has been
  * quiet for [settleMs]; a playlist that took more than [maxBurst] new pairs in that burst is an import
- * or a sync, and the whole burst is dropped. System playlists ([counts] false) never count.
+ * or a sync, and the whole burst is dropped. System playlists ([counts] false) never count. Songs
+ * saved together through [expectBulk] (a whole Turtle mix) are one action, not a like each: their
+ * adds within [bulkWindowMs] never count.
  */
 class PlaylistAdds(
     private val maxBurst: Int = MAX_BURST,
     private val settleMs: Long = SETTLE_MS,
+    private val bulkWindowMs: Long = BULK_WINDOW_MS,
 ) {
     private class Burst(
         var lastMs: Long,
@@ -47,6 +53,22 @@ class PlaylistAdds(
     private var baselined = false
     private val seen = HashSet<Membership>()
     private val bursts = LinkedHashMap<String, Burst>()
+
+    /** Song id to the time its bulk save stops being expected. */
+    private val bulk = HashMap<String, Long>()
+
+    /**
+     * The listener is saving [songIds] to a playlist in one go (they pick the playlist next): adds of
+     * these songs over the next [bulkWindowMs] are that save, so none of them counts as an add.
+     */
+    fun expectBulk(
+        songIds: Collection<String>,
+        nowMs: Long,
+    ) {
+        bulk.entries.removeAll { it.value <= nowMs }
+        val until = nowMs + bulkWindowMs
+        songIds.forEach { bulk[it] = until }
+    }
 
     fun observe(
         snapshot: Set<Membership>,
@@ -59,6 +81,7 @@ class PlaylistAdds(
         }
         for (pair in snapshot) {
             if (!seen.add(pair) || !counts(pair.playlistId)) continue
+            if ((bulk[pair.songId] ?: Long.MIN_VALUE) > nowMs) continue
             val burst = bursts.getOrPut(pair.playlistId) { Burst(nowMs) }
             burst.pairs += pair
             burst.lastMs = nowMs
@@ -79,6 +102,9 @@ class PlaylistAdds(
     companion object {
         const val MAX_BURST = 50
         const val SETTLE_MS = 60_000L
+
+        /** How long a bulk save waits for the listener to pick (or create) its playlist. */
+        const val BULK_WINDOW_MS = 10 * 60_000L
 
         /** False for upstream's own playlists: built-ins ("LP_" ids, e.g. Liked, Downloaded) and the most-played history playlists. */
         fun counts(playlistId: String): Boolean = !isHistoryPlaylistId(playlistId) && !playlistId.startsWith("LP_")
@@ -102,6 +128,17 @@ class PlaylistAddWatcher(
     private val adds = PlaylistAdds()
     private val lock = Mutex()
 
+    // Bulk saves announced from the UI thread, handed to [adds] under the lock before the next read.
+    private val pendingBulk = MutableStateFlow<List<Pair<Set<String>, Long>>>(emptyList())
+
+    /** [songIds] are about to be saved to a playlist together (a Turtle mix's Save): see [PlaylistAdds.expectBulk]. */
+    fun expectBulk(songIds: Collection<String>) {
+        val ids = songIds.toSet()
+        if (ids.isEmpty()) return
+        val at = nowMs()
+        pendingBulk.update { it + (ids to at) }
+    }
+
     @OptIn(FlowPreview::class)
     fun start(scope: CoroutineScope): Job =
         scope.launch {
@@ -110,7 +147,10 @@ class PlaylistAddWatcher(
                 database().invalidationTracker.createFlow(MAP_TABLE, PLAYLIST_TABLE).debounce(DEBOUNCE_MS).collect {
                     guarded("read playlists") {
                         val pairs = readPairs()
-                        lock.withLock { adds.observe(pairs, nowMs()) }
+                        lock.withLock {
+                            pendingBulk.getAndUpdate { emptyList() }.forEach { (ids, at) -> adds.expectBulk(ids, at) }
+                            adds.observe(pairs, nowMs())
+                        }
                     }
                 }
             }

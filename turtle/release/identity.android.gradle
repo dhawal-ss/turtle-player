@@ -1,0 +1,29 @@
+// Turtle release identity for :androidApp (HOOKS.md #63).
+//
+// Applied by one line at the end of androidApp/build.gradle.kts, so it runs after upstream's
+// defaultConfig and overrides its applicationId and versionCode. The build types' .debug and
+// .benchmark suffixes still apply on top. Upstream bumps its own versionCode on every release; reading
+// ours from turtle/branding.properties keeps those bumps from ever conflicting with Turtle's.
+//
+// providers.fileContents makes the properties file a configuration-cache input, so editing it
+// invalidates the cached configuration.
+
+def brandingFile = rootProject.layout.projectDirectory.file("turtle/branding.properties")
+def brandingText = providers.fileContents(brandingFile).asText.getOrNull()
+if (brandingText == null) {
+    throw new GradleException("Turtle: turtle/branding.properties is missing (see turtle/docs/release.md)")
+}
+def branding = new Properties()
+branding.load(new StringReader(brandingText))
+
+def turtleApplicationId = branding.getProperty("androidApplicationId")?.trim()
+if (!turtleApplicationId || !(turtleApplicationId ==~ /[a-zA-Z][A-Za-z0-9_]*(\.[a-zA-Z][A-Za-z0-9_]*)+/)) {
+    throw new GradleException("Turtle: androidApplicationId in turtle/branding.properties is not a valid application id: '$turtleApplicationId'")
+}
+def turtleVersionCode = branding.getProperty("androidVersionCode")?.trim()
+if (!turtleVersionCode?.isInteger() || turtleVersionCode.toInteger() < 1) {
+    throw new GradleException("Turtle: androidVersionCode in turtle/branding.properties must be a positive integer: '$turtleVersionCode'")
+}
+
+android.defaultConfig.applicationId = turtleApplicationId
+android.defaultConfig.versionCode = turtleVersionCode.toInteger()

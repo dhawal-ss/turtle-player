@@ -94,6 +94,7 @@ import app.turtleplayer.ui.generated.resources.shell_set_more
 import app.turtleplayer.ui.generated.resources.shell_set_navigation
 import app.turtleplayer.ui.generated.resources.shell_set_palette
 import app.turtleplayer.ui.generated.resources.shell_set_playback
+import app.turtleplayer.ui.generated.resources.shell_set_pause_history_body
 import app.turtleplayer.ui.generated.resources.shell_set_playback_sub
 import app.turtleplayer.ui.generated.resources.shell_set_recs
 import app.turtleplayer.ui.generated.resources.shell_set_recs_dial
@@ -105,11 +106,26 @@ import app.turtleplayer.ui.generated.resources.shell_set_recs_new_body
 import app.turtleplayer.ui.generated.resources.shell_set_recs_new_title
 import app.turtleplayer.ui.generated.resources.shell_set_recs_sub
 import app.turtleplayer.ui.generated.resources.shell_set_recs_tune
+import app.turtleplayer.ui.generated.resources.shell_set_picks
+import app.turtleplayer.ui.generated.resources.shell_set_picks_edit
+import app.turtleplayer.ui.generated.resources.shell_set_picks_group
+import app.turtleplayer.ui.generated.resources.shell_set_picks_none
 import app.turtleplayer.ui.generated.resources.shell_set_recs_tuning_body
 import app.turtleplayer.ui.generated.resources.shell_set_recs_tuning_title
+import app.turtleplayer.ui.generated.resources.shell_set_repair_skips
+import app.turtleplayer.ui.generated.resources.shell_set_repair_skips_body
+import app.turtleplayer.ui.generated.resources.shell_set_repair_skips_off
+import app.turtleplayer.ui.generated.resources.shell_set_repair_skips_on
 import app.turtleplayer.ui.generated.resources.shell_set_spoken
 import app.turtleplayer.ui.generated.resources.shell_set_spoken_speed_body
 import app.turtleplayer.ui.generated.resources.shell_set_spoken_sub
+import app.turtleplayer.ui.generated.resources.shell_set_taste_history
+import app.turtleplayer.ui.generated.resources.shell_set_taste_reset
+import app.turtleplayer.ui.generated.resources.shell_set_taste_reset_body
+import app.turtleplayer.ui.generated.resources.shell_set_taste_reset_confirm
+import app.turtleplayer.ui.generated.resources.shell_set_taste_undo
+import app.turtleplayer.ui.generated.resources.shell_set_taste_undo_body
+import app.turtleplayer.ui.generated.resources.shell_set_taste_undo_confirm
 import app.turtleplayer.ui.generated.resources.shell_set_theme_sub
 import app.turtleplayer.ui.generated.resources.shell_set_tuning_none
 import app.turtleplayer.ui.generated.resources.shell_set_version
@@ -354,6 +370,25 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
             )
         }
     val homeYouTube = ShellHomeRows.mode ?: HomeYouTubeRows.MATCHED
+    // Repairing older skips and resetting taste change how taste reads history, never the history itself.
+    LaunchedEffect(Unit) { TurtleBridge.loadTasteRepair() }
+    val repair by TurtleBridge.tasteRepair.collectAsState()
+    val olderSkips = repair.olderSkips
+    val repairBody =
+        when {
+            olderSkips == null -> stringResource(Res.string.shell_set_repair_skips_body)
+            repair.repairOlderSkips -> stringResource(Res.string.shell_set_repair_skips_on, olderSkips)
+            else -> stringResource(Res.string.shell_set_repair_skips_off, olderSkips)
+        }
+    val undoReset = repair.reset
+    val resetTitle = stringResource(if (undoReset) Res.string.shell_set_taste_undo else Res.string.shell_set_taste_reset)
+    val resetBody = stringResource(if (undoReset) Res.string.shell_set_taste_undo_body else Res.string.shell_set_taste_reset_body)
+    val resetConfirm = stringResource(if (undoReset) Res.string.shell_set_taste_undo_confirm else Res.string.shell_set_taste_reset_confirm)
+    // Starting artists: the same sheet Home's card opens, prefilled with the saved picks to edit.
+    LaunchedEffect(Unit) { TurtleBridge.loadArtistPicks() }
+    ArtistPicksSheetHost()
+    val picked = TurtleBridge.artistPicks?.picked.orEmpty()
+    val picksBody = if (picked.isEmpty()) stringResource(Res.string.shell_set_picks_none) else picked.joinToString(", ") { it.title }
     val recommendations =
         turtlePage(
             SettingsPageId.PLAYER_ARTWORK,
@@ -396,6 +431,39 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                             selectedChoiceId = homeYouTube.prefValue,
                             onChoiceSelected = { id -> ShellHomeRows.choose(HomeYouTubeRows.fromPref(id)) },
                         ),
+                    ),
+                ),
+                group(
+                    "artistPicks",
+                    stringResource(Res.string.shell_set_picks_group),
+                    listOf(
+                        actionItem(
+                            id = "artistPicks",
+                            title = stringResource(Res.string.shell_set_picks),
+                            description = picksBody,
+                            valueLabel = stringResource(Res.string.shell_set_picks_edit),
+                        ) { ShellArtistPicks.open(ShellBrowse.homeItems()) },
+                    ),
+                ),
+                group(
+                    "tasteHistory",
+                    stringResource(Res.string.shell_set_taste_history),
+                    listOf(
+                        SettingsItemRegistration(
+                            id = "repairOlderSkips",
+                            title = stringResource(Res.string.shell_set_repair_skips),
+                            description = repairBody,
+                            control = SettingsControl.SWITCH,
+                            checked = repair.repairOlderSkips,
+                            onCheckedChange = { on -> settingsScope.launch { TurtleBridge.setRepairOlderSkips(on) } },
+                        ),
+                        actionItem(
+                            id = "resetTaste",
+                            title = resetTitle,
+                            description = resetBody,
+                            valueLabel = resetTitle,
+                            confirmationMessage = resetConfirm,
+                        ) { settingsScope.launch { if (undoReset) TurtleBridge.undoTasteReset() else TurtleBridge.resetTaste() } },
                     ),
                 ),
                 group(
@@ -508,11 +576,25 @@ internal fun rememberTurtleSettings(raw: SettingsUiRegistry, host: SharedSetting
                 }
             page.copy(title = stringResource(Res.string.shell_set_content), icon = Glyphs.Explore, groups = groups)
         }
+    // Turtle stores no play while history is paused, the one playing when it is paused included; explicit votes still count.
+    val pauseHistoryBody = stringResource(Res.string.shell_set_pause_history_body)
+
+    fun SettingsItemRegistration.turtleDescribed() =
+        if (id == "pauseListenHistory" && description == null) copy(description = pauseHistoryBody) else this
     val privacy =
         raw[SettingsPageId.PRIVACY]?.let { page ->
             page.copy(
                 icon = Glyphs.Lock,
-                groups = page.groups.map { g -> g.copy(items = g.items.filter { it.id !in HIDE_PRIVACY }) }.filter { it.items.isNotEmpty() },
+                groups =
+                    page.groups
+                        .map { g ->
+                            g.copy(
+                                items =
+                                    g.items
+                                        .filter { it.id !in HIDE_PRIVACY }
+                                        .map { it.turtleDescribed() },
+                            )
+                        }.filter { it.items.isNotEmpty() },
             )
         }
     val storage = raw[SettingsPageId.STORAGE]?.copy(icon = Glyphs.Download)

@@ -28,8 +28,18 @@ interface PlayEventStore {
 
     suspend fun forArtist(artist: ArtistKey, limit: Int = 500): List<PlayEvent>
 
-    /** Deletes everything from one import source, so a re-import replaces rather than duplicates. */
-    suspend fun deleteSource(source: EventSource)
+    /**
+     * Replaces every stored play from [source] with [events], all or nothing: on any failure the
+     * previous plays of [source] stay exactly as they were. Plays from other sources are untouched.
+     * An empty list removes the source. Every event must come from [source].
+     */
+    suspend fun replaceSource(source: EventSource, events: List<PlayEvent>)
+
+    /** How many plays from [source] are stored and the span they cover, or null without any. */
+    suspend fun sourceRange(source: EventSource): SourceRange?
+
+    /** Deletes everything from one import source (an all-or-nothing [replaceSource] with nothing). */
+    suspend fun deleteSource(source: EventSource) = replaceSource(source, emptyList())
 
     suspend fun count(): Long
 
@@ -39,6 +49,9 @@ interface PlayEventStore {
     /** Feedback with `atMs >= sinceMs`, oldest first. */
     suspend fun feedbackSince(sinceMs: Long, limit: Int = Int.MAX_VALUE): List<TrackFeedback>
 }
+
+/** The stored plays of one source: how many, and when the first and the last started. */
+data class SourceRange(val count: Long, val firstMs: Long, val lastMs: Long)
 
 class InMemoryPlayEventStore : PlayEventStore {
     private val mutex = Mutex()
@@ -87,8 +100,24 @@ class InMemoryPlayEventStore : PlayEventStore {
         events.asReversed().asSequence().filter { it.artistKey == artist }.take(limit).toList()
     }
 
-    override suspend fun deleteSource(source: EventSource) {
-        mutex.withLock { events.removeAll { it.source == source } }
+    override suspend fun replaceSource(source: EventSource, events: List<PlayEvent>) {
+        require(events.all { it.source == source }) { "every replacing event must come from $source" }
+        mutex.withLock {
+            // Built aside first, swapped in only once complete: a throw leaves the old list.
+            var id = nextId
+            val next = ArrayList<PlayEvent>(this.events.size + events.size)
+            this.events.filterTo(next) { it.source != source }
+            events.mapTo(next) { it.copy(id = id++) }
+            next.sortBy { it.startedAtMs }
+            this.events.clear()
+            this.events.addAll(next)
+            nextId = id
+        }
+    }
+
+    override suspend fun sourceRange(source: EventSource): SourceRange? = mutex.withLock {
+        val own = events.filter { it.source == source }
+        if (own.isEmpty()) null else SourceRange(own.size.toLong(), own.first().startedAtMs, own.last().startedAtMs)
     }
 
     override suspend fun count(): Long = mutex.withLock { events.size.toLong() }

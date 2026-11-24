@@ -15,6 +15,7 @@ import app.turtleplayer.events.OpenPlayCheckpoint
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.PlayEventStore
+import app.turtleplayer.events.SourceRange
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
 import app.turtleplayer.events.TrackFeedback
@@ -100,7 +101,30 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             connection.execSQL("CREATE INDEX IF NOT EXISTS idx_track_feedback_at ON track_feedback(at_ms)")
             connection.execSQL("PRAGMA user_version = 6")
         }
+        if (version < 7) {
+            // The end-reason labelling revision of each play (null for older rows and imports), so a
+            // later relabelling can tell old plays from new ones. Additive only: stored rows are unchanged.
+            // One transaction, so a crash can never leave one table altered and the version unbumped.
+            // Not part of eventTable(): fresh installs reach this block too. Each column is added only
+            // when missing, so a database whose version was set back (a restored backup) still opens.
+            transaction {
+                for (table in listOf("play_event", "open_play")) {
+                    if (!hasColumn(table, "label_version")) connection.execSQL("ALTER TABLE $table ADD COLUMN label_version INTEGER")
+                }
+                connection.execSQL("PRAGMA user_version = 7")
+            }
+        }
     }
+
+    private fun hasColumn(
+        table: String,
+        column: String,
+    ): Boolean =
+        connection.prepare("PRAGMA table_info($table)").use { s ->
+            var found = false
+            while (s.step()) if (s.getText(1) == column) found = true
+            found
+        }
 
     private fun eventTable(name: String) =
         """
@@ -229,7 +253,9 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
             block()
             connection.execSQL("COMMIT")
         } catch (t: Throwable) {
-            connection.execSQL("ROLLBACK")
+            // SQLite may have rolled back by itself already (disk full, I/O error): then ROLLBACK
+            // fails too, and that failure must not hide the original error.
+            runCatching { connection.execSQL("ROLLBACK") }.exceptionOrNull()?.let { t.addSuppressed(it) }
             throw t
         }
     }
@@ -256,20 +282,35 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
     }
 
     override suspend fun appendAll(events: List<PlayEvent>) {
+        db { transaction { batchInsert(events) } }
+    }
+
+    /**
+     * One transaction: the delete and every insert land together or not at all. A process kill
+     * mid-way is rolled back from the WAL journal on the next open.
+     */
+    override suspend fun replaceSource(source: EventSource, events: List<PlayEvent>) {
+        require(events.all { it.source == source }) { "every replacing event must come from $source" }
         db {
-            connection.execSQL("BEGIN")
-            try {
-                events.forEach { insert(it) }
-                connection.execSQL("COMMIT")
-            } catch (t: Throwable) {
-                connection.execSQL("ROLLBACK")
-                throw t
+            transaction {
+                connection.prepare("DELETE FROM play_event WHERE source = ?").use {
+                    it.bindText(1, source.name)
+                    it.step()
+                }
+                batchInsert(events)
             }
         }
     }
 
+    override suspend fun sourceRange(source: EventSource): SourceRange? = db {
+        connection.prepare("SELECT COUNT(*), MIN(started_at_ms), MAX(started_at_ms) FROM play_event WHERE source = ?").use {
+            it.bindText(1, source.name)
+            if (it.step() && it.getLong(0) > 0) SourceRange(it.getLong(0), it.getLong(1), it.getLong(2)) else null
+        }
+    }
+
     override suspend fun since(sinceMs: Long, limit: Int): List<PlayEvent> = db {
-        query("SELECT * FROM play_event WHERE started_at_ms >= ? ORDER BY started_at_ms ASC LIMIT ?") {
+        query("SELECT * FROM play_event WHERE started_at_ms >= ? ORDER BY started_at_ms ASC, id ASC LIMIT ?") {
             it.bindLong(1, sinceMs)
             it.bindLong(2, limit.toLong())
         }
@@ -289,19 +330,18 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
         }
     }
 
-    override suspend fun deleteSource(source: EventSource) = db {
-        connection.prepare("DELETE FROM play_event WHERE source = ?").use {
-            it.bindText(1, source.name)
-            it.step()
-        }
-        Unit
+    /** When the first play from [source] started, or null without any. */
+    suspend fun firstStartedAt(source: EventSource): Long? = sourceRange(source)?.firstMs
+
+    /** The newest stored play's row id, or null without plays. Ids only grow (AUTOINCREMENT). */
+    suspend fun lastPlayId(): Long? = db {
+        connection.prepare("SELECT MAX(id) FROM play_event").use { if (it.step() && !it.isNull(0)) it.getLong(0) else null }
     }
 
-    /** When the first play from [source] started, or null without any. */
-    suspend fun firstStartedAt(source: EventSource): Long? = db {
-        connection.prepare("SELECT MIN(started_at_ms) FROM play_event WHERE source = ?").use {
-            it.bindText(1, source.name)
-            if (it.step() && !it.isNull(0)) it.getLong(0) else null
+    /** Every play recorded on this device (no imports), oldest first. */
+    suspend fun localPlays(): List<PlayEvent> = db {
+        query("SELECT * FROM play_event WHERE source = ? ORDER BY started_at_ms ASC, id ASC") {
+            it.bindText(1, EventSource.LOCAL.name)
         }
     }
 
@@ -380,43 +420,60 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
 
     private fun insert(e: PlayEvent, table: String = "play_event"): Long {
         connection.prepare(insertInto(table)).use { s ->
-            var i = 0
-            fun text(v: String?) = if (v == null) s.bindNull(++i) else s.bindText(++i, v)
-            fun long(v: Long?) = if (v == null) s.bindNull(++i) else s.bindLong(++i, v)
-            fun bool(v: Boolean?) = long(v?.let { if (it) 1L else 0L })
-            text(e.track.key.value)
-            text(e.track.title)
-            text(e.track.artists.joinToString(ARTIST_SEPARATOR))
-            text(e.track.artistKey.value)
-            text(e.track.album)
-            long(e.track.durationMs)
-            long(e.track.releasedAtMs)
-            text(e.track.youtubeId)
-            text(e.track.isrc)
-            bool(e.track.explicit)
-            text(e.sessionId)
-            long(e.position.toLong())
-            text(e.surface.name)
-            text(e.surfaceDetail)
-            text(e.startReason.name)
-            text(e.endReason.name)
-            long(e.startedAtMs)
-            long(e.msPlayed)
-            long(e.durationMs)
-            long(e.seeks.toLong())
-            bool(e.replayed)
-            bool(e.shuffle)
-            bool(e.liked)
-            bool(e.addedToPlaylist)
-            bool(e.lessLikeThis)
-            long(e.context?.hour?.toLong())
-            long(e.context?.weekday?.toLong())
-            text(e.context?.device?.name)
-            text(e.context?.network?.name)
-            text(e.source.name)
+            bindEvent(s, e)
             s.step()
         }
         return connection.prepare("SELECT last_insert_rowid()").use { if (it.step()) it.getLong(0) else 0L }
+    }
+
+    /** Inserts [events] into play_event with one prepared statement; call inside [transaction]. */
+    private fun batchInsert(events: List<PlayEvent>) {
+        if (events.isEmpty()) return
+        connection.prepare(insertInto("play_event")).use { s ->
+            for (e in events) {
+                bindEvent(s, e)
+                s.step()
+                s.reset()
+            }
+        }
+    }
+
+    private fun bindEvent(s: SQLiteStatement, e: PlayEvent) {
+        var i = 0
+        fun text(v: String?) = if (v == null) s.bindNull(++i) else s.bindText(++i, v)
+        fun long(v: Long?) = if (v == null) s.bindNull(++i) else s.bindLong(++i, v)
+        fun bool(v: Boolean?) = long(v?.let { if (it) 1L else 0L })
+        text(e.track.key.value)
+        text(e.track.title)
+        text(e.track.artists.joinToString(ARTIST_SEPARATOR))
+        text(e.track.artistKey.value)
+        text(e.track.album)
+        long(e.track.durationMs)
+        long(e.track.releasedAtMs)
+        text(e.track.youtubeId)
+        text(e.track.isrc)
+        bool(e.track.explicit)
+        text(e.sessionId)
+        long(e.position.toLong())
+        text(e.surface.name)
+        text(e.surfaceDetail)
+        text(e.startReason.name)
+        text(e.endReason.name)
+        long(e.startedAtMs)
+        long(e.msPlayed)
+        long(e.durationMs)
+        long(e.seeks.toLong())
+        bool(e.replayed)
+        bool(e.shuffle)
+        bool(e.liked)
+        bool(e.addedToPlaylist)
+        bool(e.lessLikeThis)
+        long(e.context?.hour?.toLong())
+        long(e.context?.weekday?.toLong())
+        text(e.context?.device?.name)
+        text(e.context?.network?.name)
+        text(e.source.name)
+        long(e.labelVersion?.toLong())
     }
 
     private fun query(sql: String, bind: (SQLiteStatement) -> Unit): List<PlayEvent> =
@@ -469,6 +526,7 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
                         null
                     },
                     source = enumOr(text("source"), EventSource.LOCAL),
+                    labelVersion = long("label_version")?.toInt(),
                 )
             }
             out
@@ -490,8 +548,8 @@ class SqlitePlayEventStore(driver: SQLiteDriver, path: String) : PlayEventStore,
                 track_key, title, artists, artist_key, album, track_duration_ms, released_at_ms, youtube_id, isrc, explicit,
                 session_id, position, surface, surface_detail, start_reason, end_reason, started_at_ms, ms_played,
                 duration_ms, seeks, replayed, shuffle, liked, added_to_playlist, less_like_this, hour, weekday,
-                device, network, source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                device, network, source, label_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """.trimIndent()
     }
 }

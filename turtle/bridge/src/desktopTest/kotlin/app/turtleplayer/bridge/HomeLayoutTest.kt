@@ -147,6 +147,42 @@ class HomeLayoutTest {
         assertEquals(emptyList(), withHidden.youtubeRows) // quick_picks held only j1 and q1
     }
 
+    // First session: the listener's own tiles draw before YouTube answers, and suggestions only append.
+    private val restored = HomeUiState(isRestoringCache = false)
+    private val twoRecents = listOf(song("j1"), song("j2"))
+
+    @Test
+    fun localTilesAreReadyBeforeThePick() {
+        val layout = HomeLayout.of(shelves, restored, twoRecents, null, HomeYouTubeRows.MATCHED)
+        assertTrue(layout.localReady)
+        assertFalse(layout.gridReady)
+        assertEquals(listOf("j1", "j2"), layout.grid.map { it.id })
+        assertEquals(4, layout.pendingTiles, "the slots suggestions may still take are held")
+    }
+
+    @Test
+    fun pinsHoldTheGridUntilRestored() {
+        // Pins come from upstream's local database once its cache restore ends; until then they could still push in.
+        val restoring = HomeUiState(isRestoringCache = true)
+        val layout = HomeLayout.of(shelves, restoring, twoRecents, null, HomeYouTubeRows.MATCHED)
+        assertFalse(layout.localReady)
+        assertFalse(layout.gridReady)
+        assertFalse(HomeLayout.of(shelves, restoring, twoRecents, null, HomeYouTubeRows.ALL).gridReady)
+        assertFalse(HomeLayout.of(shelves, restored, null, null, HomeYouTubeRows.MATCHED).localReady, "recents not loaded yet")
+        assertFalse(HomeLayout.of(shelves, restored, twoRecents, null, null).localReady, "setting not read yet")
+    }
+
+    @Test
+    fun suggestionsOnlyAppendToTheLocalPrefix() {
+        val before = HomeLayout.of(shelves, restored, twoRecents, null, HomeYouTubeRows.MATCHED)
+        val pick = HomeRowsPick(rowKeys = emptyList(), gridIds = setOf("r2", "r3"), scored = true)
+        val after = HomeLayout.of(shelves, restored, twoRecents, pick, HomeYouTubeRows.MATCHED)
+        assertTrue(after.gridReady)
+        assertEquals(before.grid.map { it.id }, after.grid.take(before.grid.size).map { it.id })
+        assertEquals(listOf("j1", "j2", "r2", "r3"), after.grid.map { it.id })
+        assertEquals(0, after.pendingTiles)
+    }
+
     @Test
     fun jumpBackInRowShowsRecentsNotInTheGrid() {
         val nine = (1..9).map { song("j$it") }

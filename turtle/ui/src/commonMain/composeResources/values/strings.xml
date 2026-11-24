@@ -97,7 +97,9 @@
     <string name="shell_explore_waiting">Explore fills in once Home has loaded.</string>
     <string name="shell_moods_genres">Moods &amp; genres</string>
     <string name="shell_new_releases">New releases</string>
-    <string name="shell_trending">Trending now</string>
+    <!-- Unranked on purpose: the provider list has no chart issue, market or period. -->
+    <string name="shell_popular_picks">Popular picks</string>
+    <string name="shell_popular_picks_source">Trending songs from YouTube Music, in no ranked order.</string>
     <string name="shell_charts">Top albums</string>
     <string name="shell_community">Community playlists</string>
     <string name="shell_search_library">Search in Your Library</string>

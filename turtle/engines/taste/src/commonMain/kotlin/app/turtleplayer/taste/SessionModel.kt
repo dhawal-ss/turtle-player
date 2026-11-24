@@ -1,5 +1,6 @@
 package app.turtleplayer.taste
 
+import app.turtleplayer.core.MINUTE_MS
 import app.turtleplayer.core.TrackKey
 import app.turtleplayer.events.PlayEvent
 
@@ -16,6 +17,17 @@ data class SessionConfig(
     val vibeResetMass: Double = 2.0,
     /** What remains of the session's own evidence after a vibe change. */
     val vibeKeep: Float = 0.2f,
+    /** Most finished and quick-skipped tracks remembered for the session; the oldest go first. */
+    val memory: Int = 200,
+    /** Idle time after which the next ranking starts a fresh session. */
+    val idleResetMs: Long = 30 * MINUTE_MS,
+    /**
+     * How far before a session boundary a play may have started and still belong to the new session:
+     * boundaries are noticed a moment after the new queue's first song starts (a queue replaced
+     * outside the app is only seen at that song's start, and the notice reaches the engine
+     * asynchronously), so a boundary taken at "now" would leave that first song out.
+     */
+    val boundarySlackMs: Long = 2_000,
 )
 
 /**
@@ -60,7 +72,9 @@ class SessionModel(
         lastTrack = event.trackKey
         if (event.isQuickSkip || event.lessLikeThis) {
             consecutiveQuickSkips++
+            quickSkipped.remove(event.trackKey)
             quickSkipped += event.trackKey
+            while (quickSkipped.size > config.memory) quickSkipped.remove(quickSkipped.first())
             if (vector != null) {
                 positive.decay(config.decay)
                 negative.decay(config.decay)
@@ -75,6 +89,7 @@ class SessionModel(
         if (event.isFinished || event.isListen) consecutiveQuickSkips = 0
         if (event.isFinished) {
             finished += event.trackKey
+            while (finished.size > config.memory) finished.removeAt(0)
             if (vector != null) {
                 positive.decay(config.decay)
                 negative.decay(config.decay)

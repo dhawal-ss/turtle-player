@@ -847,7 +847,7 @@ compose.desktop {
 
 val cdsCache =
     when (platform) {
-        "win" -> "\$LOCALAPPDATA/Metrolist/cache"
+        "win" -> "\$LOCALAPPDATA/TurtlePlayer/cds" // Turtle: HOOKS.md #69
         "mac" -> "\$HOME/Library/Caches/com.metrolist.desktop"
         else -> "\$METROLIST_CDS_CACHE"
     }

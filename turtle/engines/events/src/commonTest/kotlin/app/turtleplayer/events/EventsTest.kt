@@ -8,6 +8,9 @@ import app.turtleplayer.events.imports.ListenBrainzHistoryImporter
 import app.turtleplayer.events.imports.PastPlay
 import app.turtleplayer.events.imports.PlayerHistoryImporter
 import app.turtleplayer.events.imports.SpotifyHistoryImporter
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -295,6 +298,153 @@ class ListeningSessionTrackerTest {
         assertEquals(0L, store.count())
         assertEquals(null, saved.take()) // discarded, not kept for a later launch
     }
+
+    @Test
+    fun pauseAndResumeWithinOnePlayDropsIt() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        var paused = false
+        val tracker = ListeningSessionTracker(store, clock, recording = { !paused })
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(30_000)
+        paused = true
+        tracker.onHistoryPaused()
+        clock.advance(20_000) // a private stretch
+        paused = false
+        clock.advance(150_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        clock.advance(200_000)
+        tracker.flush()
+
+        assertEquals(listOf("yt:b"), store.since(0).map { it.trackKey.value })
+    }
+
+    @Test
+    fun pauseSeenOnlyByACheckpointDropsThePlay() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        var paused = false
+        val tracker = ListeningSessionTracker(store, clock, checkpoint = MemoryCheckpoint(), recording = { !paused })
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(30_000)
+        paused = true
+        tracker.checkpoint()
+        paused = false
+        clock.advance(170_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        clock.advance(200_000)
+        tracker.flush()
+
+        assertEquals(listOf("yt:b"), store.since(0).map { it.trackKey.value })
+    }
+
+    @Test
+    fun pauseSeenOnlyByASignalDropsThePlay() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        var paused = false
+        val tracker = ListeningSessionTracker(store, clock, recording = { !paused })
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(30_000)
+        paused = true
+        tracker.onSignal(PlaybackSignal.PlayingChanged(false))
+        clock.advance(5_000)
+        tracker.onSignal(PlaybackSignal.PlayingChanged(true))
+        paused = false
+        clock.advance(170_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        clock.advance(200_000)
+        tracker.flush()
+
+        assertEquals(listOf("yt:b"), store.since(0).map { it.trackKey.value })
+    }
+
+    @Test
+    fun pausingClearsTheCheckpointAndResumeDoesNotRestoreIt() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val saved = MemoryCheckpoint()
+        var paused = false
+        val tracker = ListeningSessionTracker(store, clock, checkpoint = saved, recording = { !paused })
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(60_000)
+        tracker.checkpoint() // "a" saved while recording
+        paused = true
+        tracker.onHistoryPaused()
+        paused = false
+        clock.advance(10_000)
+        tracker.checkpoint() // history is back on, but "a" stays dropped
+        // Killed here, then reopened with history on.
+
+        assertEquals(null, ListeningSessionTracker(store, clock, checkpoint = saved, recording = { !paused }).recover())
+        assertEquals(0L, store.count())
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun staleCheckpointCannotOverwriteANewerSave() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val saved = GatedCheckpoint()
+        val tracker = ListeningSessionTracker(store, clock, checkpoint = saved)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(60_000)
+        // A periodic checkpoint snapshots "a", then its write is slow...
+        val periodic = launch { tracker.checkpoint() }
+        runCurrent()
+        // ...while "a" ends, is stored, and its checkpoint is replaced.
+        val ended = launch { tracker.onSignal(PlaybackSignal.TrackEnded(EndReason.COMPLETED)) }
+        runCurrent()
+        saved.gate.complete(Unit)
+        periodic.join()
+        ended.join()
+
+        assertEquals(null, saved.play)
+        assertEquals(1L, store.count())
+        // Killed now: nothing is recovered, so "a" is never stored twice.
+        assertEquals(null, ListeningSessionTracker(store, clock, checkpoint = saved).recover())
+        assertEquals(1L, store.count())
+    }
+
+    @Test
+    fun trackerLabelsNewPlaysAndRecoveryKeepsTheLabel() = runTest {
+        val clock = FakeClock()
+        val store = InMemoryPlayEventStore()
+        val saved = MemoryCheckpoint()
+        val tracker = ListeningSessionTracker(store, clock, checkpoint = saved)
+
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("a"), StartReason.TAPPED, Surface.QUEUE))
+        clock.advance(200_000)
+        tracker.onSignal(PlaybackSignal.TrackStarted(track("b"), StartReason.AUTOPLAY, Surface.AUTOPLAY))
+        clock.advance(60_000)
+        tracker.checkpoint()
+
+        val recovered = ListeningSessionTracker(store, clock, checkpoint = saved).recover()
+        assertEquals(PlayEvent.LABEL_VERSION, recovered?.labelVersion)
+        assertEquals(listOf(PlayEvent.LABEL_VERSION, PlayEvent.LABEL_VERSION), store.since(0).map { it.labelVersion })
+    }
+}
+
+/** A checkpoint whose first save waits for [gate]: a slow write that a newer save could overtake. */
+private class GatedCheckpoint : OpenPlayCheckpoint {
+    val gate = CompletableDeferred<Unit>()
+    var play: PlayEvent? = null
+    private var first = true
+
+    override suspend fun save(play: PlayEvent?) {
+        if (first) {
+            first = false
+            gate.await()
+        }
+        this.play = play
+    }
+
+    override suspend fun take(): PlayEvent? = play.also { play = null }
 }
 
 private class MemoryCheckpoint : OpenPlayCheckpoint {
@@ -432,5 +582,14 @@ class TrackFeedbackStoreTest {
         assertEquals("PL1", store.feedbackSince(0).first().detail)
         assertEquals(listOf("yt:b"), store.feedbackSince(1_500).map { it.track.key.value })
         assertEquals(0L, store.count())
+    }
+
+    @Test
+    fun aSaveRoundTripsWithItsDetail() = runTest {
+        val store = InMemoryPlayEventStore()
+        val saved = TrackFeedback(track = track("a"), kind = TrackFeedbackKind.SAVED, atMs = 1_000, detail = TrackFeedback.SAVED_LIKED)
+        val id = store.appendFeedback(saved)
+        assertEquals(listOf(saved.copy(id = id)), store.feedbackSince(0))
+        assertEquals("liked", store.feedbackSince(0).single().detail)
     }
 }

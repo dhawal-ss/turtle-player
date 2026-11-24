@@ -156,6 +156,19 @@ internal object ShellActions {
         ShellInfinity.play(controller, title, onNothing = onEmpty)
     }
 
+    /**
+     * Starts a radio from [song] as a new queue occurrence, so the last queue's tags and short-term
+     * learning stop applying even when the song playing does not change. Waits only briefly for that.
+     */
+    fun startRadio(controller: PlaybackController, song: SongItem) {
+        scope.launch {
+            kotlinx.coroutines.withTimeoutOrNull(OCCURRENCE_WAIT_MS) { app.turtleplayer.bridge.TurtleBridge.beginOccurrence() }
+            controller.startRadio(song)
+        }
+    }
+
+    private const val OCCURRENCE_WAIT_MS = 250L
+
     fun lessLikeThis(controller: PlaybackController, song: SongItem) {
         if (pending) return
         pending = true

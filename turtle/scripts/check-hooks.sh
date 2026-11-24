@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fails when a change edits upstream (non-turtle) paths without updating turtle/HOOKS.md.
-# Usage: check-hooks.sh <base-ref>   (e.g. origin/main)
+# Usage: check-hooks.sh <base-ref>   (e.g. origin/main; HEAD for uncommitted work)
 # Upstream merges (sync/upstream-* branches) are exempt: they bring upstream's own changes.
 set -euo pipefail
 base="${1:-origin/main}"
@@ -9,7 +9,10 @@ if [[ "$branch" == sync/upstream-* ]]; then
   echo "Upstream sync branch; hook ledger check skipped."
   exit 0
 fi
-changed=$(git diff --name-only "$(git merge-base "$base" HEAD)" HEAD)
+# Committed changes since the base, plus uncommitted and untracked files when run on a working tree
+# (`check-hooks.sh HEAD` checks only what is not committed yet). CI checkouts have none of the latter.
+merge_base=$(git merge-base "$base" HEAD)
+changed=$({ git diff --name-only "$merge_base"; git ls-files --others --exclude-standard; } | sort -u)
 upstream_changes=$(echo "$changed" | grep -vE '^(turtle/|\.github/workflows/turtle-|$)' || true)
 if [[ -z "$upstream_changes" ]]; then
   echo "No upstream files changed."

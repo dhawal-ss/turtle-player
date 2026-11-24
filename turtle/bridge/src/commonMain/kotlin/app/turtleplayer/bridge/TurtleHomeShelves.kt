@@ -71,6 +71,11 @@ class TurtleHomeShelves(
     @Volatile
     private var engineShelves: Map<String, Shelf> = emptyMap()
 
+    // What each shown shelf is made of, for its details page, worked out with the titles (names are
+    // suspend lookups) so the UI reads it without waiting.
+    @Volatile
+    private var abouts: Map<String, MixAbout> = emptyMap()
+
     fun start(scope: CoroutineScope) {
         scope.launch {
             // Saved songs, then Turtle's rows from disk, in one hold of the lock: a refresh() from
@@ -145,7 +150,20 @@ class TurtleHomeShelves(
         val label = getString(Res.string.turtle_shelf_label)
         val built = fromEngine.mapIndexedNotNull { index, shelf -> toHomeShelf(shelf, index, label) }
         val shown = built.mapTo(HashSet()) { it.key }
-        engineShelves = fromEngine.associateBy { homeKey(it) }.filterKeys { it in shown }
+        val onHome = fromEngine.associateBy { homeKey(it) }.filterKeys { it in shown }
+        engineShelves = onHome
+        // Details only: a failure here leaves the pages without their line, never Home without its shelves.
+        abouts =
+            try {
+                // Known songs are counted against the profile as it is now, never taken from the mix's planned familiar share.
+                val known = knownBy(taste.profile())
+                onHome.mapValues { (_, shelf) -> mixAbout(shelf, { taste.displayName(it) }, { taste.displayName(it) }, known) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                TurtleLog.error("home: could not describe the shelves", e)
+                emptyMap()
+            }
         shelves = built
         TurtleLog.info("home: engine ${fromEngine.size} shelves (${fromEngine.joinToString { "${it.kind}=${it.items.size}" }}), showing ${built.size} (${built.joinToString { "${it.key.substringAfter(':')}=${it.items.size}" }})")
     }
@@ -181,6 +199,9 @@ class TurtleHomeShelves(
 
     /** The engine shelf behind Home row [homeKey] ("turtle:<shelf id>"), while it is on Home. */
     fun engineShelf(homeKey: String): Shelf? = engineShelves[homeKey]
+
+    /** What Home row [homeKey] is made of (kind, cadence, seed, main artists), while it is on Home. */
+    fun about(homeKey: String): MixAbout? = abouts[homeKey]
 
     /** The origin of [songId] played from Turtle row [homeKey]: HOME_TURTLE, the item's source and slot when known, row = shelf id. */
     fun originOf(

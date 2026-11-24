@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,7 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -55,15 +56,18 @@ import app.turtleplayer.ui.components.shellPressable
 import app.turtleplayer.ui.generated.resources.Res
 import app.turtleplayer.ui.generated.resources.shell_charts
 import app.turtleplayer.ui.generated.resources.shell_community
+import app.turtleplayer.ui.generated.resources.shell_explore_failed
 import app.turtleplayer.ui.generated.resources.shell_explore_label
 import app.turtleplayer.ui.generated.resources.shell_explore_loading
 import app.turtleplayer.ui.generated.resources.shell_explore_offline
+import app.turtleplayer.ui.generated.resources.shell_explore_retry
 import app.turtleplayer.ui.generated.resources.shell_explore_subtitle
 import app.turtleplayer.ui.generated.resources.shell_explore_title
 import app.turtleplayer.ui.generated.resources.shell_explore_waiting
 import app.turtleplayer.ui.generated.resources.shell_moods_genres
 import app.turtleplayer.ui.generated.resources.shell_new_releases
-import app.turtleplayer.ui.generated.resources.shell_trending
+import app.turtleplayer.ui.generated.resources.shell_popular_picks
+import app.turtleplayer.ui.generated.resources.shell_popular_picks_source
 import app.turtleplayer.ui.theme.Shell
 import app.turtleplayer.ui.theme.ShellMotion
 import app.turtleplayer.ui.theme.ShellShapes
@@ -74,6 +78,7 @@ import com.metrolist.shared.model.YTItem
 import com.metrolist.shared.model.displayThumbnailUrl
 import com.metrolist.shared.turtle.HomeSlot
 import com.metrolist.shared.ui.playback.LocalPlaybackController
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 
 /** Tile colors for moods and genres; [genreTint] picks one per grid cell. */
@@ -95,7 +100,7 @@ internal fun genreTint(row: Int, col: Int): Color = GenreTints[(row * GENRE_ROW_
  * opener, exactly as from Home.
  */
 @Composable
-internal fun ShellExplorePage(home: HomeSlot?, modifier: Modifier = Modifier) {
+internal fun ShellExplorePage(home: HomeSlot?, listState: LazyListState, rise: RiseIn, modifier: Modifier = Modifier) {
     val c = Shell.colors
     Box(modifier.background(c.panel)) {
         if (home == null) {
@@ -104,16 +109,29 @@ internal fun ShellExplorePage(home: HomeSlot?, modifier: Modifier = Modifier) {
         }
         val s = home.uiState
         // YouTube can repeat an item within a section; keyed rows need each id once.
-        val genres = remember(s.moodsAndGenres) {
+        val homeGenres = remember(s.moodsAndGenres) {
             s.moodsAndGenres.distinctBy { it.id to it.params }.map { BrowseItem(id = it.id, title = it.name, thumbnail = it.thumbnail, params = it.params) }
         }
-        val newReleases = remember(s.newReleases) { s.newReleases.distinctBy { it.id } }
-        val trending = remember(s.trending) { s.trending.distinctBy { it.id }.take(10) }
-        val albumCharts = remember(s.albumCharts) { s.albumCharts.distinctBy { it.id } }
-        val community = remember(s.communityPlaylist) { s.communityPlaylist.distinctBy { it.id } }
-        val nothingYet = genres.isEmpty() && newReleases.isEmpty() && trending.isEmpty() && albumCharts.isEmpty() && community.isEmpty()
-        val listState = rememberLazyListState()
-        val rise = rememberRiseIn(listState)
+        // Signed out, Home's feed carries Explore's content. Signed in it has no moods and genres (nor,
+        // on its first page, charts or new releases): then Explore loads YouTube Music's Explore page
+        // itself, and each section Home leaves empty comes from that load. The load is asked for only while
+        // Home has no genres, but what it brought keeps filling Home's empty sections after: upstream can
+        // append moods to a signed-in Home once its feed is paged to the end, and that must not take away
+        // the new releases and charts Explore already shows.
+        val ownLoad = homeGenres.isEmpty()
+        val explore = rememberExploreState(ownLoad)
+        val own = explore.data
+        val genres = remember(homeGenres, own) { homeGenres.ifEmpty { own?.genres.orEmpty().distinctBy { it.id to it.params } } }
+        val newReleases = remember(s.newReleases, own) { s.newReleases.ifEmpty { own?.newReleases.orEmpty() }.distinctBy { it.id } }
+        val trending = remember(s.trending, own) { s.trending.ifEmpty { own?.trending.orEmpty() }.distinctBy { it.id }.take(10) }
+        val albumCharts = remember(s.albumCharts, own) { s.albumCharts.ifEmpty { own?.albumCharts.orEmpty() }.distinctBy { it.id } }
+        val community = remember(s.communityPlaylist, own) { s.communityPlaylist.ifEmpty { own?.community.orEmpty() }.distinctBy { it.id } }
+        // Placeholders only while the load is asked for or running. When it fails (or finds nothing) the
+        // page says so and offers Retry, rather than pulse placeholders forever.
+        val ownPending = ownLoad && genres.isEmpty() && (explore.loading || (!explore.failed && explore.data == null))
+        val ownFailed = ownLoad && genres.isEmpty() && !explore.loading && explore.failed
+        // Held by the caller, so Back from a page opened here finds the list where it was.
+        SettleRiseIn(rise, listState)
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val columns = when {
                 maxWidth > 1300.dp -> 6
@@ -135,16 +153,16 @@ internal fun ShellExplorePage(home: HomeSlot?, modifier: Modifier = Modifier) {
                 }
                 when {
                     genres.isNotEmpty() -> item(key = "genres") { GenreGrid(genres, columns, home, rise) }
-                    nothingYet && s.error.isNullOrBlank() -> item(key = "genres_loading") { GenrePlaceholders(columns) }
-                    nothingYet -> item(key = "offline") {
-                        Text(
-                            stringResource(Res.string.shell_explore_offline), style = Shell.type.body, color = c.ink2,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp),
-                        )
+                    ownPending -> item(key = "genres_loading") { GenrePlaceholders(columns) }
+                    ownFailed -> item(key = "failed") {
+                        val offline = !s.error.isNullOrBlank()
+                        ExploreFailed(if (offline) Res.string.shell_explore_offline else Res.string.shell_explore_failed) {
+                            ShellExploreSource.source.load(true)
+                        }
                     }
                 }
                 if (newReleases.isNotEmpty()) item(key = "new") { ExploreRow(stringResource(Res.string.shell_new_releases), newReleases, home) }
-                if (trending.isNotEmpty()) item(key = "trending") { ChartList(stringResource(Res.string.shell_trending), trending, home, twoColumns = maxWidth > 1000.dp) }
+                if (trending.isNotEmpty()) item(key = "trending") { PopularPicks(trending, home, twoColumns = maxWidth > 1000.dp) }
                 if (albumCharts.isNotEmpty()) item(key = "charts") { ExploreRow(stringResource(Res.string.shell_charts), albumCharts, home) }
                 if (community.isNotEmpty()) item(key = "community") { ExploreRow(stringResource(Res.string.shell_community), community, home) }
             }
@@ -170,6 +188,24 @@ private fun GenreGrid(genres: List<BrowseItem>, columns: Int, home: HomeSlot, ri
                     }
                     repeat(columns - tiles.size) { Spacer(Modifier.weight(1f)) }
                 }
+            }
+        }
+    }
+}
+
+/** Explore's own load ended with nothing to show: [message] and a Retry that loads again. */
+@Composable
+private fun ExploreFailed(message: StringResource, onRetry: () -> Unit) {
+    val c = Shell.colors
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(stringResource(message), style = Shell.type.body, color = c.ink2)
+        // A button, not a chip (a chip reads as an unselected tab): a 48 dp target around the 32 dp pill.
+        Box(
+            Modifier.heightIn(min = 48.dp).clip(CircleShape).shellPressable(onRetry, focusShape = CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.height(32.dp).clip(CircleShape).background(c.surface2).padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                Text(stringResource(Res.string.shell_explore_retry), style = Shell.type.label, color = c.ink)
             }
         }
     }
@@ -243,26 +279,28 @@ private fun ExploreRow(title: String, items: List<YTItem>, home: HomeSlot) {
 }
 
 /**
- * Charts the indie way: mono rank numbers, hairline rows. The top three are set in full ink, the rest
- * in ink2; lime is kept for the song that is playing (it means "now", never "top").
+ * YouTube Music's trending songs as unranked picks. Turtle receives them flattened and deduplicated,
+ * with no chart issue, market or reporting period, so their positions are not a chart: no rank
+ * numbers, and a line under the header says where the songs come from. Ranked charts wait for a
+ * verified source (roadmap, "Publish an honest chart experience"). Lime marks the song that is playing.
  */
 @Composable
-private fun ChartList(title: String, songs: List<SongItem>, home: HomeSlot, twoColumns: Boolean) {
+private fun PopularPicks(songs: List<SongItem>, home: HomeSlot, twoColumns: Boolean) {
     val c = Shell.colors
     val playback = LocalPlaybackController.current
     Spacer(Modifier.height(28.dp))
-    SectionHeader(title)
+    SectionHeader(stringResource(Res.string.shell_popular_picks))
+    Text(
+        stringResource(Res.string.shell_popular_picks_source), style = Shell.type.bodySmall, color = c.ink2,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp),
+    )
     Spacer(Modifier.height(8.dp))
     val columns = remember(songs, twoColumns) { if (twoColumns) songs.chunked((songs.size + 1) / 2) else listOf(songs) }
     Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        var offset = 0
         columns.forEach { column ->
-            val start = offset
-            offset += column.size
             Column(Modifier.weight(1f)) {
-                column.forEachIndexed { i, song ->
+                column.forEach { song ->
                     key(song.id) {
-                        val rank = start + i + 1
                         val playing = home.isPlaying.value && home.currentSongId.value == song.id
                         val (hover, hovered) = rememberHover()
                         val bg by animateColorAsState(if (hovered) c.surface2 else Color.Transparent, ShellMotion.emphasized())
@@ -272,14 +310,15 @@ private fun ChartList(title: String, songs: List<SongItem>, home: HomeSlot, twoC
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(Modifier.width(28.dp), contentAlignment = Alignment.CenterStart) {
-                                when {
-                                    playing -> Equalizer(height = 12.dp)
-                                    hovered -> Glyph(Glyphs.Play, c.ink, 16.dp)
-                                    else -> Text(rank.toString().padStart(2, '0'), style = Shell.type.index, color = if (rank <= 3) c.ink else c.ink2)
+                            // No position column: the play and "now playing" marks sit on the artwork.
+                            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                                ShellArt(song.displayThumbnailUrl, Modifier.size(44.dp), shape = RoundedCornerShape(4.dp))
+                                if (playing || hovered) {
+                                    Box(Modifier.size(44.dp).clip(RoundedCornerShape(4.dp)).background(Color(0x990B0B0C)), contentAlignment = Alignment.Center) {
+                                        if (playing) Equalizer(height = 12.dp) else Glyph(Glyphs.Play, Color.White, 16.dp)
+                                    }
                                 }
                             }
-                            ShellArt(song.displayThumbnailUrl, Modifier.size(44.dp), shape = RoundedCornerShape(4.dp))
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(song.title, style = Shell.type.body, color = if (playing) c.accent else c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

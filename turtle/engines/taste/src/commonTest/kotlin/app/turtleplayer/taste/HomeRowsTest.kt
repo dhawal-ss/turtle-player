@@ -140,6 +140,13 @@ class HomeRowsTest {
     }
 
     @Test
+    fun coldStartAnswersWithTheSameThreshold() = runTest {
+        assertTrue(engine(emptyList()).coldStart())
+        assertTrue(engine(finishes("Alpha", 49, t0)).coldStart())
+        assertFalse(engine(finishes("Alpha", 50, t0)).coldStart())
+    }
+
+    @Test
     fun shownRowsKeepTheirSlotsWhenBetterRowsArrive() = runTest { // Review Focus 3
         val e = engine()
         val first = e.selectHomeRows(listOf(betaRow, mixedRow)).ids

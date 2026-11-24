@@ -36,7 +36,10 @@ enum class HoldoutTarget {
 }
 
 data class EvalMetrics(
-    /** Hits in the top K divided by min(|held-out|, K), averaged over users. */
+    /**
+     * Hits in the top K divided by min(|held-out|, K), averaged over users. Historical capped recall
+     * (the 2% gate). Label kept for comparison with earlier REPLAY lines.
+     */
     val recallAtK: Double,
     /** Binary-relevance NDCG at [ndcgK], averaged over users. */
     val ndcg: Double,
@@ -47,9 +50,11 @@ data class EvalMetrics(
     val users: Int,
     val k: Int,
     val ndcgK: Int,
+    /** Standard recall: hits in the top K divided by |held-out|, averaged over users. Never above [recallAtK]. */
+    val standardRecallAtK: Double,
 ) {
     override fun toString(): String =
-        "recall@$k=${fmt(recallAtK)} ndcg@$ndcgK=${fmt(ndcg)} novelty=${fmt(novelty)} coverage=${fmt(coverage)} users=$users"
+        "recall@$k=${fmt(recallAtK)} ndcg@$ndcgK=${fmt(ndcg)} novelty=${fmt(novelty)} coverage=${fmt(coverage)} users=$users standardRecall@$k=${fmt(standardRecallAtK)}"
 
     private fun fmt(d: Double): String = ((d * 1000).toLong() / 1000.0).toString()
 }
@@ -83,6 +88,7 @@ class ReplayEvaluator(
         val userCount = splits.size
 
         var recall = 0.0
+        var standardRecall = 0.0
         var ndcg = 0.0
         var novelty = 0.0
         var noveltyN = 0
@@ -96,6 +102,7 @@ class ReplayEvaluator(
             recommended += recs
             val hits = recs.count { it in test }
             recall += hits.toDouble() / minOf(test.size, k)
+            standardRecall += hits.toDouble() / test.size
             var dcg = 0.0
             recs.take(ndcgK).forEachIndexed { i, key -> if (key in test) dcg += 1.0 / log2(i + 2.0) }
             var idcg = 0.0
@@ -116,6 +123,7 @@ class ReplayEvaluator(
             users = evaluated,
             k = k,
             ndcgK = ndcgK,
+            standardRecallAtK = standardRecall / n,
         )
     }
 

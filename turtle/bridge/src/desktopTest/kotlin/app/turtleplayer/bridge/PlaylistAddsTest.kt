@@ -60,4 +60,23 @@ class PlaylistAddsTest {
         assertTrue(PlaylistAdds.counts("PLabc123"))
         assertFalse(PlaylistAdds.counts("LP_DOWNLOADED"))
     }
+
+    @Test
+    fun savingAWholeMixIsNotALikeForEachSong() {
+        val adds = PlaylistAdds().apply { observe(setOf(m("PL1", "old")), 0) }
+        val mix = (1..24).map { "s$it" }
+        // Save on a mix's page, then the listener picks a playlist two minutes later.
+        adds.expectBulk(mix, 10_000)
+        adds.observe(setOf(m("PL1", "old")) + mix.map { m("PL1", it) } + m("PL1", "mine"), 130_000)
+        assertEquals(listOf(m("PL1", "mine")), adds.due(130_000 + settle))
+    }
+
+    @Test
+    fun aBulkSaveExpiresSoLaterAddsOfThoseSongsCount() {
+        val adds = PlaylistAdds().apply { observe(emptySet(), 0) }
+        adds.expectBulk(listOf("a", "b"), 1_000) // Save, then the picker was dismissed
+        val later = 1_000 + PlaylistAdds.BULK_WINDOW_MS
+        adds.observe(setOf(m("PL1", "a")), later)
+        assertEquals(listOf(m("PL1", "a")), adds.due(later + settle))
+    }
 }

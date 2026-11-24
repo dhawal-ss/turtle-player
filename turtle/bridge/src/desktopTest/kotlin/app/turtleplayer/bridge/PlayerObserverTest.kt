@@ -3,6 +3,9 @@ package app.turtleplayer.bridge
 import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.InMemoryPlayEventStore
 import app.turtleplayer.events.ListeningSessionTracker
+import app.turtleplayer.events.OpenPlayCheckpoint
+import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
 import com.metrolist.shared.model.ArtistTiny
 import com.metrolist.shared.model.SongItem
@@ -19,10 +22,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
+import kotlin.time.TimeSource
 
 class PlayerObserverTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -46,16 +54,29 @@ class PlayerObserverTest {
         musicVideoType = videoType,
     )
 
-    /** Shell's controller showing [queue], playing its first song; [sampled] completes once the observer reads it. */
+    /**
+     * Shell's controller showing [queue], playing its first song; [sampled] completes once the observer
+     * reads it, and [samples] counts the reads. [show] swaps what it shows, as a new queue does.
+     */
     private class ShellController(
         queue: List<SongItem>,
     ) : PlaybackController {
         val sampled = CompletableDeferred<Unit>()
-        override val state: StateFlow<PlaybackUiState> =
+        val samples = AtomicInteger(0)
+        private val shown =
             MutableStateFlow(PlaybackUiState(currentSong = queue.first(), isPlaying = true, queue = queue, currentQueueIndex = 0))
+        override val state: StateFlow<PlaybackUiState> = shown
+
+        fun show(
+            queue: List<SongItem>,
+            index: Int = 0,
+        ) {
+            shown.value = PlaybackUiState(currentSong = queue[index], isPlaying = true, queue = queue, currentQueueIndex = index)
+        }
 
         override fun currentPositionMs(): Long {
             sampled.complete(Unit)
+            samples.incrementAndGet()
             return 5_000
         }
 
@@ -299,5 +320,216 @@ class PlayerObserverTest {
 
             val ends = store.since(0).map { it.endReason }
             assertEquals(listOf(EndReason.SKIPPED, EndReason.COMPLETED, EndReason.SKIPPED, EndReason.STOPPED), ends)
+        }
+
+    // ---- Queue occurrences ----------------------------------------------------------------------
+
+    private val radioTag = "radio+ranked/upstream/d"
+    private val infinityTag = "infinity/library/f/familiar"
+
+    private fun observer(
+        store: InMemoryPlayEventStore,
+        controller: () -> PlaybackController? = { null },
+        timeSource: TimeSource = TimeSource.Monotonic,
+    ) = PlayerObserver(
+        ListeningSessionTracker(store),
+        controller = controller,
+        isBookChapter = { false },
+        spokenReady = {},
+        timeSource = timeSource,
+    )
+
+    @Test
+    fun aTagFromAnEarlierOccurrenceNeverLabelsALaterPlay() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer = observer(store)
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            val first = observer.beginOccurrence()
+            observer.tag("x", radioTag, first)
+            val second = observer.beginOccurrence()
+            assertTrue(second > first)
+            observer.tag("y", radioTag, first) // a page ranked for the first occurrence, back late
+            current.value = song("x")
+            observer.settle("x")
+            assertNull(observer.currentOrigin())
+            current.value = song("y")
+            observer.settle("y")
+            assertNull(observer.currentOrigin())
+            current.value = null
+            observer.settle(null)
+            assertEquals(listOf(null, null), store.since(0).map { it.surfaceDetail })
+        }
+
+    @Test
+    fun continuationPagesKeepTheirOccurrence() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer = observer(store)
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            val occ = observer.beginOccurrence()
+            observer.tag("p1", radioTag, occ) // the first page
+            current.value = song("p1")
+            observer.settle("p1")
+            observer.tagAll(listOf("p2" to radioTag), observer.occurrence()) // a continuation, same occurrence
+            current.value = song("p2")
+            observer.settle("p2")
+            assertEquals(occ, observer.occurrence())
+            assertEquals("radio", observer.currentOrigin()?.place?.tag)
+            current.value = null
+            observer.settle(null)
+            assertEquals(listOf(radioTag, radioTag), store.since(0).map { it.surfaceDetail })
+        }
+
+    @Test
+    fun aPlaylistTappedBeforeAnySampleStillDropsRadioTags() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val shell = ShellController(listOf(song("a"), song("b")))
+            val observer = observer(store, controller = { shell })
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            current.value = song("a")
+            observer.settle("a")
+            observer.tag("c", radioTag) // the radio ranked c; the listener then taps a playlist holding it
+            val before = observer.occurrence()
+            // Queue and song change together, within one sample.
+            shell.show(listOf(song("c"), song("d")))
+            current.value = song("c")
+            observer.settle("c")
+            assertNull(observer.currentOrigin(), "a radio tag labelled a playlist play")
+            assertTrue(observer.occurrence() > before, "a queue replaced outside Turtle is a new occurrence")
+
+            // Control: the Infinity Mix begins its occurrence, tags its first song, then replaces the queue.
+            val mix = observer.beginOccurrence()
+            observer.tag("i1", infinityTag, mix)
+            shell.show(listOf(song("i1"), song("i2")))
+            current.value = song("i1")
+            observer.settle("i1")
+            assertEquals("infinity", observer.currentOrigin()?.place?.tag)
+            assertEquals(mix, observer.occurrence())
+        }
+
+    @Test
+    fun aStaleControllerStateIsNoQueueReplacement() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            // Shell's state stopped updating while "old" played (nothing collects it): it never shows a or b.
+            val shell = ShellController(listOf(song("old"), song("x")))
+            val observer = observer(store, controller = { shell })
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            current.value = song("old")
+            observer.settle("old")
+            withTimeout(5_000) { shell.sampled.await() }
+            // The radio carries on: a, then b, appended and tagged while the state stays stale.
+            current.value = song("a")
+            observer.settle("a")
+            val before = observer.occurrence()
+            observer.tag("b", radioTag)
+            current.value = song("b")
+            observer.settle("b")
+            assertEquals(before, observer.occurrence(), "a stale queue was read as the listener replacing it")
+            assertEquals("radio", observer.currentOrigin()?.place?.tag)
+        }
+
+    @Test
+    fun unqueuedTagsArePrunedAfterGrace() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val time = TestTimeSource()
+            val shell = ShellController(listOf(song("a"), song("b"), song("w")))
+            val observer = observer(store, controller = { shell }, timeSource = time)
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            current.value = song("a")
+            observer.settle("a")
+            observer.tag("w", radioTag) // queued
+            observer.tag("z", radioTag) // ranked but never queued (desktop keeps a few of a page)
+            time += 11.seconds
+            val seen = shell.samples.get()
+            withTimeout(5_000) { while (shell.samples.get() < seen + 2) delay(20) }
+            shell.show(listOf(song("a"), song("b"), song("w"), song("z")), index = 2)
+            current.value = song("w")
+            observer.settle("w")
+            assertEquals("radio", observer.currentOrigin()?.place?.tag, "a queued song keeps its tag")
+            shell.show(listOf(song("a"), song("b"), song("w"), song("z")), index = 3)
+            current.value = song("z")
+            observer.settle("z")
+            assertNull(observer.currentOrigin(), "a tag for a song that never reached the queue was kept")
+        }
+
+    @Test
+    fun anOlderAttributionDoesNotLabelAfterANewOccurrence() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val observer = observer(store)
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            observer.attribute(mapOf("x" to "home-yt/-/-/row1", "y" to "home-yt/-/-/row1"))
+            current.value = song("x")
+            observer.settle("x")
+            observer.beginOccurrence() // Shell's Start radio on x
+            current.value = song("y")
+            observer.settle("y")
+            current.value = null
+            observer.settle(null)
+            assertEquals(listOf("home-yt/-/-/row1", null), store.since(0).map { it.surfaceDetail })
+        }
+
+    /** The play in progress as last saved; starts as a play saved by an earlier checkpoint. */
+    private class SavedPlay : OpenPlayCheckpoint {
+        @Volatile
+        var play: PlayEvent? =
+            PlayEvent(
+                track = song("m1").toTrackMeta(),
+                sessionId = "s",
+                position = 0,
+                surface = Surface.QUEUE,
+                startReason = StartReason.UNKNOWN,
+                endReason = EndReason.STOPPED,
+                startedAtMs = 0,
+                msPlayed = 30_000,
+                durationMs = 200_000,
+            )
+
+        override suspend fun save(play: PlayEvent?) {
+            this.play = play
+        }
+
+        override suspend fun take(): PlayEvent? = play.also { play = null }
+
+        private companion object {
+            fun song(id: String) = SongItem(id = id, title = "Title $id", thumbnail = null, artists = listOf(ArtistTiny(null, "Artist $id")), album = null, duration = 200)
+        }
+    }
+
+    @Test
+    fun pausingHistoryMidSongDropsItEvenWhenResumedBeforeItEnds() =
+        runBlocking {
+            val store = InMemoryPlayEventStore()
+            val saved = SavedPlay()
+            val paused = MutableStateFlow(false)
+            val tracker = ListeningSessionTracker(store, checkpoint = saved, recording = { !paused.value })
+            val observer = PlayerObserver(tracker, controller = { null }, spokenReady = {})
+            val current = MutableStateFlow<SongItem?>(null)
+            observer.attach(scope, current, MutableStateFlow(true), MutableSharedFlow<Unit>())
+            observer.followHistoryPause(scope, paused)
+
+            current.value = song("m1")
+            observer.settle("m1")
+            paused.value = true
+            // The saved play is cleared at once, before any periodic checkpoint.
+            withTimeout(5_000) { while (saved.play != null) delay(10) }
+            paused.value = false
+            current.value = song("m2")
+            observer.settle("m2")
+            current.value = null
+            observer.settle(null)
+
+            assertEquals(listOf("yt:m2"), store.since(0).map { it.trackKey.value })
+            assertNull(saved.take())
         }
 }

@@ -4,12 +4,9 @@ import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayEvent
 import app.turtleplayer.events.StartReason
-import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.PlayPlace
 import app.turtleplayer.taste.Served
-import app.turtleplayer.taste.SurfaceTag
 import app.turtleplayer.taste.TasteConfig
-import kotlin.math.roundToLong
 
 /** How much finished listening a listener had before a play. */
 enum class Maturity { COLD, LIGHT, ESTABLISHED }
@@ -68,27 +65,10 @@ data class OriginReport(
         table(listOf("place", "served", "maturity", "eligible", "quick", "quick%"), earlyRows)
     }
 
-    private fun StringBuilder.table(header: List<String>, rows: List<List<String>>) {
-        val widths = header.indices.map { i -> (rows.map { it[i] } + header[i]).maxOf { it.length } }
-        for (row in listOf(header) + rows) {
-            appendLine(row.mapIndexed { i, cell -> cell.padEnd(widths[i]) }.joinToString("  ").trimEnd())
-        }
-    }
-
-    private val Maturity.label get() = name.lowercase()
-
     private companion object {
         const val UNTAGGED = "(untagged)"
         const val NONE = "-"
         val POSITION_BUCKETS = listOf(null, "1", "2", "3", "4+")
-
-        fun share(part: Int, whole: Int): Double = if (whole == 0) 0.0 else part.toDouble() / whole
-
-        /** One decimal, integer math: `Double.toString` differs between targets. */
-        fun percent(rate: Double): String {
-            val tenths = (rate * 1000).roundToLong()
-            return "${tenths / 10}.${tenths % 10}%"
-        }
     }
 }
 
@@ -112,13 +92,10 @@ data class OriginReport(
  * appear only with at least one eligible play.
  *
  * Known limits: [StartReason.UNKNOWN] also follows app start, which then reads as a deliberate start.
- * A Home row whose queue runs on into upstream's radio opens a second, radio run.
+ * A Home row whose queue runs on into upstream's radio opens a second, radio run. [FirstFiveSkips]
+ * is the stricter version of the early-skip table (unknown ends and joined runs kept apart).
  */
 object OriginReporter {
-    private const val EARLY_PLAYS = 5
-    private val MANUAL_STARTS = setOf(StartReason.TAPPED, StartReason.USER_PREVIOUS, StartReason.REMOTE, StartReason.RESUMED)
-    private val DELIBERATE_STARTS = setOf(StartReason.TAPPED, StartReason.UNKNOWN)
-    private val PICKED_PLACES = setOf(PlayPlace.HOME_TURTLE, PlayPlace.HOME_GRID, PlayPlace.HOME_RECENT, PlayPlace.HOME_YOUTUBE, PlayPlace.SEARCH)
     private val INTERRUPTED = setOf(EndReason.ERROR, EndReason.STOPPED)
 
     fun report(
@@ -126,17 +103,7 @@ object OriginReporter {
         coldStartPlays: Int = TasteConfig().coldStartPlays,
         establishedPlays: Int = 500,
     ): OriginReport {
-        val local = ArrayList<Rated>()
-        var finished = 0
-        for (e in events.sortedWith(compareBy({ it.startedAtMs }, { it.sessionId }, { it.position }, { it.id }))) {
-            val maturity = when {
-                finished < coldStartPlays -> Maturity.COLD
-                finished < establishedPlays -> Maturity.LIGHT
-                else -> Maturity.ESTABLISHED
-            }
-            if (e.isFinished) finished++
-            if (e.source == EventSource.LOCAL) local += Rated(e, maturity, SurfaceTag.parse(e.surfaceDetail))
-        }
+        val local = rateAll(events, coldStartPlays, establishedPlays).local()
 
         val plays = HashMap<OriginGroup, PlayCounts>()
         for (r in local) {
@@ -145,35 +112,15 @@ object OriginReporter {
         }
 
         val early = HashMap<EarlyGroup, EarlySkips>()
-        for (session in local.groupBy { it.event.sessionId }.values) {
-            val ordered = session.sortedWith(compareBy({ it.event.position }, { it.event.startedAtMs }, { it.event.id }))
-            var place: PlayPlace? = null
-            var taken = 0
-            for ((i, r) in ordered.withIndex()) {
-                val p = r.origin?.place
-                val reason = r.event.startReason
-                val entered = i == 0 || p != place
-                val restarted = !entered && reason in DELIBERATE_STARTS
-                place = p
-                if (entered || restarted) taken = 0
-                if (p == null || taken >= EARLY_PLAYS) continue
-                val manual = when {
-                    entered -> p in PICKED_PLACES
-                    restarted -> p in PICKED_PLACES || reason == StartReason.TAPPED
-                    else -> reason in MANUAL_STARTS
-                }
-                if (manual) continue
-                taken++
-                if (r.event.endReason in INTERRUPTED) continue
-                val group = EarlyGroup(p, r.origin?.served, r.maturity)
-                early[group] = (early[group] ?: EarlySkips(0, 0)) + r.event
-            }
+        for (slot in earlySlots(local)) {
+            val r = slot.rated
+            if (r.event.endReason in INTERRUPTED) continue
+            val group = EarlyGroup(slot.place, r.origin?.served, r.maturity)
+            early[group] = (early[group] ?: EarlySkips(0, 0)) + r.event
         }
 
         return OriginReport(plays, early, localPlays = local.size, untaggedPlays = local.count { it.origin == null })
     }
 
     private fun bucket(position: Int): String = if (position >= 4) "4+" else "$position"
-
-    private class Rated(val event: PlayEvent, val maturity: Maturity, val origin: PlayOrigin?)
 }

@@ -10,7 +10,10 @@ The product and engineering plan is the source of truth for what we build and wh
 
 - Build features in our modules under `turtle/`. Never edit upstream files to add behavior.
 - When an upstream file must change, keep it to a one-line call into our code and add a row to
-  `turtle/HOOKS.md` in the same PR. CI fails the PR otherwise. Budget: under 40 hook lines.
+  `turtle/HOOKS.md` in the same PR. CI fails the PR otherwise. Budget: under 90 hook lines (raised
+  from 75 on 23 Nov 2026 for Turtle's own release identity; the ledger records each raise and the
+  running total; reconcile with the owner before adding one). Release identity lives in
+  `turtle/branding.properties` and `TurtleRelease`; see `turtle/docs/release.md`.
 - Write hook lines with fully qualified names (`com.metrolist.shared.turtle.TurtleUiSlots...`)
   instead of adding imports: one line per hook keeps the budget and merge conflicts small.
 - UI takeovers go through `shared/.../turtle/TurtleUiSlots.kt` (a file we own): add a nullable
@@ -57,7 +60,8 @@ on their quality.
 ```
 ./gradlew -p turtle/engines check                 # all engine tests
 ./gradlew -p turtle/engines :turtle-search:jvmTest  # one module
-bash turtle/scripts/check-hooks.sh origin/main     # hook-ledger guard
+bash turtle/scripts/check-hooks.sh origin/main     # hook-ledger guard (HEAD: uncommitted work only)
+bash turtle/scripts/check-release-endpoints.sh     # updaters point at Turtle's releases
 ```
 
 ## Commits

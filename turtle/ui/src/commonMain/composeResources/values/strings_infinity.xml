@@ -15,8 +15,16 @@
     <string name="shell_inf_why_genre">NEW · %1$s</string>
     <string name="shell_inf_why_more_like">BECAUSE YOU LIKED %1$s</string>
     <string name="shell_inf_why_for_you">NEW FOR YOU</string>
-    <string name="shell_inf_blend_familiar">%1$d% favourites</string>
+    <!-- The dial sets a target blend; the mix gets as close as the listening history allows. -->
+    <string name="shell_inf_blend_familiar">Aim: %1$d% favourites</string>
     <string name="shell_inf_blend_new">%1$d% new</string>
+    <plurals name="shell_inf_blend_sparse">
+        <item quantity="one">You have %1$d favourite so far, so most picks will be new until you like or finish more songs.</item>
+        <item quantity="other">You have %1$d favourites so far, so most picks will be new until you like or finish more songs.</item>
+    </plurals>
+    <string name="shell_inf_blend_sparse_none">No favourites yet, so picks will be new until you like or finish some songs.</string>
+    <!-- How the last Infinity Mix batch came out, shown while it plays. -->
+    <string name="shell_inf_blend_actual">Up next: %1$d of %2$d favourites</string>
     <string name="shell_inf_resteered">Up next re-mixed</string>
     <string name="shell_genre_pop">Pop</string>
     <string name="shell_genre_hiphop">Hip-hop</string>

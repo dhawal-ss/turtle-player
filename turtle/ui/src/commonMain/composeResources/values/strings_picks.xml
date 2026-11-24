@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home card for a new listener, in the Made for you slot. -->
+    <string name="shell_picks_card_title">Start from artists you like</string>
+    <string name="shell_picks_card_body">Pick a few and Made for you builds mixes from them. Or just press play.</string>
+    <string name="shell_picks_card_pick">Pick artists</string>
+    <string name="shell_picks_skip">Skip</string>
+    <!-- The picks sheet. -->
+    <string name="shell_picks_title">Your artists</string>
+    <string name="shell_picks_body">Made for you starts from these until your own listening takes over. Nothing is added to your history, and you can change them anytime in Settings.</string>
+    <string name="shell_picks_search">Search artists</string>
+    <string name="shell_picks_clear_search">Clear search</string>
+    <string name="shell_picks_suggested">SUGGESTED</string>
+    <string name="shell_picks_results">RESULTS</string>
+    <!-- Picked artists so far, e.g. "PICKED 2 OF 5". -->
+    <string name="shell_picks_selected">PICKED %1$d OF %2$d</string>
+    <string name="shell_picks_none_found">No artists found. Searching needs a connection.</string>
+    <string name="shell_picks_paused">Listening history is paused, so your picks are saved but related music cannot be found until you resume it.</string>
+    <string name="shell_picks_done">Done</string>
+    <string name="shell_picks_clear">Clear picks</string>
+    <string name="shell_picks_remove">Remove %1$s</string>
+    <string name="shell_picks_saving">Building your mixes</string>
+    <!-- Settings, Recommendations page. -->
+    <string name="shell_set_picks_group">Starting artists</string>
+    <string name="shell_set_picks">Your artists</string>
+    <string name="shell_set_picks_none">Pick a few artists for Made for you to start from while your history is new.</string>
+    <string name="shell_set_picks_edit">Edit</string>
+</resources>

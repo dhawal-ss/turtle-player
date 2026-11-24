@@ -39,8 +39,8 @@ class MetrolistHistoryImport(
         }
         val report = importer.import(plays, before)
         store.setPref(PREF_DONE, before.toString())
-        TurtleLog.info("history: imported ${report.plays} earlier plays (${report.distinctTracks} songs)")
-        return report.plays > 0
+        TurtleLog.info("history: imported ${if (report.committed) report.plays else 0} earlier plays (${report.distinctTracks} songs)")
+        return report.committed && report.plays > 0
     }
 
     private companion object {

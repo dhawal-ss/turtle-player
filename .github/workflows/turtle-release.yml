@@ -1,0 +1,374 @@
+# Turtle's own release: builds a signed Android APK and the Windows portable zip from a v<version> tag
+# and attaches them, with SHA256SUMS, to a DRAFT release in this repository. A maintainer reviews the
+# draft and publishes it by hand. Procedure, secrets and rollback: turtle/docs/release.md.
+#
+# No secret lives in the repository: signing material comes only from repository secrets.
+name: Turtle release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turtle-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check version, changelog and repository
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      version_code: ${{ steps.identity.outputs.version_code }}
+      application_id: ${{ steps.identity.outputs.application_id }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read turtle/branding.properties
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          prop() { sed -n "s/^$1=//p" turtle/branding.properties | tr -d '\r' | head -n1; }
+          version=$(prop version)
+          version_code=$(prop androidVersionCode)
+          application_id=$(prop androidApplicationId)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version '$version' is not MAJOR.MINOR.PATCH"; exit 1; }
+          [[ "$version_code" =~ ^[1-9][0-9]*$ ]] || { echo "::error::androidVersionCode '$version_code' is not a positive integer"; exit 1; }
+          [[ -n "$application_id" ]] || { echo "::error::androidApplicationId is missing"; exit 1; }
+          {
+            echo "version=$version"
+            echo "version_code=$version_code"
+            echo "application_id=$application_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag must be v<version>
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Upstream's nightly.yml publishes a "nightly" release; Turtle never does (disable nightly.yml).
+          [[ "$TAG" != nightly ]] || { echo "::error::Turtle never publishes a nightly tag"; exit 1; }
+          [[ "$TAG" == "v$VERSION" ]] || { echo "::error::Tag $TAG does not match v$VERSION in turtle/branding.properties"; exit 1; }
+
+      - name: Releases go only to TurtleRelease.REPOSITORY
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          declared=$(sed -n 's/.*const val REPOSITORY = "\(.*\)".*/\1/p' turtle/bridge/src/commonMain/kotlin/app/turtleplayer/bridge/TurtleRelease.kt)
+          [[ "$declared" == "$REPOSITORY" ]] || { echo "::error::TurtleRelease.REPOSITORY is '$declared' but this workflow runs in '$REPOSITORY'"; exit 1; }
+
+      - name: androidVersionCode must grow
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION_CODE: ${{ steps.identity.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          # Compare with every earlier Turtle tag, not the nearest tag: upstream's own v<version> tags
+          # (no turtle/branding.properties) arrive with upstream merges and would hide Turtle's.
+          highest=0
+          highest_tag=
+          while read -r tag; do
+            [[ -n "$tag" && "$tag" != "$TAG" ]] || continue
+            code=$(git show "$tag:turtle/branding.properties" 2>/dev/null | sed -n 's/^androidVersionCode=//p' | tr -d '\r' | head -n1 || true)
+            [[ "$code" =~ ^[0-9]+$ ]] || continue
+            if (( code > highest )); then highest=$code; highest_tag=$tag; fi
+          done < <(git tag --list 'v*.*.*')
+          if [[ -z "$highest_tag" ]]; then
+            echo "No earlier Turtle tag; first Turtle release."
+            exit 0
+          fi
+          (( VERSION_CODE > highest )) || { echo "::error::androidVersionCode $VERSION_CODE must be greater than $highest in $highest_tag"; exit 1; }
+          echo "androidVersionCode $highest ($highest_tag) -> $VERSION_CODE"
+
+      - name: Changelog must have a section for this version
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '
+            $0 ~ "^## " { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+            END { if (!found) exit 1 }
+          ' turtle/docs/changelog.md > release-notes.md || { echo "::error::turtle/docs/changelog.md has no '## $VERSION' section"; exit 1; }
+          [[ -s release-notes.md ]] || { echo "::error::The '## $VERSION' section in turtle/docs/changelog.md is empty"; exit 1; }
+
+      - name: Upstream merge is at most seven days old
+        shell: bash
+        env:
+          ALLOW_STALE: ${{ vars.TURTLE_ALLOW_STALE_UPSTREAM }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify -q origin/upstream-mirror > /dev/null; then
+            echo "::warning::No upstream-mirror branch; cannot check how old the upstream merge is (turtle/FORK.md)."
+            exit 0
+          fi
+          base=$(git merge-base HEAD origin/upstream-mirror)
+          if [[ "$base" == "$(git rev-parse origin/upstream-mirror)" ]]; then
+            echo "Every upstream-mirror commit is merged; nothing newer to merge."
+            exit 0
+          fi
+          merged=$(git log -1 --format=%ct "$base")
+          age_days=$(( ($(date +%s) - merged) / 86400 ))
+          echo "Newest upstream commit in this release is $age_days days old."
+          if (( age_days > 7 )); then
+            if [[ "$ALLOW_STALE" == "true" ]]; then
+              echo "::warning::Upstream merge is $age_days days old; allowed by TURTLE_ALLOW_STALE_UPSTREAM."
+            else
+              echo "::error::Upstream merge is $age_days days old (turtle/FORK.md allows 7). Merge upstream first, or set the repository variable TURTLE_ALLOW_STALE_UPSTREAM=true for this release."
+              exit 1
+            fi
+          fi
+
+      - name: Updaters point at Turtle's releases
+        shell: bash
+        run: bash turtle/scripts/check-release-endpoints.sh
+
+      - name: Keep the release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, the pair upstream's nightly.yml uses
+        with:
+          name: turtle-release-notes
+          path: release-notes.md
+          retention-days: 7
+
+  engines:
+    name: Engine tests and golden sets
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare CI Gradle
+        uses: ./.github/actions/prepare-ci-gradle
+        with:
+          cache-scope: turtle-release-engines
+          persist-configuration-cache: 'false'
+      - name: Engine tests
+        run: ./gradlew -p turtle/engines check --console=plain --no-daemon
+
+  bridge:
+    name: Bridge tests
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Prepare CI Gradle
+        uses: ./.github/actions/prepare-ci-gradle
+        with:
+          cache-scope: turtle-release-bridge
+          persist-configuration-cache: 'false'
+      - name: Bridge tests
+        run: ./gradlew :turtle-bridge:desktopTest --console=plain --no-daemon
+
+  android:
+    name: Signed Android APK
+    needs: [prepare, engines, bridge]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      APPLICATION_ID: ${{ needs.prepare.outputs.application_id }}
+      VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Prepare CI Gradle
+        uses: ./.github/actions/prepare-ci-gradle
+        with:
+          cache-scope: turtle-release-android
+          # The release build reads signing secrets at configuration time; keep them out of the cache.
+          persist-configuration-cache: 'false'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: platform-tools
+
+      - name: Decode the Turtle signing key
+        shell: bash
+        env:
+          TURTLE_KEYSTORE_BASE64: ${{ secrets.TURTLE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in TURTLE_KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [[ -n "${!name}" ]] || { echo "::error::Repository secret $name is not set (turtle/docs/release.md)"; exit 1; }
+          done
+          umask 077
+          printf '%s' "$TURTLE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/turtle-release.keystore"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/turtle-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build the release APK
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LYPRIO_BASE_URL: ${{ secrets.LYPRIO_BASE_URL }}
+          LYPRIO_HMAC_KEY: ${{ secrets.LYPRIO_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          ./gradlew :androidApp:assembleRelease "-PappVersion=$VERSION" \
+            -x :androidApp:lintVitalRelease \
+            --no-configuration-cache --no-daemon --console=plain \
+            "-Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -Dfile.encoding=UTF-8"
+          rm -f "$KEYSTORE_PATH"
+
+      - name: Check application id, version and signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(androidApp/build/outputs/apk/release/*.apk)
+          (( ${#apks[@]} == 1 )) || { echo "::error::Expected one release APK, found ${#apks[@]}: ${apks[*]}"; exit 1; }
+          apk="${apks[0]}"
+          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          badging=$("$build_tools/aapt2" dump badging "$apk")
+          echo "$badging" | head -n1
+          echo "$badging" | grep -q "package: name='$APPLICATION_ID' versionCode='$VERSION_CODE' versionName='$VERSION'" \
+            || { echo "::error::APK identity is not $APPLICATION_ID $VERSION_CODE $VERSION"; exit 1; }
+          certs=$("$build_tools/apksigner" verify --print-certs "$apk")
+          if [[ -f turtle/release/signing-cert.sha256 ]]; then
+            expected=$(tr -d ' :\r\n' < turtle/release/signing-cert.sha256 | tr 'A-F' 'a-f')
+            actual=$(echo "$certs" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1 | tr -d ' :' | tr 'A-F' 'a-f')
+            [[ "$actual" == "$expected" ]] || { echo "::error::APK is signed by $actual, not the pinned Turtle key $expected"; exit 1; }
+          else
+            echo "::warning::turtle/release/signing-cert.sha256 is missing; pin the certificate (turtle/docs/release.md)."
+          fi
+          mkdir -p release-assets
+          # AppUpdateManager prefers this exact name.
+          cp "$apk" release-assets/androidApp-release.apk
+
+      - name: Keep the APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, the pair upstream's nightly.yml uses
+        with:
+          name: turtle-android
+          path: release-assets/androidApp-release.apk
+          retention-days: 7
+
+  windows:
+    name: Windows portable zip
+    needs: [prepare, engines, bridge]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Prepare CI Gradle
+        uses: ./.github/actions/prepare-ci-gradle
+        with:
+          cache-scope: turtle-release-windows
+          persist-configuration-cache: 'false'
+
+      - name: Generate installer icons
+        uses: ./.github/actions/generate-icons
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: metro-wv2-helper/global.json
+
+      - name: Build Windows login helper
+        shell: pwsh
+        working-directory: metro-wv2-helper
+        run: |
+          $output = "../desktopApp/src/desktopMain/resources/windows"
+          dotnet publish "metro-wv2-helper.csproj" --configuration Release --runtime win-x64 --self-contained true --output $output -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:PublishReadyToRun=true
+          if ($LASTEXITCODE -ne 0) { throw "Windows login helper build failed with exit code $LASTEXITCODE" }
+
+      - name: Build the portable zip
+        shell: bash
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          LYPRIO_BASE_URL: ${{ secrets.LYPRIO_BASE_URL }}
+          LYPRIO_HMAC_KEY: ${{ secrets.LYPRIO_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          ./gradlew :desktopApp:assembleWindowsRelease "-PappVersion=$VERSION" \
+            -Pmetrolist.debug=false \
+            -Pmetrolist.desktop.arch=x86_64 \
+            --no-configuration-cache --no-daemon --console=plain
+          mkdir -p release-assets
+          # The packaging task still names the zip after upstream (the exe rename is deferred, HOOKS.md).
+          mv dist/Metrolist-Desktop-Windows.zip "release-assets/Turtle-windows-x64-$VERSION.zip"
+
+      - name: Keep the zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, the pair upstream's nightly.yml uses
+        with:
+          name: turtle-windows
+          path: release-assets/*.zip
+          retention-days: 7
+
+  publish:
+    name: Draft release
+    needs: [prepare, android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Collect assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: artifacts
+
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp artifacts/turtle-android/androidApp-release.apk release-assets/
+          cp artifacts/turtle-windows/*.zip release-assets/
+          cp artifacts/turtle-release-notes/release-notes.md .
+          (cd release-assets && sha256sum -- * > SHA256SUMS)
+          cat release-assets/SHA256SUMS
+
+      - name: Create the draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Drafts are invisible to both updaters until a maintainer publishes them.
+          gh release create "$TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "Turtle $VERSION" \
+            --notes-file release-notes.md

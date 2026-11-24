@@ -78,7 +78,10 @@ fun interface LocalTimeResolver {
  * the player could not classify is unknown, never a skip.
  *
  * A track that never actually played (restored paused, then replaced) records nothing. Plays are
- * followed but stored only while [recording] is true, both at their start and at their end.
+ * followed but stored only when [recording] stays true for the whole play: once history is paused at
+ * any point (seen through [onHistoryPaused], a signal or a checkpoint), the open play is dropped and its
+ * checkpoint cleared, even if history resumes before it ends. Explicit votes (likes, playlist adds,
+ * Not interested) are stored separately by the app and are not affected.
  */
 class ListeningSessionTracker(
     private val store: PlayEventStore,
@@ -95,8 +98,8 @@ class ListeningSessionTracker(
         val position: Int,
         val sessionId: String,
         var durationMs: Long?,
-        /** Whether history was being recorded when the play started. */
-        val recordable: Boolean,
+        /** False once history was paused at any point during the play; it is then never stored. */
+        var recordable: Boolean,
         var playingSinceMs: Long? = null,
         var accumulatedMs: Long = 0,
         var seeks: Int = 0,
@@ -113,6 +116,13 @@ class ListeningSessionTracker(
     private class Closed(val event: PlayEvent?)
 
     private val mutex = Mutex()
+
+    /**
+     * Serializes [checkpoint] end to end, including the save, so a stale snapshot can never land after a
+     * newer one (which could resurrect a dropped play or make [recover] append a closed play twice).
+     * Lock order is always [checkpointLock], then [mutex].
+     */
+    private val checkpointLock = Mutex()
     private var open: Open? = null
     private var sessionId: String? = null
     private var sessionPosition = 0
@@ -131,12 +141,24 @@ class ListeningSessionTracker(
     /** Saves the play in progress (if it has been heard) through [checkpoint]; call every few seconds. */
     suspend fun checkpoint() {
         val cp = checkpoint ?: return
-        val provisional = mutex.withLock {
-            val o = open ?: return@withLock null
-            val now = clock.nowMs()
-            if (o.recordable && recording() && o.playedMs(now) >= MIN_CHECKPOINT_MS) event(o, EndReason.STOPPED, now) else null
+        checkpointLock.withLock {
+            val provisional = mutex.withLock {
+                val o = open ?: return@withLock null
+                val now = clock.nowMs()
+                if (!recording()) o.recordable = false
+                if (o.recordable && o.playedMs(now) >= MIN_CHECKPOINT_MS) event(o, EndReason.STOPPED, now) else null
+            }
+            cp.save(provisional)
         }
-        cp.save(provisional)
+    }
+
+    /**
+     * Listening history was paused: the open play is never stored, even if history resumes before it
+     * ends, and its saved checkpoint is cleared right away.
+     */
+    suspend fun onHistoryPaused() {
+        mutex.withLock { open?.recordable = false }
+        checkpoint()
     }
 
     /**
@@ -158,6 +180,8 @@ class ListeningSessionTracker(
 
     private fun handle(signal: PlaybackSignal, now: Long): Closed? {
         val current = open
+        // Any signal seen while history is paused latches the drop of the open play.
+        if (!recording()) current?.recordable = false
         return when (signal) {
             is PlaybackSignal.TrackStarted -> {
                 val closed = current?.let { close(it, inferEnd(it, signal.reason, now), now) }
@@ -244,7 +268,7 @@ class ListeningSessionTracker(
 
     /**
      * Closes [o]. Nothing is stored when it never actually played, which is not a listening event, or
-     * when history was paused at its start or its end.
+     * when history was paused at any point the tracker saw during the play.
      */
     private fun close(o: Open, reason: EndReason, now: Long): Closed {
         open = null
@@ -276,6 +300,7 @@ class ListeningSessionTracker(
             lessLikeThis = o.lessLikeThis,
             context = PlayContext(hour, weekday, device, network),
             surfaceDetail = o.start.surfaceDetail,
+            labelVersion = PlayEvent.LABEL_VERSION,
         )
     }
 

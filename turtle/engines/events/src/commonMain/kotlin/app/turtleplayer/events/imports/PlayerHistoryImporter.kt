@@ -20,17 +20,25 @@ data class PastPlay(val track: TrackMeta, val atMs: Long, val playedMs: Long?)
  * Imports [PastPlay]s once, so a listener upgrading from Metrolist starts with their history
  * instead of a cold engine. Metrolist keeps recording its own history beside ours, so only plays
  * before [ListeningSessionTracker]'s first recorded play count (pass it as `before`); later ones
- * would be counted twice. Re-running replaces the previous import.
+ * would be counted twice. Re-running replaces the previous import, all or nothing; a run with
+ * nothing to import leaves it as it was.
  *
  * Without a known play time a row counts as an ordinary listen (heard, not finished, not skipped);
  * with one, as finished at 80% of the song, otherwise stopped.
  */
 class PlayerHistoryImporter(private val store: PlayEventStore, private val time: LocalTimeResolver) {
-    suspend fun import(plays: List<PastPlay>, before: Long): ImportReport {
-        var ignored = 0
+    /**
+     * Stores [plays] before [before] at once when that is safe (see [ImportPreview.canCommit] and
+     * [ImportPreview.shrinksHistory]); otherwise writes nothing and reports `committed = false`.
+     */
+    suspend fun import(plays: List<PastPlay>, before: Long): ImportReport = store.commitIfSafe(stage(plays, before))
+
+    /** Sorts and counts [plays] without writing anything; plays at or after [before] are excluded. */
+    suspend fun stage(plays: List<PastPlay>, before: Long): StagedImport {
+        val tally = ImportTally().apply { filesRead = 1 }
         val events = plays.mapNotNull { p ->
             if (p.atMs >= before || p.atMs <= 0) {
-                ignored++
+                tally.excluded++
                 return@mapNotNull null
             }
             val duration = p.track.durationMs?.takeIf { it > 0 }
@@ -49,7 +57,7 @@ class PlayerHistoryImporter(private val store: PlayEventStore, private val time:
                 source = EventSource.METROLIST_IMPORT,
             )
         }
-        return finishImport(EventSource.METROLIST_IMPORT, events, 1, emptyList(), ignored, 0, store, time)
+        return stageImport(EventSource.METROLIST_IMPORT, events, tally, store, time)
     }
 
     private companion object {

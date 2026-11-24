@@ -17,8 +17,19 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.pointer.pointerInput
+import com.metrolist.shared.ui.navigation.NavigationBackHandler
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -134,39 +145,37 @@ import com.metrolist.shared.generated.resources.Res as SharedRes
 
 /** Desktop layout state that outlives screens (panel open, library collapsed, filter). */
 object ShellDesktop {
-    var nowPlayingOpen by mutableStateOf(true)
     var libraryCollapsed by mutableStateOf(false)
     var libraryFilter by mutableStateOf(LibraryFilter.ALL)
     var libraryQuery by mutableStateOf("")
 
-    /** True while Explore covers the page (our own page; any upstream navigation closes it). */
-    var explore by mutableStateOf(false)
-
+    /** Explore, our own page over the page: alive while navigation stays on it or on pages opened from it. Shared with Android's tab. */
+    internal val explore: ExploreNav get() = ShellBrowse.nav
 
     /** The last Home Shell drew: Explore reads its YouTube Music data and opener. */
-    internal var home by mutableStateOf<HomeSlot?>(null)
+    internal val home: HomeSlot? get() = ShellBrowse.home
 
     /** The track desktop restores at launch; it is loaded into the player only on play. */
     internal var restoredSong by mutableStateOf<SongItem?>(null)
 
-    /** What the right panel shows: Now Playing, or one of Shell's player surfaces. */
-    var panel by mutableStateOf(DesktopPanel.NOW_PLAYING)
+    /** The right panel at either width: docked beside the page, or over it in narrow windows. */
+    internal val panelState = DesktopPanelState()
 
-    /** Shows [mode] in the right panel, or closes the panel when it is already showing it. */
-    fun toggle(mode: DesktopPanel) {
-        if (nowPlayingOpen && panel == mode) {
-            nowPlayingOpen = false
-        } else {
-            panel = mode
-            nowPlayingOpen = true
+    /** The queue's scroll position, kept while the panel moves between docked and overlay. */
+    internal val queueList = LazyListState()
+
+    /** What the right panel shows: Now Playing, or one of Shell's player surfaces. */
+    var panel: DesktopPanel
+        get() = panelState.panel
+        set(value) {
+            panelState.panel = value
         }
-    }
+
+    /** Shows [mode] in the right panel, or closes the panel when it is already showing it. Ignored with no song. */
+    fun toggle(mode: DesktopPanel, hasSong: Boolean = true) = panelState.toggle(mode, hasSong)
 
     /** Opens [mode] in the right panel. */
-    fun show(mode: DesktopPanel) {
-        panel = mode
-        nowPlayingOpen = true
-    }
+    fun show(mode: DesktopPanel) = panelState.show(mode)
 }
 
 enum class LibraryFilter { ALL, PLAYLISTS, ARTISTS, ALBUMS }
@@ -179,6 +188,9 @@ private val SidebarWidth = 300.dp
 private val SidebarCollapsedWidth = 72.dp
 private val NowPlayingWidth = 340.dp
 
+/** Below this width the right panel opens over the page instead of beside it. */
+private val PanelBreakpoint = 1100.dp
+
 /**
  * Shell's desktop layout, familiar from Spotify: a black frame holding three rounded panels, Your
  * Library on the left, the page in the middle and the Now Playing view on the right. Upstream's
@@ -190,20 +202,38 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
     val c = Shell.colors
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
-    val route = LocalNavigator.current.state.currentRoute
-    LaunchedEffect(route) { ShellDesktop.explore = false }
+    // Explore follows navigation: it shows only on the route it opened over, stays alive under pages
+    // opened from it (so Back returns to it, scrolled where it was) and goes once its stack is left.
+    val nav = LocalNavigator.current.state
+    val top: Any = nav.topLevelRoute
+    val stack: List<Any> = nav.backStacks.getValue(nav.topLevelRoute).toList()
+    LaunchedEffect(top, stack) { ShellDesktop.explore.follow(top, stack) }
+    val exploreVisible = ShellDesktop.explore.visible(top, stack)
+    val exploreSelected = ShellDesktop.explore.selected(top, stack)
     BoxWithConstraints(slot.modifier.fillMaxSize().background(c.frame)) {
         val collapsed = ShellDesktop.libraryCollapsed || maxWidth < 960.dp
         val sidebarWidth by animateDpAsState(if (collapsed) SidebarCollapsedWidth else SidebarWidth, ShellMotion.emphasized())
-        val showNowPlaying = ShellDesktop.nowPlayingOpen && (state.currentSong ?: ShellDesktop.restoredSong) != null && maxWidth >= 1100.dp
+        val narrow = maxWidth < PanelBreakpoint
+        val panelState = ShellDesktop.panelState
+        LaunchedEffect(narrow) { panelState.resized(narrow) }
+        val hasSong = (state.currentSong ?: ShellDesktop.restoredSong) != null
+        val showNowPlaying = !narrow && panelState.dockedOpen && hasSong
         Row(Modifier.fillMaxSize()) {
             if (slot.navigationVisible) {
-                DesktopSidebar(slot, library, collapsed, Modifier.width(sidebarWidth).fillMaxHeight().padding(start = 8.dp, top = 8.dp, bottom = 8.dp))
+                DesktopSidebar(
+                    slot, library, collapsed, exploreSelected,
+                    onExplore = { ShellDesktop.explore.open(top, stack) },
+                    modifier = Modifier.width(sidebarWidth).fillMaxHeight().padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
+                )
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
-                CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
+                Box(Modifier.fillMaxSize().hiddenUnderBrowse(exploreVisible)) {
+                    CompositionLocalProvider(LocalShellGround provides c.panel) { SlotContent(slot) }
+                }
                 // Explore sits over the page (inside upstream's 8 dp gutters) so the page underneath keeps its state.
-                ExploreOverlay()
+                ExploreOverlay(exploreVisible)
+                // Narrow windows: queue, lyrics and devices open over the page instead of beside it.
+                CompactPanelOverlay(library, visible = narrow && panelState.overlayOpen && hasSong, narrow = narrow)
                 // Snackbars (queue undo, likes) rise over the bottom of the page, above the player bar.
                 ShellSnackbarHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
             }
@@ -212,8 +242,48 @@ internal fun ShellDesktopLayout(slot: NavigationSlot, library: DesktopLibrarySlo
                 enter = expandHorizontally(ShellMotion.emphasized(), expandFrom = Alignment.Start) + fadeIn(ShellMotion.emphasized()),
                 exit = shrinkHorizontally(ShellMotion.exit(), shrinkTowards = Alignment.Start) + fadeOut(ShellMotion.exit()),
             ) {
-                RightPanel(library, Modifier.width(NowPlayingWidth).fillMaxHeight().padding(top = 8.dp, bottom = 8.dp, end = 8.dp))
+                // The kept queue scroll goes to whichever panel is current; one fading out gets its own.
+                RightPanel(
+                    library, Modifier.width(NowPlayingWidth).fillMaxHeight().padding(top = 8.dp, bottom = 8.dp, end = 8.dp),
+                    queueState = ShellDesktop.queueList.takeIf { !narrow },
+                )
             }
+        }
+    }
+}
+
+/**
+ * The right panel over the page in windows too narrow to dock it: a scrim that closes it on click,
+ * the panel sliding in from the right edge, and Escape or mouse Back closing it first.
+ */
+@Composable
+private fun BoxScope.CompactPanelOverlay(library: DesktopLibrarySlot, visible: Boolean, narrow: Boolean) {
+    NavigationBackHandler(enabled = visible) { ShellDesktop.panelState.close() }
+    AnimatedVisibility(
+        visible,
+        enter = fadeIn(ShellMotion.emphasized()),
+        exit = fadeOut(ShellMotion.exit()),
+        modifier = Modifier.matchParentSize(),
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            Box(
+                Modifier.fillMaxSize().padding(8.dp).clip(PanelShape).background(Color.Black.copy(alpha = 0.45f))
+                    .pointerInput(Unit) { detectTapGestures { ShellDesktop.panelState.close() } },
+            )
+            // The docked width, leaving a strip of the page (and its scrim) to click away on. A width
+            // set before any fill: widthIn after fillMaxWidth would be clamped back to the fill.
+            val panelWidth = minOf(NowPlayingWidth, (maxWidth - 72.dp).coerceAtLeast(0.dp))
+            RightPanel(
+                library,
+                Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(panelWidth)
+                    .animateEnterExit(
+                        enter = slideInHorizontally(ShellMotion.emphasized()) { it / 3 },
+                        exit = slideOutHorizontally(ShellMotion.exit()) { it / 3 },
+                    )
+                    .padding(top = 8.dp, bottom = 8.dp, end = 8.dp)
+                    .shadow(24.dp, PanelShape),
+                queueState = ShellDesktop.queueList.takeIf { narrow },
+            )
         }
     }
 }
@@ -233,30 +303,38 @@ private fun navGlyph(key: String, selected: Boolean): ImageVector? = when (key.l
 }
 
 @Composable
-private fun DesktopSidebar(slot: NavigationSlot, library: DesktopLibrarySlot, collapsed: Boolean, modifier: Modifier) {
+private fun DesktopSidebar(
+    slot: NavigationSlot,
+    library: DesktopLibrarySlot,
+    collapsed: Boolean,
+    exploreSelected: Boolean,
+    onExplore: () -> Unit,
+    modifier: Modifier,
+) {
     val c = Shell.colors
     val libraryIndex = slot.items.indexOfFirst { it.key.equals("library", ignoreCase = true) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Destinations card: Home first, then upstream's other pages (History, Stats, Together).
         Column(Modifier.fillMaxWidth().clip(PanelShape).background(c.panel).padding(8.dp)) {
-            val explore = ShellDesktop.explore
             slot.items.forEachIndexed { i, item ->
                 if (i == libraryIndex) return@forEachIndexed
-                val selected = !explore && i == slot.selectedIndex
+                // Explore and the pages opened from it keep Explore selected.
+                val selected = !exploreSelected && i == slot.selectedIndex
                 NavRow(navGlyph(item.key, selected) ?: item.icon, item.label, selected, collapsed) {
-                    if (selected) ShellReselect.fire(item.key)
-                    ShellDesktop.explore = false; slot.onSelect(i)
+                    // Reselecting Home closes an open mix (ShellHome); switching pages leaves it closed for next time.
+                    if (selected) ShellReselect.fire(item.key) else ShellMixDetails.close()
+                    ShellDesktop.explore.close(); slot.onSelect(i)
                 }
                 if (item.key.equals("home", ignoreCase = true)) {
-                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), explore, collapsed) { ShellDesktop.explore = true }
+                    NavRow(Glyphs.Explore, stringResource(Res.string.shell_explore), exploreSelected, collapsed, onExplore)
                 }
             }
         }
         LibraryCard(
             library = library,
             collapsed = collapsed,
-            librarySelected = libraryIndex >= 0 && libraryIndex == slot.selectedIndex,
-            onOpenLibrary = { ShellDesktop.explore = false; if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
+            librarySelected = !exploreSelected && libraryIndex >= 0 && libraryIndex == slot.selectedIndex,
+            onOpenLibrary = { ShellDesktop.explore.close(); if (libraryIndex >= 0) slot.onSelect(libraryIndex) },
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         slot.footer?.invoke()
@@ -392,7 +470,8 @@ private fun LibraryCard(
             }
         }
         if (!collapsed) {
-            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Scrolls sideways: at large text sizes the three chips are wider than the sidebar.
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
                     LibraryFilter.PLAYLISTS to Res.string.shell_playlists,
                     LibraryFilter.ARTISTS to Res.string.shell_artists,
@@ -515,7 +594,7 @@ private fun rememberDesktopServices(library: DesktopLibrarySlot, onToast: (Strin
  * devices, more, sleep timer) in its place. Upstream's drawers and expanded player are never shown.
  */
 @Composable
-private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
+private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier, queueState: LazyListState?) {
     val c = Shell.colors
     val controller = LocalPlaybackController.current
     val state by controller.rememberCalmState()
@@ -525,6 +604,8 @@ private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
     val tint = artworkTint(song.displayThumbnailUrl, 0.14f, base = c.panel)
     val requested = ShellDesktop.panel
     val mode = if (services == null && requested != DesktopPanel.DEVICES) DesktopPanel.NOW_PLAYING else requested
+    // Without desktop services only Now Playing (and devices) can show: the player bar must not light Queue or Lyrics.
+    SideEffect { if (mode != requested) ShellDesktop.panel = mode }
     LaunchedEffect(toast) { if (toast != null) { delay(2400); toast = null } }
     Box(modifier.clip(PanelShape).background(tint)) {
         Column(Modifier.fillMaxSize()) {
@@ -545,7 +626,7 @@ private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
                 if (mode == DesktopPanel.NOW_PLAYING && services != null) {
                     SmallIconButton(Glyphs.More, stringResource(Res.string.shell_more)) { ShellDesktop.panel = DesktopPanel.MORE }
                 }
-                SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.nowPlayingOpen = false }
+                SmallIconButton(Glyphs.Close, stringResource(Res.string.shell_hide_now_playing)) { ShellDesktop.panelState.close() }
             }
             AnimatedContent(mode, transitionSpec = { fadeIn(ShellMotion.emphasized()) togetherWith fadeOut(ShellMotion.exit()) }, modifier = Modifier.weight(1f)) { m ->
                 val pad = Modifier.fillMaxSize().padding(horizontal = 16.dp)
@@ -555,7 +636,7 @@ private fun RightPanel(library: DesktopLibrarySlot, modifier: Modifier) {
                     Column(pad.verticalScroll(rememberScrollState())) { ShellDevices(state, controller) }
                 } else if (services != null) {
                     when (m) {
-                        DesktopPanel.QUEUE -> ShellQueueList(state, controller, services, pad, PaddingValues(bottom = 16.dp))
+                        DesktopPanel.QUEUE -> ShellQueueList(state, controller, services, pad, PaddingValues(bottom = 16.dp), listState = queueState ?: rememberLazyListState())
                         DesktopPanel.LYRICS -> {
                             val live = rememberLivePosition(controller, state.isPlaying, song.id)
                             ShellLyricsFor(song, services, live, { controller.seekTo(it); live.ms = it }, pad, compact = true, contentPadding = PaddingValues(vertical = 16.dp))
@@ -620,15 +701,19 @@ private fun NowPlayingContent(song: SongItem, state: com.metrolist.shared.ui.pla
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpNextCard(queue: List<SongItem>, current: Int, onPlay: (Int) -> Unit) {
     val c = Shell.colors
     val next = (current + 1 until queue.size).take(4).map { it to queue[it] }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(Res.string.shell_next_in_queue), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f))
+        // "Open queue" wraps under the title at large text sizes instead of squeezing it mid-word.
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+            // Its one-line width, not its longest word, decides whether "Open queue" fits beside it (see ShellQueueList).
+            Text(stringResource(Res.string.shell_next_in_queue), style = Shell.type.label.copy(fontWeight = FontWeight.Bold), color = c.ink, modifier = Modifier.weight(1f).width(androidx.compose.foundation.layout.IntrinsicSize.Max))
             Text(
                 stringResource(Res.string.shell_open_queue), style = Shell.type.label.copy(fontWeight = FontWeight.SemiBold), color = c.ink2,
+                maxLines = 1,
                 modifier = Modifier.shellPressable({ ShellDesktop.show(DesktopPanel.QUEUE) }),
             )
         }
@@ -663,7 +748,7 @@ private fun LibrarySearchField() {
         Glyph(Glyphs.Search, c.ink2, 16.dp)
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (query.isEmpty()) Text(stringResource(Res.string.shell_search_library), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1)
+            if (query.isEmpty()) Text(stringResource(Res.string.shell_search_library), style = Shell.type.bodySmall, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             BasicTextField(
                 value = query,
                 onValueChange = { ShellDesktop.libraryQuery = it },
@@ -681,10 +766,19 @@ private fun LibrarySearchField() {
     }
 }
 
-/** Explore fades in over the page; a separate function so it is not scoped to the layout's Row. */
+/**
+ * Explore fades in over the page; a separate function so it is not scoped to the layout's Row. Its
+ * list state and entrance animation live in the Explore entry, so coming Back to it from a page it
+ * opened restores its scroll without replaying the entrance.
+ */
 @Composable
-private fun ExploreOverlay() {
-    AnimatedVisibility(ShellDesktop.explore, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
-        ShellTheme { ShellExplorePage(ShellDesktop.home, Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
+private fun ExploreOverlay(visible: Boolean) {
+    val entry = ShellDesktop.explore.entry    // The last entry, so the exit animation keeps its content.
+    val last = remember { arrayOfNulls<ExploreEntry>(1) }
+    if (entry != null) last[0] = entry
+    NavigationBackHandler(enabled = visible) { ShellDesktop.explore.close() }
+    AnimatedVisibility(visible, enter = fadeIn(ShellMotion.emphasized()), exit = fadeOut(ShellMotion.exit())) {
+        val shown = last[0] ?: return@AnimatedVisibility
+        ShellTheme { ShellExplorePage(ShellDesktop.home, shown.list, shown.rise, Modifier.fillMaxSize().padding(8.dp).clip(PanelShape)) }
     }
 }

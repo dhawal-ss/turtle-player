@@ -39,7 +39,7 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 object DesktopUpdateManager {
-    private const val API_BASE = "https://api.github.com/repos/MetrolistGroup/Metrolist"
+    private const val API_BASE = app.turtleplayer.bridge.TurtleRelease.RELEASES_API // Turtle: HOOKS.md #65
     internal const val RELEASES_URL = "$API_BASE/releases?per_page=50"
     private const val REGISTRY_PATH = "Software\\Metrolist\\Desktop"
     private const val MAX_MANAGER_BYTES = 128L * 1024 * 1024
@@ -313,7 +313,7 @@ data class GitHubDesktopRelease(
         get() = assets.singleOrNull { it.name == "metrolist-installer-windows-x64-$version.exe" }
     val url: String get() =
         nightlyAsset?.takeIf { isNightly }?.downloadUrl
-            ?: "https://github.com/MetrolistGroup/Metrolist/releases/tag/$tagName"
+            ?: "${app.turtleplayer.bridge.TurtleRelease.RELEASES_PAGE}/tag/$tagName" // Turtle: HOOKS.md #65
 
     internal fun canInstall(registeredInstallation: Boolean): Boolean =
         registeredInstallation && !draft && !prerelease && ReleaseVersion.parse(version)?.prerelease?.isEmpty() == true

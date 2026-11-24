@@ -19,6 +19,13 @@ jobs:
       - name: Upstream edits must be logged in turtle/HOOKS.md
         run: bash turtle/scripts/check-hooks.sh "origin/${{ github.base_ref }}"
 
+  release-endpoints:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Updaters point at Turtle's releases, not upstream's
+        run: bash turtle/scripts/check-release-endpoints.sh
+
   engines:
     runs-on: ubuntu-latest
     steps:

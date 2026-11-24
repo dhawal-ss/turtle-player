@@ -1,7 +1,11 @@
 package app.turtleplayer.bridge
 
+import app.turtleplayer.core.TextNormalizer
 import app.turtleplayer.events.PlayEventStore
 import app.turtleplayer.search.AlbumResult
+import app.turtleplayer.search.AlignMode
+import app.turtleplayer.search.EditDistance
+import app.turtleplayer.search.TypoTolerance
 import app.turtleplayer.search.ArtistResult
 import app.turtleplayer.search.HistoryAffinityProvider
 import app.turtleplayer.search.LocalLibrary
@@ -39,6 +43,9 @@ class TurtleSearch(
 ) {
     private val affinity by lazy { HistoryAffinityProvider(events) }
 
+    /** How taste reads history changed (repair or reset): rebuild history affinity on the next search. */
+    suspend fun historyChanged() = affinity.invalidate()
+
     suspend fun rerank(query: String, page: SearchSummaryPage): SearchSummaryPage? {
         val items = page.summaries.flatMap { it.items }
         val songs = items.filterIsInstance<SongItem>().distinctBy { it.id }
@@ -67,11 +74,16 @@ class TurtleSearch(
         }
 
         val ourTop = itemOf(results.top)
-        val upstreamTop = page.summaries.firstOrNull { it.isTopResult }
-        val top = ourTop ?: upstreamTop?.items?.firstOrNull()
-        val rankedSongs = results.songs.mapNotNull { songOf(it) }.filter { it.id != top?.id }
-        val rankedArtists = results.artists.mapNotNull(::artistOf).filter { it.id != top?.id }
-        val rankedAlbums = results.albums.mapNotNull(::albumOf).filter { it.id != top?.id }
+        val upstreamTop = page.summaries.firstOrNull { it.isTopResult }?.items?.firstOrNull()
+        // Title collisions: upstream's top is something our engine cannot rank (a playlist) whose title is
+        // what was typed, typos allowed ("lofi lof" for the playlist "Lofi Loft"). It stays on top: our
+        // pick there would be a same-name artist or another song, which is not what was asked for.
+        val top = if (upstreamTop != null && !isRanked(upstreamTop) && titleIsQuery(query, upstreamTop.title)) upstreamTop else ourTop ?: upstreamTop
+        // Our engine lists its top in no section; when it lost the top spot, it leads its own section instead.
+        val demoted = ourTop?.takeIf { it !== top }
+        val rankedSongs = (listOfNotNull(demoted as? SongItem) + results.songs.mapNotNull { songOf(it) }).filter { it.id != top?.id }.distinctBy { it.id }
+        val rankedArtists = (listOfNotNull(demoted as? ArtistItem) + results.artists.mapNotNull(::artistOf)).filter { it.id != top?.id }.distinctBy { it.id }
+        val rankedAlbums = (listOfNotNull(demoted as? AlbumItem) + results.albums.mapNotNull(::albumOf)).filter { it.id != top?.id }.distinctBy { it.id }
         // Nothing ranked (an emoji, or text our matching cannot read): keep upstream's page rather than drop its sections.
         if (ourTop == null && rankedSongs.isEmpty() && rankedArtists.isEmpty() && rankedAlbums.isEmpty()) return null
 
@@ -83,8 +95,30 @@ class TurtleSearch(
             if (rankedAlbums.isNotEmpty()) add(SearchSummary(ALBUMS, rankedAlbums))
             page.summaries.filterNot { it.isTopResult || it.title in ours }.forEach(::add)
         }
-        TurtleLog.info("search: ${rankedSongs.size} songs, ${rankedArtists.size} artists, top=${results.top?.kind ?: "upstream"}")
+        val topFrom = if (top === upstreamTop && top !== ourTop) "upstream" else results.top?.kind ?: "upstream"
+        TurtleLog.info("search: ${rankedSongs.size} songs, ${rankedArtists.size} artists, top=$topFrom")
         return page.copy(summaries = summaries)
+    }
+
+    /**
+     * The local stage: the listener's own library for [query] before (or without) the network, as a
+     * page of a top result and Songs. Artists and albums come only from the network page, which
+     * replaces this one when it lands. Null when nothing matches.
+     */
+    suspend fun local(query: String): SearchSummaryPage? = rerank(query, SearchSummaryPage(emptyList()))
+
+    /** Songs, artists and albums: what our engine ranks. Anything else (playlists, podcasts) passes through. */
+    private fun isRanked(item: YTItem): Boolean = item is SongItem || item is ArtistItem || item is AlbumItem
+
+    /** [title] reads as [query]: equal once normalized, or within the typos a query of that length may have. */
+    private fun titleIsQuery(
+        query: String,
+        title: String,
+    ): Boolean {
+        val q = TextNormalizer.normalize(query).folded
+        val t = TextNormalizer.normalize(title).folded
+        if (q.isEmpty() || t.isEmpty()) return false
+        return q == t || EditDistance.distance(q, t, AlignMode.WHOLE) <= TypoTolerance.maxTypos(q.length)
     }
 
     /** The page upstream already fetched, served to our engine as its online stage. */

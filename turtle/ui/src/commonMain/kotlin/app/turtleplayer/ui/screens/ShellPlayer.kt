@@ -50,6 +50,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -100,6 +101,9 @@ import app.turtleplayer.ui.generated.resources.shell_inf_up_toast
 import app.turtleplayer.ui.generated.resources.shell_inf_down_toast
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_familiar
 import app.turtleplayer.ui.generated.resources.shell_inf_blend_new
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_actual
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_sparse
+import app.turtleplayer.ui.generated.resources.shell_inf_blend_sparse_none
 import app.turtleplayer.ui.generated.resources.shell_inf_resteered
 import app.turtleplayer.ui.generated.resources.shell_close_player
 import app.turtleplayer.ui.generated.resources.shell_devices
@@ -165,6 +169,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.roundToInt
 import com.metrolist.shared.generated.resources.Res as SharedRes
@@ -670,9 +675,47 @@ internal fun SteerCard(tint: Color, modifier: Modifier = Modifier, captions: Boo
                     Text(stringResource(Res.string.shell_inf_blend_new, p), style = Shell.type.bodySmall, color = c.ink.copy(alpha = 0.75f))
                 }
             }
+            BlendNotes(stop, controller)
         }
     }
 }
+
+/**
+ * Under the dial's aim: why a young profile hears mostly new music (too few favourites for the
+ * target), and, only while the Infinity Mix is the queue playing, how its last batch came out. The
+ * dial also steers radio and autoplay, so the actual blend is never shown for those.
+ */
+@Composable
+private fun BlendNotes(
+    stop: Int,
+    controller: PlaybackController,
+) {
+    val c = Shell.colors
+    val mix by TurtleBridge.infinity.collectAsState()
+    val blend = mix.blend
+    // Counted fresh off the UI thread whenever the stop or a new batch changes what is wanted.
+    val favourites by produceState<Int?>(null, stop, blend) { value = TurtleBridge.infinityFavourites() }
+    val wanted = kotlin.math.ceil(app.turtleplayer.bridge.infinityFamiliarShare(stop / 4.0) * INFINITY_BATCH).toInt()
+    val state by controller.rememberCalmState()
+    val playing = ShellQueue.activeTitle(state) == stringResource(Res.string.shell_infinity_title)
+    val muted = c.ink.copy(alpha = 0.75f)
+    favourites?.takeIf { it < wanted }?.let { n ->
+        val text =
+            if (n == 0) stringResource(Res.string.shell_inf_blend_sparse_none) else pluralStringResource(Res.plurals.shell_inf_blend_sparse, n, n)
+        Text(text, style = Shell.type.bodySmall, color = muted, modifier = Modifier.padding(top = 6.dp))
+    }
+    if (playing && blend != null && blend.total > 0) {
+        Text(
+            stringResource(Res.string.shell_inf_blend_actual, blend.familiar, blend.total),
+            style = Shell.type.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+            color = c.ink,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+// Songs in the Infinity Mix's opening batch: the target is judged against it.
+private const val INFINITY_BATCH = 12
 
 // ---------------------------------------------------------------------------------------------
 // Desktop player bar
@@ -701,16 +744,17 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     app.turtleplayer.ui.theme.ShellPalettes.FollowCover(song?.displayThumbnailUrl)
     InfinitySheetHost()
     val bar by rememberUpdatedState(slot)
+    val hasSong by rememberUpdatedState(song != null)
     LaunchedEffect(Unit) {
         var restored = true
         snapshotFlow { bar.isQueueOpen() to bar.isLyricsOpen() }.collect { (queueOpen, lyricsOpen) ->
             if (queueOpen) {
                 bar.onToggleQueue()
-                if (!restored) ShellDesktop.toggle(DesktopPanel.QUEUE)
+                if (!restored) ShellDesktop.toggle(DesktopPanel.QUEUE, hasSong)
             }
             if (lyricsOpen) {
                 bar.onToggleLyrics()
-                if (!restored) ShellDesktop.toggle(DesktopPanel.LYRICS)
+                if (!restored) ShellDesktop.toggle(DesktopPanel.LYRICS, hasSong)
             }
             restored = false
         }
@@ -723,7 +767,8 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
     val currentSetVolume by rememberUpdatedState(setVolume)
     // The level to go back to on unmute.
     var unmutedVolume by remember { mutableFloatStateOf(slot.volume.takeIf { it > 0f } ?: DEFAULT_UNMUTE_VOLUME) }
-    val panel = ShellDesktop.panel.takeIf { ShellDesktop.nowPlayingOpen }
+    // Lit only while the surface is really on screen (docked or, in narrow windows, over the page).
+    val panelShowing: (DesktopPanel) -> Boolean = { mode -> ShellDesktop.panelState.showing(mode, song != null) }
     val infinityTitle = stringResource(Res.string.shell_infinity_title)
     val infinityOn = ShellQueue.activeTitle(state) == infinityTitle
     SideEffect { ShellDesktop.restoredSong = slot.restoredSong }
@@ -774,10 +819,10 @@ fun ShellDesktopPlayerBar(slot: DesktopPlayerBarSlot) = ShellTheme {
             }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            PanelButton(Glyphs.NowPlayingView, stringResource(Res.string.shell_now_playing_view), DesktopPanel.NOW_PLAYING, panel)
-            PanelButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), DesktopPanel.LYRICS, panel)
-            PanelButton(Glyphs.Queue, stringResource(Res.string.shell_queue), DesktopPanel.QUEUE, panel)
-            PanelButton(Glyphs.Devices, stringResource(Res.string.shell_devices), DesktopPanel.DEVICES, panel)
+            PanelButton(Glyphs.NowPlayingView, stringResource(Res.string.shell_now_playing_view), DesktopPanel.NOW_PLAYING, panelShowing(DesktopPanel.NOW_PLAYING), song != null)
+            PanelButton(Glyphs.Lyrics, stringResource(Res.string.shell_lyrics), DesktopPanel.LYRICS, panelShowing(DesktopPanel.LYRICS), song != null)
+            PanelButton(Glyphs.Queue, stringResource(Res.string.shell_queue), DesktopPanel.QUEUE, panelShowing(DesktopPanel.QUEUE), song != null)
+            PanelButton(Glyphs.Devices, stringResource(Res.string.shell_devices), DesktopPanel.DEVICES, panelShowing(DesktopPanel.DEVICES), song != null)
             // Spotify's volume: the icon mutes and unmutes, the wheel nudges it anywhere over the control.
             Row(
                 Modifier.pointerInput(Unit) {
@@ -945,8 +990,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PhoneSurfaces(
 
 /** A player-bar button that shows [mode] in the right panel; lime with a dot while it is showing. */
 @Composable
-private fun PanelButton(glyph: ImageVector, label: String, mode: DesktopPanel, showing: DesktopPanel?) {
+private fun PanelButton(glyph: ImageVector, label: String, mode: DesktopPanel, on: Boolean, hasSong: Boolean) {
     val c = Shell.colors
-    val on = showing == mode
-    GlyphButton(glyph, label, { ShellDesktop.toggle(mode) }, if (on) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = on, state = onOffState(on))
+    GlyphButton(glyph, label, { ShellDesktop.toggle(mode, hasSong) }, if (on) c.accent else c.ink2, size = 36.dp, iconSize = 18.dp, dot = on, state = onOffState(on))
 }

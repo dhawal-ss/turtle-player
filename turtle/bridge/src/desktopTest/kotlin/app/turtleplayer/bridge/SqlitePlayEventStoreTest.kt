@@ -7,6 +7,7 @@ import app.turtleplayer.events.EndReason
 import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayContext
 import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.events.SourceRange
 import app.turtleplayer.events.StartReason
 import app.turtleplayer.events.Surface
 import app.turtleplayer.events.TrackFeedback
@@ -17,7 +18,9 @@ import kotlinx.coroutines.test.runTest
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SqlitePlayEventStoreTest {
     private fun event(id: String, at: Long, source: EventSource = EventSource.LOCAL) = PlayEvent(
@@ -149,5 +152,196 @@ class SqlitePlayEventStoreTest {
             assertEquals(1, reopened.feedbackSince(1_500).size)
             assertEquals(1L, reopened.count())
             reopened.close()
+        }
+
+    @Test
+    fun aSaveRoundTripsAndAKindFromANewerBuildIsSkipped() =
+        runTest {
+            val file = File.createTempFile("turtle", ".db")
+            file.delete()
+            file.deleteOnExit()
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val save =
+                TrackFeedback(
+                    track = TrackMeta(TrackKey.youtube("s"), "Title s", listOf("Artist A"), durationMs = 200_000, youtubeId = "s"),
+                    kind = TrackFeedbackKind.SAVED,
+                    atMs = 1_000,
+                    detail = TrackFeedback.SAVED_LIBRARY,
+                )
+            store.appendFeedback(save)
+            store.appendFeedback(save.copy(atMs = 2_000))
+            store.close()
+            val raw = JdbcSQLiteDriver().open(file.absolutePath)
+            raw.execSQL("UPDATE track_feedback SET kind = 'FUTURE' WHERE at_ms = 2000")
+            raw.close()
+
+            val reopened = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val all = reopened.feedbackSince(0)
+            assertEquals(listOf(save.copy(id = all.single().id)), all)
+            reopened.close()
+        }
+
+    @Test
+    fun versionSixDatabaseGainsLabelVersionsWithoutChangingStoredPlays() =
+        runTest {
+            val file =
+                File.createTempFile("turtle", ".db").apply {
+                    delete()
+                    deleteOnExit()
+                }
+            SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath).apply {
+                append(event("old", 500))
+                close()
+            }
+            // Back to a version 6 database, as installed before plays carried a label version.
+            JdbcSQLiteDriver().open(file.absolutePath).apply {
+                execSQL("ALTER TABLE play_event DROP COLUMN label_version")
+                execSQL("ALTER TABLE open_play DROP COLUMN label_version")
+                execSQL("PRAGMA user_version = 6")
+                close()
+            }
+
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val old = store.since(0).single()
+            assertEquals(event("old", 500).copy(id = old.id), old) // the stored play reads back unchanged
+            assertNull(old.labelVersion)
+            store.append(event("new", 1_000).copy(labelVersion = PlayEvent.LABEL_VERSION))
+            val inProgress = event("playing", 2_000).copy(endReason = EndReason.STOPPED, labelVersion = PlayEvent.LABEL_VERSION)
+            store.save(inProgress)
+            store.close()
+
+            val reopened = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            assertEquals(listOf(null, PlayEvent.LABEL_VERSION), reopened.since(0).map { it.labelVersion })
+            assertEquals(inProgress, reopened.take())
+            assertEquals(2L, reopened.lastPlayId())
+            assertEquals(listOf("yt:old", "yt:new"), reopened.localPlays().map { it.trackKey.value })
+            reopened.close()
+        }
+
+    @Test
+    fun aFreshDatabaseOpensAgainAfterEveryMigration() =
+        runTest {
+            val file =
+                File.createTempFile("turtle", ".db").apply {
+                    delete()
+                    deleteOnExit()
+                }
+            val fresh = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            assertNull(fresh.lastPlayId())
+            fresh.append(event("a", 1_000).copy(labelVersion = PlayEvent.LABEL_VERSION))
+            fresh.close()
+            val again = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            assertEquals(PlayEvent.LABEL_VERSION, again.since(0).single().labelVersion)
+            again.close()
+            val version = JdbcSQLiteDriver().open(file.absolutePath).let { c ->
+                c.prepare("PRAGMA user_version").use { it.step(); it.getLong(0) }.also { c.close() }
+            }
+            assertEquals(7L, version)
+        }
+
+    private fun tempDbFile() =
+        File.createTempFile("turtle", ".db").apply {
+            delete()
+            deleteOnExit()
+        }
+
+    @Test
+    fun replaceSourceRollsBackOnFailureWithoutHidingTheError() =
+        runTest {
+            val file = tempDbFile()
+            SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath).apply {
+                appendAll(listOf(event("b", 2_000, EventSource.SPOTIFY_IMPORT), event("c", 3_000, EventSource.SPOTIFY_IMPORT)))
+                close()
+            }
+            // A write that fails half-way through the replacement, as a full disk would.
+            JdbcSQLiteDriver().open(file.absolutePath).apply {
+                execSQL(
+                    "CREATE TRIGGER boom BEFORE INSERT ON play_event WHEN NEW.track_key = 'yt:boom' " +
+                        "BEGIN SELECT RAISE(ABORT, 'boom'); END",
+                )
+                close()
+            }
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            val before = store.since(0)
+            val error =
+                assertFailsWith<Exception> {
+                    store.replaceSource(
+                        EventSource.SPOTIFY_IMPORT,
+                        listOf(event("ok", 4_000, EventSource.SPOTIFY_IMPORT), event("boom", 5_000, EventSource.SPOTIFY_IMPORT)),
+                    )
+                }
+            assertTrue(error.message.orEmpty().contains("boom"), "the original error surfaces: ${error.message}")
+            assertEquals(before, store.since(0))
+            assertEquals(listOf("yt:b", "yt:c"), store.since(0).map { it.trackKey.value })
+            // The rollback ended the transaction: the store keeps working.
+            store.append(event("after", 6_000))
+            assertEquals(3L, store.count())
+            store.close()
+        }
+
+    @Test
+    fun replaceSourceLeavesOtherSourcesAndThePlayInProgress() =
+        runTest {
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), tempDbFile().absolutePath)
+            val local = event("mine", 1_000)
+            val localId = store.append(local)
+            store.appendAll(listOf(event("old", 2_000, EventSource.SPOTIFY_IMPORT)))
+            val inProgress = event("playing", 9_000).copy(endReason = EndReason.STOPPED)
+            store.save(inProgress)
+
+            store.replaceSource(
+                EventSource.SPOTIFY_IMPORT,
+                listOf(event("new1", 3_000, EventSource.SPOTIFY_IMPORT), event("new2", 500, EventSource.SPOTIFY_IMPORT)),
+            )
+            assertEquals(listOf("yt:new2", "yt:mine", "yt:new1"), store.since(0).map { it.trackKey.value })
+            assertEquals(local.copy(id = localId), store.since(0).single { it.source == EventSource.LOCAL })
+            assertEquals(inProgress, store.take())
+
+            store.replaceSource(EventSource.SPOTIFY_IMPORT, emptyList())
+            assertEquals(listOf("yt:mine"), store.since(0).map { it.trackKey.value })
+            assertFailsWith<IllegalArgumentException> { store.replaceSource(EventSource.SPOTIFY_IMPORT, listOf(local)) }
+            store.close()
+        }
+
+    @Test
+    fun sourceRangeCountsOneSource() =
+        runTest {
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), tempDbFile().absolutePath)
+            assertNull(store.sourceRange(EventSource.SPOTIFY_IMPORT))
+            assertNull(store.firstStartedAt(EventSource.LOCAL))
+            store.append(event("a", 1_000))
+            store.appendAll(listOf(event("b", 7_000, EventSource.SPOTIFY_IMPORT), event("c", 3_000, EventSource.SPOTIFY_IMPORT)))
+            assertEquals(SourceRange(2, 3_000, 7_000), store.sourceRange(EventSource.SPOTIFY_IMPORT))
+            assertEquals(SourceRange(1, 1_000, 1_000), store.sourceRange(EventSource.LOCAL))
+            assertEquals(1_000L, store.firstStartedAt(EventSource.LOCAL))
+            assertNull(store.sourceRange(EventSource.LISTENBRAINZ_IMPORT))
+            store.close()
+        }
+
+    /** Rolling forward after a bad release can run older code on a database a newer release already upgraded. */
+    @Test
+    fun olderCodeOpensANewerSchemaWithoutLosingHistory() =
+        runTest {
+            val file = tempDbFile()
+            SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath).apply {
+                append(event("a", 1_000))
+                close()
+            }
+            JdbcSQLiteDriver().open(file.absolutePath).apply {
+                execSQL("CREATE TABLE from_a_newer_release (id INTEGER PRIMARY KEY)")
+                execSQL("PRAGMA user_version = 99")
+                close()
+            }
+
+            val store = SqlitePlayEventStore(JdbcSQLiteDriver(), file.absolutePath)
+            assertEquals(listOf("yt:a"), store.since(0).map { it.trackKey.value })
+            store.append(event("b", 2_000))
+            assertEquals(2, store.count())
+            store.close()
+            val version =
+                JdbcSQLiteDriver().open(file.absolutePath).let { c ->
+                    c.prepare("PRAGMA user_version").use { it.step(); it.getLong(0) }.also { c.close() }
+                }
+            assertEquals(99L, version, "older code never sets a newer schema's version back")
         }
 }

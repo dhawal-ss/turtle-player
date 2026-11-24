@@ -50,7 +50,7 @@ class OfflineReplayTest {
 
         assertBeats(ours, pop, "popularity")
         assertBeats(ours, rnd, "random")
-        assertNoRegression(ours, GOLDEN_RECALL_ALL, GOLDEN_NDCG_ALL)
+        assertNoRegression(ours, GOLDEN_RECALL_ALL, GOLDEN_NDCG_ALL, GOLDEN_STANDARD_RECALL_ALL)
     }
 
     @Test
@@ -64,7 +64,7 @@ class OfflineReplayTest {
 
         assertBeats(ours, pop, "popularity")
         assertBeats(ours, rnd, "random")
-        assertNoRegression(ours, GOLDEN_RECALL_NEW, GOLDEN_NDCG_NEW)
+        assertNoRegression(ours, GOLDEN_RECALL_NEW, GOLDEN_NDCG_NEW, GOLDEN_STANDARD_RECALL_NEW)
     }
 
     @Test
@@ -78,15 +78,25 @@ class OfflineReplayTest {
     }
 
     /** The gate: no metric more than 2% below its golden value. */
-    private fun assertNoRegression(ours: EvalMetrics, goldenRecall: Double, goldenNdcg: Double) {
+    private fun assertNoRegression(ours: EvalMetrics, goldenRecall: Double, goldenNdcg: Double, goldenStandardRecall: Double) {
         assertTrue(ours.recallAtK >= goldenRecall * 0.98, "recall@50 regressed: ${ours.recallAtK} < golden $goldenRecall")
         assertTrue(ours.ndcg >= goldenNdcg * 0.98, "ndcg@10 regressed: ${ours.ndcg} < golden $goldenNdcg")
+        assertTrue(
+            ours.standardRecallAtK >= goldenStandardRecall * 0.98,
+            "standardRecall@50 regressed: ${ours.standardRecallAtK} < golden $goldenStandardRecall",
+        )
     }
 
     private companion object {
+        // Historical capped recall (hits / min(|held-out|, 50)): the original gate, kept under its old label.
         const val GOLDEN_RECALL_ALL = 0.587
         const val GOLDEN_NDCG_ALL = 0.868
         const val GOLDEN_RECALL_NEW = 0.960
         const val GOLDEN_NDCG_NEW = 0.641
+
+        // Standard recall (hits / |held-out|), measured 2026-11-23 when it was added. Below the capped
+        // value whenever a holdout holds more than 50 tracks: expected, not a regression.
+        const val GOLDEN_STANDARD_RECALL_ALL = 0.487
+        const val GOLDEN_STANDARD_RECALL_NEW = 0.960
     }
 }

@@ -12,8 +12,8 @@
     <string name="shell_sp_podcasts_empty_body">Search for a podcast and follow it. New episodes and anything you leave halfway show up here.</string>
     <string name="shell_sp_loading">Loading</string>
     <string name="shell_sp_left">%1$s left</string>
-    <string name="shell_sp_minutes">%1$d min</string>
-    <string name="shell_sp_hours_minutes">%1$d h %2$d min</string>
+    <string name="shell_sp_minutes">%1$d&#160;min</string>
+    <string name="shell_sp_hours_minutes">%1$d&#160;h %2$d&#160;min</string>
     <string name="shell_sp_meta_pair">%1$s · %2$s</string>
 
     <string name="shell_sp_books_label">Audiobooks</string>

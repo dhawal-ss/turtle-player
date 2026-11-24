@@ -3,7 +3,9 @@ package app.turtleplayer.bridge
 import app.turtleplayer.core.ArtistKey
 import app.turtleplayer.core.Clock
 import app.turtleplayer.core.TrackKey
+import app.turtleplayer.events.EventSource
 import app.turtleplayer.events.PlayEvent
+import app.turtleplayer.events.StartReason
 import app.turtleplayer.taste.CandidateSource
 import app.turtleplayer.taste.PlayOrigin
 import app.turtleplayer.taste.PlayPlace
@@ -133,6 +135,19 @@ sealed interface InfinityWhy {
     data object ForYou : InfinityWhy
 }
 
+/**
+ * How the last batch the mix built came out against the dial's aim: [target] is the share of
+ * favourites asked for (0..1), [familiar] of the [total] songs were favourites, and
+ * [favouritesAvailable] favourites could be picked when it was built. Fewer favourites than the
+ * target needs means the rest were new music.
+ */
+data class InfinityBlend(
+    val target: Double,
+    val familiar: Int,
+    val total: Int,
+    val favouritesAvailable: Int,
+)
+
 /** What the Infinity sheet shows: the picks, how each has been tuned, and how much feedback we have. */
 data class InfinityState(
     val genres: List<String> = emptyList(),
@@ -142,6 +157,8 @@ data class InfinityState(
     val why: Map<String, InfinityWhy> = emptyMap(),
     /** True once the listener has saved picks (even none), so the sheet stops opening on Play. */
     val configured: Boolean = false,
+    /** The last batch's blend against the dial's aim; null until a batch is built. */
+    val blend: InfinityBlend? = null,
 )
 
 /**
@@ -189,6 +206,9 @@ class InfinityMix internal constructor(
     // One song per recording across uploads ("X - Topic" twins); version variants (live, remix) stay apart.
     private val songKeys = SongKeys()
     private var restored = false
+
+    // The queue occurrence the mix began at its last start (-1: not started in this run).
+    private var mixGen = -1L
     // Genre stock-ups allowed in the current batch, so the first songs are not held up by every genre at once.
     private var fillBudget = 0
 
@@ -217,14 +237,21 @@ class InfinityMix internal constructor(
         runCatching { store.setPref(PREF_GENRES, clean.joinToString(",")) }.onFailure { TurtleLog.error("infinity: could not save genres", it) }
     }
 
-    /** Opens a fresh mix: forgets what this session served, then builds the first songs. */
+    /**
+     * Opens a fresh mix: forgets what this session served, begins a new queue occurrence (the last
+     * queue's tags and the engine's short-term session end here), then builds the first songs.
+     */
     suspend fun start(): List<SongItem> = mutex.withLock {
         restoreLocked()
         served.clear()
         passedArtists.clear()
         forYou.clear()
+        mixGen = observer.beginOccurrence()
         batchLocked(FIRST_BATCH, emptySet())
     }
+
+    /** True while the mix's own queue occurrence is the listener's current one. */
+    private fun live(): Boolean = mixGen >= 0 && observer.occurrence() == mixGen
 
     /** The next [count] songs, skipping anything already [queued]. */
     suspend fun next(count: Int, queued: Set<String>): List<SongItem> = mutex.withLock {
@@ -232,10 +259,24 @@ class InfinityMix internal constructor(
         batchLocked(count, queued)
     }
 
-    /** A like (true) or a pass (false) on a song. Tunes its genre and seeds "more like this". */
-    suspend fun feedback(song: SongItem, liked: Boolean) = mutex.withLock {
+    /**
+     * A like (true) or a pass (false) on a song. Tunes its genre and seeds "more like this", but only
+     * for one of the mix's own picks: the playing song's [origin] when it is an Infinity play,
+     * otherwise a song this mix served while it is still the listener's queue. Any other song (one
+     * the mix once served, played again from elsewhere) tunes nothing.
+     */
+    suspend fun feedback(
+        song: SongItem,
+        liked: Boolean,
+        origin: PlayOrigin? = null,
+    ) = mutex.withLock {
         restoreLocked()
-        val why = _state.value.why[song.id]
+        val why =
+            when {
+                origin != null && origin.place == PlayPlace.INFINITY -> whyOf(origin.row)
+                origin == null && song.id in served.ids && live() -> _state.value.why[song.id]
+                else -> null
+            } ?: return@withLock
         val s = _state.value
         val weights = s.weights.toMutableMap()
         if (why is InfinityWhy.Genre) {
@@ -258,11 +299,18 @@ class InfinityMix internal constructor(
         saveTuningLocked()
     }
 
-    /** Finished and quick-skipped plays of mix songs gently tune their genre, without any tap. */
+    /**
+     * Finished and quick-skipped plays of mix songs gently tune their genre, without any tap. Only a
+     * play the mix itself started counts, as its bound tag says: a mix song played again from a
+     * playlist, replayed or stepped back to teaches the mix nothing (replays are neutral, as for the
+     * exploration policy, which also drops a seek back to the start of a mostly heard pick).
+     */
     suspend fun onPlayEvent(event: PlayEvent) {
         val id = event.track.youtubeId ?: return
+        val origin = SurfaceTag.parse(event.surfaceDetail)?.takeIf { it.place == PlayPlace.INFINITY } ?: return
+        if (event.source != EventSource.LOCAL || event.replayed || event.startReason == StartReason.USER_PREVIOUS) return
+        val why = whyOf(origin.row) ?: return
         mutex.withLock {
-            val why = _state.value.why[id] ?: return
             // A new song kept for a minute is a find: songs like it come next, without a tap.
             val kept = why != InfinityWhy.Familiar && !event.isQuickSkip && event.msPlayed >= KEEP_MS
             if (kept) cache.get(id)?.let { song ->
@@ -330,6 +378,7 @@ class InfinityMix internal constructor(
         val ruled = taste.controls
         val batch = Batch(taken, Exclusions(ruled, ruledSongs(ruled, profile)), profile)
         val familiar = familiarCandidates(batch).toCollection(ArrayDeque())
+        val favouritesAvailable = familiar.size
         fillBudget = FILLS_PER_BATCH
         forYouPicked.clear()
         discoveryPicked.clear()
@@ -356,12 +405,48 @@ class InfinityMix internal constructor(
         }
         for (song in picks) served.add(song)
         pruneServedBy()
-        for ((id, reason) in why) observer.tag(id, SurfaceTag.format(originOf(reason, forYouPicked[id], discoveryPicked[id])))
+        // For the mix's own occurrence only: a refill after the listener left the mix is not tagged.
+        val tags = why.map { (id, reason) -> id to SurfaceTag.format(originOf(reason, forYouPicked[id], discoveryPicked[id])) }
+        observer.tagAll(tags, mixGen)
         val merged = LinkedHashMap(_state.value.why).apply { putAll(why) }
         while (merged.size > MAX_WHY) merged.remove(merged.keys.first())
-        _state.value = _state.value.copy(why = merged)
+        val familiarPicked = why.values.count { it == InfinityWhy.Familiar }
+        // An empty batch (offline, nothing usable) keeps the last blend rather than report 0 of 0.
+        val blend = if (picks.isEmpty()) _state.value.blend else InfinityBlend(familiarShare, familiarPicked, picks.size, favouritesAvailable)
+        _state.value = _state.value.copy(why = merged, blend = blend)
         TurtleLog.info("infinity: ${picks.size} songs (${why.values.count { it == InfinityWhy.Familiar }} familiar, dial ${(dial * 100).toInt()}%)")
         return picks
+    }
+
+    /**
+     * Queue indices a re-steer drops so the new blend is heard within a song: after [currentIndex],
+     * every song the mix did not serve (one the listener added, an upstream append) stays, and so do
+     * the first [RESTEER_KEEP] mix songs; the later mix songs go. Exact upload ids only, so the
+     * listener's own upload of a song the mix also served is kept. Nothing once the listener has
+     * left the mix's queue occurrence.
+     */
+    suspend fun resteerRemovals(
+        queueIds: List<String>,
+        currentIndex: Int,
+    ): Set<Int> = mutex.withLock {
+        if (!live()) return@withLock emptySet()
+        var kept = 0
+        buildSet {
+            for (i in (currentIndex + 1).coerceAtLeast(0) until queueIds.size) {
+                if (queueIds[i] !in served.ids) continue
+                if (kept < RESTEER_KEEP) kept++ else add(i)
+            }
+        }
+    }
+
+    /** The reason a tag's row names ([originOf]); "more like" only says it was not familiar. */
+    private fun whyOf(row: String?): InfinityWhy? = when {
+        row == null -> null
+        row == "familiar" -> InfinityWhy.Familiar
+        row == "foryou" -> InfinityWhy.ForYou
+        row == "morelike" -> InfinityWhy.MoreLike("")
+        row.startsWith("genre:") -> InfinityWhy.Genre(row.removePrefix("genre:"))
+        else -> null
     }
 
     /**
@@ -420,7 +505,8 @@ class InfinityMix internal constructor(
 
     /** Songs used up: by id and by recording, so an upload twin of a used song counts as used. */
     private inner class Taken {
-        private val ids = HashSet<String>()
+        /** Exact upload ids, without the recording match of [contains]. */
+        val ids = HashSet<String>()
         private val songs = HashSet<TrackKey>()
 
         fun add(song: SongItem) = add(song.id, song)
@@ -457,17 +543,21 @@ class InfinityMix internal constructor(
     private inner class Exclusions(
         private val ruled: UserControls,
         private val ruledSongs: MutableSet<TrackKey>,
+        // The mix's own recording keys under its lock; a private set for a read outside it ([favouriteCount]).
+        private val keys: SongKeys = songKeys,
+        // Artists passed in this session; none for a read outside the lock, where that set may be changing.
+        private val passed: Set<ArtistKey> = passedArtists,
     ) {
         operator fun contains(song: SongItem): Boolean {
             val meta = song.toTrackMeta()
-            if (ruledByVote(song) || songKeys.of(meta) in ruledSongs) return true
+            if (ruledByVote(song) || keys.of(meta) in ruledSongs) return true
             val artist = meta.artistKey.takeIf { meta.primaryArtist.isNotBlank() } ?: return false
-            return artist in ruled.mutedArtists || artist in passedArtists
+            return artist in ruled.mutedArtists || artist in passed
         }
 
         /** Notes the recordings of [songs] ruled out by id, so another upload in the same response is caught too. */
         fun learn(songs: List<SongItem>) {
-            for (song in songs) if (ruledByVote(song)) ruledSongs += songOf(song)
+            for (song in songs) if (ruledByVote(song)) ruledSongs += keys.of(song.toTrackMeta())
         }
 
         private fun ruledByVote(song: SongItem) = votes.isDisliked(song.id) || TrackKey.youtube(song.id) in ruled.lessLikeThisTracks
@@ -501,10 +591,11 @@ class InfinityMix internal constructor(
     private suspend fun ruledSongs(
         ruled: UserControls,
         profile: TasteProfile?,
+        keys: SongKeys = songKeys,
     ): MutableSet<TrackKey> =
         ruled.lessLikeThisTracks.mapNotNullTo(HashSet()) { key ->
             val meta = profile?.track(key)?.meta ?: if (key.scheme == TrackKey.YOUTUBE) cache.get(key.id)?.toTrackMeta() else null
-            meta?.let(songKeys::of)
+            meta?.let(keys::of)
         }
 
     private fun songOf(song: SongItem): TrackKey = songKeys.of(song.toTrackMeta())
@@ -532,9 +623,25 @@ class InfinityMix internal constructor(
     }
 
     /** The listener's favourites, best first with some shuffle so no two mixes open the same way. */
-    private suspend fun familiarCandidates(batch: Batch): List<SongItem> {
-        val profile = batch.profile
-        val now = clock.nowMs()
+    private suspend fun familiarCandidates(batch: Batch): List<SongItem> =
+        favouriteScores(batch.profile, clock.nowMs())
+            .entries
+            .filter { it.key !in batch.taken && !votes.isDisliked(it.key) }
+            // Draw each song's shuffle once: a key that changes between comparisons breaks the sort.
+            .map { it.key to it.value * (0.6 + random.nextDouble() * 0.8) }
+            .sortedByDescending { it.second }
+            .take(FAMILIAR_POOL)
+            .mapNotNull { cache.get(it.first) }
+            .filter(batch::usable)
+
+    /**
+     * Favourite song ids with their weight: profile songs with positive affinity not played in the
+     * last few hours, plus liked songs. Shared by the batch and [favouriteCount], so both agree.
+     */
+    private fun favouriteScores(
+        profile: TasteProfile?,
+        now: Long,
+    ): Map<String, Double> {
         val scored = HashMap<String, Double>()
         profile?.tracks?.values?.forEach { t ->
             val id = t.meta.youtubeId ?: return@forEach
@@ -544,14 +651,26 @@ class InfinityMix internal constructor(
             scored[id] = t.affinity * (if (t.isLoved) 1.5 else 1.0)
         }
         for (id in votes.liked) scored[id] = (scored[id] ?: 0.0) + LIKED_BONUS
-        return scored.entries
-            .filter { it.key !in batch.taken && !votes.isDisliked(it.key) }
-            // Draw each song's shuffle once: a key that changes between comparisons breaks the sort.
-            .map { it.key to it.value * (0.6 + random.nextDouble() * 0.8) }
-            .sortedByDescending { it.second }
-            .take(FAMILIAR_POOL)
-            .mapNotNull { cache.get(it.first) }
-            .filter(batch::usable)
+        return scored
+    }
+
+    /**
+     * About how many favourites a new mix could pick from right now, for the dial's explanation: the
+     * batch's own checks with nothing used up yet, capped as a batch caps its pool. It takes no lock
+     * (a batch holds it across network calls) and draws no random numbers, so it never changes what
+     * the next batch picks. An approximation: artist spacing can leave a batch with fewer.
+     */
+    suspend fun favouriteCount(): Int {
+        val profile = runCatching { taste.profile() }.getOrNull()
+        val ruled = taste.controls
+        val keys = SongKeys()
+        val excluded = Exclusions(ruled, ruledSongs(ruled, profile, keys), keys, emptySet())
+        return favouriteScores(profile, clock.nowMs())
+            .keys
+            .filter { !votes.isDisliked(it) }
+            .mapNotNull { cache.get(it) }
+            .count { !it.isLive && it !in excluded }
+            .coerceAtMost(FAMILIAR_POOL)
     }
 
     /** One new song: from a liked song's radio, a picked genre (by tuned weight), or your taste. */
@@ -700,7 +819,9 @@ class InfinityMix internal constructor(
         var failed = false
         val ranked = withTimeoutOrNull(RANK_TIMEOUT_MS) {
             // The timeout cancels a suspended ranking with a CancellationException: that is a timeout, not a failure.
-            runCatching { taste.rankExternal(seed.toTrackMeta(), songs.map { it.toTrackMeta() }) }
+            // The mix's occurrence while it is live; after the listener left, the engine's session is not moved back to it.
+            val station = if (live()) stationKey(mixGen) else null
+            runCatching { taste.rankExternal(seed.toTrackMeta(), songs.map { it.toTrackMeta() }, station = station) }
                 .onFailure { failed = it !is CancellationException }
                 .getOrNull()
         } ?: return songs to if (failed) Served.FAILED else Served.TIMEOUT
@@ -733,6 +854,9 @@ class InfinityMix internal constructor(
         const val MIN_WEIGHT = 0.15
         const val MAX_WEIGHT = 3.0
         const val MAX_WHY = 400
+
+        // Mix songs kept after the playing one when the listener re-steers.
+        const val RESTEER_KEEP = 2
         const val BATCH_TIMEOUT_MS = 20_000L
         const val RANK_TIMEOUT_MS = 1_500L
         const val FOR_YOU_BATCH = 20
